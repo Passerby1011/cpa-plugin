@@ -28,13 +28,13 @@ checksums.txt
 命名规则与官方一致：`ArchiveName(id, version, goos, goarch) = {id}_{version}_{goos}_{goarch}.zip`
 （见 CLIProxyAPI `internal/pluginstore`）。
 
-CI：push / PR 全量构建（只出 artifacts）；tag `<id>-v*`（如 `qoderwork-v0.2.6`）或 dispatch 触发**该插件独立版本**的 Release。
+CI：push / PR 全量构建（只出 artifacts）；tag `<id>-v*`（如 `qoderwork-v0.4.1`）或 dispatch 触发**该插件独立版本**的 Release。
 
 ## 安装（linux/amd64 示例）
 
 ```bash
 # 从 Release 下载
-unzip qoderwork_0.2.6_linux_amd64.zip
+unzip qoderwork_0.4.1_linux_amd64.zip
 # 扁平 plugins 目录（常见 docker 挂载）
 cp qoderwork.so /path/to/cliproxyapi/plugins/qoderwork.so
 # 或平台子目录布局
@@ -54,12 +54,14 @@ plugins:
       enabled: true
 ```
 
-## 远程更新（插件商店自定义源）
+## 通过插件商店安装 / 更新
 
-CPA 插件商店源添加：
+本仓库的 `registry.json` 可直接作为 CPA 插件商店的自定义源使用。三个插件以
+`direct`（schema_version 2）方式声明各平台产物直链与 sha256——每次 Release 由
+CI 自动刷新，用户在商店 UI 即可一键安装/更新，无需手工下载。
 
 ```text
-https://raw.githubusercontent.com/Sliverkiss/cpa-plugin/main/registry.json
+https://raw.githubusercontent.com/hex-ci/cpa-plugin/main/registry.json
 ```
 
-然后在商店 UI 安装/更新 **workbuddy**、**qoderwork** 和 **qwenwork**。
+添加后在商店 UI 安装/更新 **workbuddy**、**qoderwork** 和 **qwenwork**。

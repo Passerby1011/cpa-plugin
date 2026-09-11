@@ -1,9 +1,13 @@
-# Multi-arch CPA plugin build & release (workbuddy + qoderwork).
+# Multi-arch CPA plugin build & release (workbuddy + qoderwork + qwenwork).
 # Each plugin versions INDEPENDENTLY:
-#   - tag 'workbuddy-v*'  → release workbuddy at that version
-#   - tag 'qoderwork-v*'  → release qoderwork at that version
+#   - tag '<id>-v*'       → release that plugin at that version
 #   - workflow_dispatch   → pick plugin + version manually
-#   - plain push/PR       → CI builds for both (artifacts only, no release)
+#   - plain push/PR       → CI builds for all (artifacts only, no release)
+#
+# Install type is `direct` (registry schema_version 2): the release job pins an
+# explicit URL + sha256 per platform into registry.json. `github-release` cannot
+# be used here because the store resolves it through the repo-wide
+# /releases/latest, which cannot distinguish the plugins sharing this monorepo.
 #
 # Asset naming matches CLIProxyAPI pluginstore ArchiveName():
 #   <id>_<version>_<goos>_<goarch>.zip   (zip root: <id>.so|.dylib|.dll)
@@ -14,14 +18,14 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: ["workbuddy-v*", "qoderwork-v*"]
+    tags: ["workbuddy-v*", "qoderwork-v*", "qwenwork-v*"]
   workflow_dispatch:
     inputs:
       plugin:
         description: "Plugin to release"
         required: true
         type: choice
-        options: [workbuddy, qoderwork]
+        options: [workbuddy, qoderwork, qwenwork]
       version:
         description: "Version without v (empty = plugin's VERSION file)"
         required: false
@@ -39,21 +43,32 @@ jobs:
       matrix:
         include:
           - dir: workbuddy
+            node: true
           - dir: qoderwork
+            node: false
+          - dir: qwenwork
+            node: false
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ matrix.dir }}/go.mod
           cache-dependency-path: ${{ matrix.dir }}/go.sum
+      - uses: actions/setup-node@v7
+        if: matrix.node
+        with:
+          node-version: "22"
       - name: Validate registry.json
         working-directory: .
         run: python3 scripts/validate-registry.py registry.json
       - name: Test
-        run: go test ./...
+        run: go test -race -count=1 ./...
+      - name: Panel tests
+        if: matrix.node
+        run: node --test panel.test.js
       - name: Vet
         run: go vet ./...
 
@@ -117,13 +132,39 @@ jobs:
             goarch: amd64
             runner: windows-2025
             ext: dll
+          # qwenwork native
+          - id: qwenwork
+            goos: linux
+            goarch: amd64
+            runner: ubuntu-24.04
+            ext: so
+          - id: qwenwork
+            goos: linux
+            goarch: arm64
+            runner: ubuntu-24.04-arm
+            ext: so
+          - id: qwenwork
+            goos: darwin
+            goarch: amd64
+            runner: macos-15-intel
+            ext: dylib
+          - id: qwenwork
+            goos: darwin
+            goarch: arm64
+            runner: macos-15
+            ext: dylib
+          - id: qwenwork
+            goos: windows
+            goarch: amd64
+            runner: windows-2025
+            ext: dll
     defaults:
       run:
         shell: bash
         working-directory: ${{ matrix.id }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ matrix.id }}/go.mod
           cache-dependency-path: ${{ matrix.id }}/go.sum
@@ -134,8 +175,8 @@ jobs:
           set -euo pipefail
           PLUGIN="${{ matrix.id }}"
           # Version resolution: tag of this plugin > dispatch input > VERSION file
-          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME}" == ${PLUGIN}-v* ]]; then
-            VERSION="${GITHUB_REF_NAME#${PLUGIN}-v}"
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME}" == "${PLUGIN}"-v* ]]; then
+            VERSION="${GITHUB_REF_NAME#"${PLUGIN}"-v}"
           elif [ -n "${{ github.event.inputs.version }}" ] && [ "${{ github.event.inputs.plugin }}" == "${PLUGIN}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
@@ -145,10 +186,13 @@ jobs:
               VERSION="${VERSION}+ci.${GITHUB_RUN_NUMBER}"
             fi
           fi
+          VERSION="${VERSION#v}"
           CLEAN_VERSION="${VERSION%%+*}"
-          echo "VERSION=${CLEAN_VERSION}" >> "${GITHUB_ENV}"
-          echo "LIB_NAME=${PLUGIN}.${{ matrix.ext }}" >> "${GITHUB_ENV}"
-          echo "ARCHIVE_NAME=${PLUGIN}_${CLEAN_VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip" >> "${GITHUB_ENV}"
+          {
+            echo "VERSION=${CLEAN_VERSION}"
+            echo "LIB_NAME=${PLUGIN}.${{ matrix.ext }}"
+            echo "ARCHIVE_NAME=${PLUGIN}_${CLEAN_VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
+          } >> "${GITHUB_ENV}"
           echo "version=${CLEAN_VERSION} archive=${PLUGIN}_${CLEAN_VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
 
       - name: Build shared library
@@ -182,7 +226,7 @@ jobs:
           PY
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ARCHIVE_NAME }}
           path: |
@@ -210,12 +254,18 @@ jobs:
           - id: qoderwork
             target: freebsd-amd64
             ext: so
+          - id: qwenwork
+            target: windows-arm64
+            ext: dll
+          - id: qwenwork
+            target: freebsd-amd64
+            ext: so
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: ${{ matrix.id }}/go.mod
           cache-dependency-path: ${{ matrix.id }}/go.sum
@@ -225,23 +275,26 @@ jobs:
         run: |
           set -euo pipefail
           PLUGIN="${{ matrix.id }}"
-          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME}" == ${PLUGIN}-v* ]]; then
-            VERSION="${GITHUB_REF_NAME#${PLUGIN}-v}"
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME}" == "${PLUGIN}"-v* ]]; then
+            VERSION="${GITHUB_REF_NAME#"${PLUGIN}"-v}"
           elif [ -n "${{ github.event.inputs.version }}" ] && [ "${{ github.event.inputs.plugin }}" == "${PLUGIN}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
             VERSION="$(tr -d ' \n\r' < ${PLUGIN}/VERSION)"
           fi
+          VERSION="${VERSION#v}"
           CLEAN_VERSION="${VERSION%%+*}"
           GOOS_PART="${{ matrix.target }}"
-          echo "VERSION=${CLEAN_VERSION}" >> "${GITHUB_ENV}"
+          {
+            echo "VERSION=${CLEAN_VERSION}"
+            echo "ARCHIVE_NAME=${PLUGIN}_${CLEAN_VERSION}_${GOOS_PART%-*}_${GOOS_PART#*-}.zip"
+            echo "LIB_NAME=${PLUGIN}.${{ matrix.ext }}"
+          } >> "${GITHUB_ENV}"
           echo "version=${CLEAN_VERSION}" >> "${GITHUB_OUTPUT}"
-          echo "ARCHIVE_NAME=${PLUGIN}_${CLEAN_VERSION}_${GOOS_PART%-*}_${GOOS_PART#*-}.zip" >> "${GITHUB_ENV}"
-          echo "LIB_NAME=${PLUGIN}.${{ matrix.ext }}" >> "${GITHUB_ENV}"
 
       - name: Build cross shared library
         timeout-minutes: 45
-        uses: go-cross/cgo-actions@v1
+        uses: go-cross/cgo-actions@v1.1.0
         env:
           GOFLAGS: -trimpath -buildmode=c-shared
         with:
@@ -274,7 +327,7 @@ jobs:
             -checksum "${ARCHIVE_NAME}.sha256"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ARCHIVE_NAME }}
           path: |
@@ -288,14 +341,17 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '') ||
       startsWith(github.ref, 'refs/tags/workbuddy-v') ||
-      startsWith(github.ref, 'refs/tags/qoderwork-v')
+      startsWith(github.ref, 'refs/tags/qoderwork-v') ||
+      startsWith(github.ref, 'refs/tags/qwenwork-v')
     needs:
       - build
       - build-cross
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      # main (not the tag) — registry.json is committed back to main afterwards.
+      - uses: actions/checkout@v7
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Resolve plugin + version
@@ -307,16 +363,25 @@ jobs:
             V="${{ github.event.inputs.version }}"
           elif [[ "${GITHUB_REF_NAME}" == workbuddy-v* ]]; then
             P="workbuddy"; V="${GITHUB_REF_NAME#workbuddy-v}"
+          elif [[ "${GITHUB_REF_NAME}" == qwenwork-v* ]]; then
+            P="qwenwork"; V="${GITHUB_REF_NAME#qwenwork-v}"
           else
             P="qoderwork"; V="${GITHUB_REF_NAME#qoderwork-v}"
           fi
-          echo "plugin=$P" >> "$GITHUB_OUTPUT"
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "tag=${P}-v${V}" >> "$GITHUB_OUTPUT"
+          case "$P" in
+            workbuddy|qoderwork|qwenwork) ;;
+            *) echo "unsupported plugin $P"; exit 1 ;;
+          esac
+          V="${V#v}"
+          {
+            echo "plugin=$P"
+            echo "version=$V"
+            echo "tag=${P}-v${V}"
+          } >> "$GITHUB_OUTPUT"
           echo "Releasing $P v$V"
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -328,35 +393,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          mv dist/${PLUGIN}_${VERSION}_*.zip* out/ 2>/dev/null || true
+          mv dist/"${PLUGIN}_${VERSION}_"*.zip* out/ 2>/dev/null || true
           ls -la out/
           if ls out/*.sha256 >/dev/null 2>&1; then
             sort out/*.sha256 > out/checksums.txt
           else
-            (cd out && sha256sum *.zip > checksums.txt)
+            (cd out && sha256sum ./*.zip | sed 's|  \./|  |') > out/checksums.txt
           fi
           cat out/checksums.txt
-          for t in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64 windows_arm64; do
+          for t in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64 windows_amd64 windows_arm64 freebsd_amd64; do
             test -f "out/${PLUGIN}_${VERSION}_${t}.zip" || { echo "missing ${PLUGIN}_${VERSION}_${t}.zip"; exit 1; }
           done
-
-      - name: Sync registry.json version (this plugin only)
-        env:
-          PLUGIN: ${{ steps.meta.outputs.plugin }}
-          VERSION: ${{ steps.meta.outputs.version }}
-        run: |
-          python3 - <<'PY'
-          import json, os, pathlib
-          pid, v = os.environ["PLUGIN"], os.environ["VERSION"]
-          p = pathlib.Path("registry.json")
-          data = json.loads(p.read_text())
-          for plug in data.get("plugins", []):
-              if plug.get("id") == pid:
-                  plug["version"] = v
-          p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-          print(p.read_text())
-          PY
-          python3 scripts/validate-registry.py registry.json
 
       - name: Publish GitHub release
         env:
@@ -378,7 +425,7 @@ jobs:
           NOTES=$(cat <<EOF
           ## ${PLUGIN} CPA plugin v${VERSION}
 
-          Multi-arch builds for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin store (\`github-release\` install type).
+          Multi-arch builds for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin store (\`direct\` install type).
 
           ### Assets (pluginstore \`ArchiveName(id, version, goos, goarch)\`)
           | File | Contents |
@@ -400,15 +447,51 @@ jobs:
 
           ### Remote update (custom plugin source)
           \`\`\`
-          https://raw.githubusercontent.com/Sliverkiss/cpa-plugin/main/registry.json
+          https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/registry.json
           \`\`\`
           EOF
           )
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" out/${PLUGIN}_*.zip out/checksums.txt --clobber --repo "${GITHUB_REPOSITORY}"
-          else
-            gh release create "${TAG}" out/${PLUGIN}_*.zip out/checksums.txt \
+            gh release upload "${TAG}" out/"${PLUGIN}_"*.zip out/checksums.txt --clobber --repo "${GITHUB_REPOSITORY}"
+          elif ! gh release create "${TAG}" out/"${PLUGIN}_"*.zip out/checksums.txt \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${PLUGIN} v${VERSION}" \
-              --notes "${NOTES}"
+              --notes "${NOTES}"; then
+            # A tag push can re-trigger this workflow; the sibling run may have
+            # created the release between our check and create. Upload instead.
+            gh release upload "${TAG}" out/"${PLUGIN}_"*.zip out/checksums.txt --clobber --repo "${GITHUB_REPOSITORY}"
           fi
+
+      - name: Sync registry.json (direct install plan)
+        env:
+          PLUGIN: ${{ steps.meta.outputs.plugin }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/sync-registry.py registry.json "${PLUGIN}" "${VERSION}" out
+          python3 scripts/validate-registry.py registry.json
+          cat registry.json
+
+      - name: Commit registry.json
+        env:
+          PLUGIN: ${{ steps.meta.outputs.plugin }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- registry.json; then
+            echo "registry.json unchanged"
+            exit 0
+          fi
+          git add registry.json
+          git commit -m "chore(registry): publish ${PLUGIN} ${VERSION} direct install plan"
+          # Concurrent plugin releases may push first; rebase drops our commit if
+          # an identical change already landed, and merges cleanly otherwise.
+          for _ in 1 2 3; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            git pull --rebase origin main || true
+          done
+          echo "failed to push registry.json after retries"; exit 1

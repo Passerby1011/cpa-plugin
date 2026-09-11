@@ -41,7 +41,7 @@ release: clean
 	  fi; \
 	done
 
-# Tag a new release (usage: make tag VERSION=0.8.0).
+# Tag a new release (usage: make tag VERSION=0.4.2). Tag format matches the CI release trigger.
 tag:
-	git tag -a v$(VERSION) -m "v$(VERSION)"
-	git push origin v$(VERSION)
+	git tag -a qoderwork-v$(VERSION) -m "qoderwork v$(VERSION)"
+	git push origin qoderwork-v$(VERSION)

@@ -6,5 +6,9 @@ dist/
 # Go
 *.test
 *.out
+
+# bare `go build` binaries (no extension, one per plugin dir)
+workbuddy/workbuddy
 workbuddy/workbuddy-plus
+qoderwork/qoderwork
 qwenwork/qwenwork
