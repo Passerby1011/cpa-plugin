@@ -89,7 +89,61 @@
         "QoderWork",
         "Qoder",
         "Management"
-      ]
+      ],
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.1/qoderwork_0.4.1_linux_amd64.zip",
+            "sha256": "a58c5d665a57db178c2f813e2446c7915dcf7ff9eeb67758b020c5fabb76b62b",
+            "size": 3116580
+          },
+          {
+            "goos": "linux",
+            "goarch": "arm64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.1/qoderwork_0.4.1_linux_arm64.zip",
+            "sha256": "b8cfc5ead3b49371a31b60e51179999e06a074e9aaca65c46efa493ff03241e6",
+            "size": 2835176
+          },
+          {
+            "goos": "darwin",
+            "goarch": "amd64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.1/qoderwork_0.4.1_darwin_amd64.zip",
+            "sha256": "13fc843bc83beef2c23ca21d66a9995eb4dbe7779e1c93931c2e582dc196600b",
+            "size": 2968254
+          },
+          {
+            "goos": "darwin",
+            "goarch": "arm64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.1/qoderwork_0.4.1_darwin_arm64.zip",
+            "sha256": "ca8750ac4b13d9f057c6f8b1652a462034f17dcff0f8c57c59a1d7898ad911ab",
+            "size": 2743709
+          },
+          {
+            "goos": "windows",
+            "goarch": "amd64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.1/qoderwork_0.4.1_windows_amd64.zip",
+            "sha256": "e0473024d6c69bcb5a9c669c122526ef95f640385bf8ae409236194f3eafdcbb",
+            "size": 3050131
+          },
+          {
+            "goos": "windows",
+            "goarch": "arm64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.1/qoderwork_0.4.1_windows_arm64.zip",
+            "sha256": "82fd42f1b0d9b54149247da7694df03a316ba604f387fd6c123af3daab159426",
+            "size": 2812206
+          },
+          {
+            "goos": "freebsd",
+            "goarch": "amd64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.1/qoderwork_0.4.1_freebsd_amd64.zip",
+            "sha256": "1ef570281ecd162c2f5e3a458084c5c94f34dc077e7ee44d2996fdc5154d94da",
+            "size": 3037416
+          }
+        ]
+      }
     },
     {
       "id": "qwenwork",
