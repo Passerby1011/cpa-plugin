@@ -294,7 +294,9 @@ jobs:
 
       - name: Build cross shared library
         timeout-minutes: 45
-        uses: go-cross/cgo-actions@v1.1.0
+        # v1.1.0 pins FreeBSD 14.1 base.txz, which was removed from download.freebsd.org;
+        # the floating v1 tag tracks a live release.
+        uses: go-cross/cgo-actions@v1
         env:
           GOFLAGS: -trimpath -buildmode=c-shared
         with:
