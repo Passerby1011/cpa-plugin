@@ -24,8 +24,24 @@ make release  # 交叉编 linux/amd64+arm64；无 osxcross 只有 linux 成功
 
 `.github/workflows/build.yml`：push/PR 出 artifact，`<id>-v*` tag 或 workflow_dispatch 触发该插件独立 Release。
 
-- Release tag 必须是 `<id>-vX.Y.Z`（如 `qoderwork-v0.4.1`）。`make tag` 生成的是 `vX.Y.Z`，不触发 release——手动 `git tag <id>-vX.Y.Z`。
-- 每插件独立版本，版本号存于 `<id>/VERSION`。
+**发版流程**（版本号已在 `<id>/VERSION` 与 `<id>/main.go` 的 `version` 常量中）：
+
+```bash
+# 1. 确认版本号已 bump 并推送到 main（两处：<id>/VERSION + main.go 的 var version）
+git push origin main
+
+# 2. 打 tag 并推送（触发 release）
+make -C workbuddy tag          # 读 workbuddy/VERSION → workbuddy-v0.9.4
+make -C qoderwork tag          # → qoderwork-v0.4.2
+make -C qwenwork tag           # → qwenwork-v0.1.5
+# 等价手动写法：git tag -a workbuddy-v0.9.4 -m "WorkBuddy v0.9.4" && git push origin workbuddy-v0.9.4
+
+# 3. 观察：gh run watch（或 gh run list --repo hex-ci/cpa-plugin）
+```
+
+- tag 推上去后 CI 自动：全平台构建 → 创建 GitHub Release（7 平台 zip + checksums.txt）→ `sync-registry.py` 把该插件的 direct 安装块（URL+sha256+size）写回 `registry.json` 并 commit 回 main。
+- 只想重发已有版本（不建新 tag）：用 workflow_dispatch，填 `plugin` + `version`；version 留空则取该插件的 `VERSION` 文件。
+- 每插件独立版本，版本号存于 `<id>/VERSION`（tag 名由它派生，`make tag` 已自动读取）。
 - `registry.json`（插件商店源）用 `python3 scripts/validate-registry.py registry.json` 校验。
 - CI 的 test/build matrix 覆盖 **WorkBuddy + QoderWork + QwenWork** 三个插件（WorkBuddy 额外跑 `node --test panel.test.js`）。
 - 三插件共用同一仓库，插件商店无法用 `github-release` 类型：宿主按 `/releases/latest`（全仓库语义）解析，且 tag 必须能归一为纯版本号，`<id>-vX.Y.Z` 解析失败。因此 registry 走 `direct`（schema_version 2），artifacts 由 release job 的 `.github/scripts/sync-registry.py` 自动生成并 commit 回 main。
