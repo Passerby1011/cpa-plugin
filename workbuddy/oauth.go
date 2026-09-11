@@ -62,21 +62,8 @@ func loginClientForCurrentRouting(lc *loginCtx) (*http.Client, error) {
 	return &client, nil
 }
 
-// doJSON sends method to fullURL with the given headers, parses the {code,msg,data}
-// envelope, and returns the inner data payload. httpStatus is the upstream code.
-func doJSON(client *http.Client, method, fullURL string, headers func(*http.Request), body io.Reader) (json.RawMessage, int, error) {
-	req, err := http.NewRequest(method, fullURL, body)
-	if err != nil {
-		return nil, 0, err
-	}
-	if headers != nil {
-		headers(req)
-	} else {
-		commonHeaders(req)
-	}
-	return doJSONRequest(client, req)
-}
-
+// doJSONRequest sends req and parses the {code,msg,data} envelope, returning the
+// inner data payload. httpStatus is the upstream code.
 func doJSONRequest(client *http.Client, req *http.Request) (json.RawMessage, int, error) {
 	resp, err := client.Do(req)
 	if err != nil {
@@ -215,7 +202,7 @@ func decorateDesktopAuthURL(rawURL, loginSessionID string) (string, error) {
 	return u.String(), nil
 }
 
-func handleStartLogin(raw []byte) ([]byte, error) {
+func handleStartLogin(_ []byte) ([]byte, error) {
 	client, err := newLoginClient()
 	if err != nil {
 		return nil, fmt.Errorf("auth state failed: %w", err)
@@ -370,8 +357,8 @@ func handleRefreshAuth(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("refresh: %w", err)
 	}
 	// Route via host.http.do so request-log captures the refresh call (H2
-	// compliance: was doJSON(sharedHTTPClient()) — bypassed host transport
-	// policy + logging for the X-Refresh-Token endpoint).
+	// compliance: the old direct sharedHTTPClient() call bypassed host
+	// transport policy + logging for the X-Refresh-Token endpoint).
 	data, raw2, status, err := refreshCallWithCallback(sa, req.HostCallbackID)
 	if err != nil {
 		if status >= 400 {

@@ -38,14 +38,10 @@ type accountDetailCall struct {
 	errs []string
 }
 
-// cachedAccountDetails fetches plan/checkin/credits concurrently (upstream
-// round-trip dominates; 3 serial calls ≈ 3× latency). On any individual
-// failure the previous cached value is kept (stale-while-error) so a
+// cachedAccountDetailsWithCallback fetches plan/checkin/credits concurrently
+// (upstream round-trip dominates; 3 serial calls ≈ 3× latency). On any
+// individual failure the previous cached value is kept (stale-while-error) so a
 // transient upstream 500 does not blank the panel row.
-func cachedAccountDetails(authID string, sa *storedAuth, force bool) (plan string, ci *checkinSummary, cr *creditsSummary, errs []string) {
-	return cachedAccountDetailsWithCallback(authID, sa, force, "")
-}
-
 func cachedAccountDetailsWithCallback(authID string, sa *storedAuth, force bool, callbackID string) (plan string, ci *checkinSummary, cr *creditsSummary, errs []string) {
 	var prev *accountCacheEntry
 	if v, ok := accountCache.Load(authID); ok {
@@ -173,18 +169,4 @@ func pruneAccountCacheSoftCap(capN int) {
 	for i := 0; i < drop; i++ {
 		accountCache.Delete(items[i].key)
 	}
-}
-
-// cachedCheckinToday returns cached today_checked_in when present.
-func cachedCheckinToday(authID string) *bool {
-	v, ok := accountCache.Load(authID)
-	if !ok {
-		return nil
-	}
-	e, ok := v.(*accountCacheEntry)
-	if !ok || e == nil || e.checkin == nil {
-		return nil
-	}
-	b := e.checkin.TodayCheckedIn
-	return &b
 }

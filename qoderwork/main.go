@@ -91,12 +91,8 @@ const (
 	endpointJobTokenRefresh  = upstreamBaseCN + "/api/v1/jobToken/refresh"
 
 	// Business endpoints (jt- Bearer, no COSY).
-	endpointUserInfo      = upstreamBaseCN + "/api/v1/userinfo"
-	endpointQuotaUsage    = upstreamBaseCN + "/api/v2/quota/usage"
-	endpointUserPlan      = upstreamBaseCN + "/api/v2/user/plan"
-	endpointCheckinStatus = upstreamBaseCN + "/sash/api/v1/me/daily-check-in/status"
-	endpointCheckinClaim  = upstreamBaseCN + "/sash/api/v1/me/daily-check-in/claim"
-	endpointProUpgrade    = upstreamBaseCN + "/sash/api/v1/me/pro-upgrade/claim"
+	endpointUserInfo   = upstreamBaseCN + "/api/v1/userinfo"
+	endpointProUpgrade = upstreamBaseCN + "/sash/api/v1/me/pro-upgrade/claim"
 
 	// Inference endpoints (COSY-signed + QoderEncoding body).
 	endpointChat   = gatewayBaseCN + "/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
@@ -188,7 +184,7 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 }
 
 //export cliproxyPluginFree
-func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
+func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) {
 	if ptr != nil {
 		C.free(ptr)
 	}
@@ -476,13 +472,6 @@ type storedAccount struct {
 	UID          string `json:"uid"`
 	EnterpriseID string `json:"enterpriseId"`
 	Nickname     string `json:"nickname"`
-}
-
-// apiEnvelope is the generic {code,msg,data} wrapper used by every QoderWork API.
-type apiEnvelope struct {
-	Code int             `json:"code"`
-	Msg  string          `json:"msg"`
-	Data json.RawMessage `json:"data"`
 }
 
 // jobTokenResponse is defined in oauth.go; keepalive and handleRefreshAuth

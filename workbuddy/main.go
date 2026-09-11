@@ -96,11 +96,9 @@ const (
 	// CN endpoint aliases (login / chat). upstreamBaseCN is the only
 	// CN base; Global has its own upstreamBaseGlobal. No "upstreamBase" legacy
 	// alias — removed in v0.6.31 dead-code sweep.
-	endpointAuthState    = upstreamBaseCN + "/v2/plugin/auth/state?platform=CLI"
-	endpointLoginAcct    = upstreamBaseCN + "/v2/plugin/login/account?state="
-	endpointAuthToken    = upstreamBaseCN + "/v2/plugin/auth/token?state="
-	endpointTokenRefresh = upstreamBaseCN + "/v2/plugin/auth/token/refresh"
-	endpointChat         = upstreamBaseCN + "/v2/chat/completions"
+	endpointAuthState = upstreamBaseCN + "/v2/plugin/auth/state?platform=CLI"
+	endpointLoginAcct = upstreamBaseCN + "/v2/plugin/login/account?state="
+	endpointAuthToken = upstreamBaseCN + "/v2/plugin/auth/token?state="
 
 	loginTTL = 5 * time.Minute
 )
@@ -185,7 +183,7 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 }
 
 //export cliproxyPluginFree
-func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
+func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) {
 	if ptr != nil {
 		C.free(ptr)
 	}
@@ -720,7 +718,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	// CodeBuddy rejects non-stream requests (code 11101), so always stream
 	// upstream and fold the chunks into a single chat.completion object.
 	// prepareUpstreamBody does forceStream + normalizeTools + rewriteSystem +
-	// ensureSystemMessage + rewriteModel in ONE unmarshal/marshal pass.
+	// ensureSystemMessageInPlace + rewriteModel in ONE unmarshal/marshal pass.
 	body := prepareUpstreamBody(req.Payload, req.OriginalRequest, sa, upstreamModel)
 	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
 	if err != nil {
@@ -794,8 +792,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		chunks, statusCode, errCollect := collectUpstreamStream(body, sa, sseFramed, collector, req.HostCallbackID)
 		if errCollect != nil {
 			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error())
-			var statusErr *upstreamStatusError
-			if errors.As(errCollect, &statusErr) {
+			if statusErr, ok := errors.AsType[*upstreamStatusError](errCollect); ok {
 				return errorEnvelopeWithStatus("http_error", redactSecrets(statusErr.Error()), statusErr.status), nil
 			}
 			return nil, errCollect

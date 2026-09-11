@@ -506,12 +506,14 @@ func TestModelRuntimeMetadataSingleflight(t *testing.T) {
 			if req.Header.Get("X-User-Id") == "uid-two" {
 				id = "model-two"
 			}
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(fmt.Sprintf(`{"code":0,"data":{"agents":[{"name":"cli","models":[%q]}]}}`, id))}, nil
+			body := fmt.Appendf(nil, `{"code":0,"data":{"agents":[{"name":"cli","models":[%q]}]}}`, id)
+			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: body}, nil
 		case "models.dev":
 			call := metadataCalls.Add(1)
-			if call == 1 {
+			switch call {
+			case 1:
 				close(metadataStarted)
-			} else if call == 2 {
+			case 2:
 				close(secondMetadataStarted)
 			}
 			<-releaseMetadata

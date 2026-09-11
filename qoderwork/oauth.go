@@ -256,7 +256,7 @@ func makePKCE() (string, string) {
 
 // handleStartLogin implements AuthProvider.StartLogin: build the device
 // authorization URL and stash the PKCE verifier under the returned state.
-func handleStartLogin(raw []byte) ([]byte, error) {
+func handleStartLogin(_ []byte) ([]byte, error) {
 	verifier, challenge := makePKCE()
 	nonce := uuid.NewString()
 	machineID := uuid.NewString()
@@ -479,36 +479,6 @@ func buildStoredAuthFromDeviceToken(tok *deviceTokenResponse, ui *userInfoRespon
 		},
 		Account: storedAccount{UID: uid, Nickname: nickname},
 	}
-}
-
-// existingPATForUID looks up an existing QoderWork auth file for the same
-// uid and returns its stored PAT (empty when none). Lets OAuth re-login
-// preserve a previously imported PAT instead of wiping it.
-//
-// NOTE: This calls hostAuthList which is a blocking host RPC. It must NOT
-// be called during PollLogin (delays auth file persistence). It is safe to
-// call during keepalive/refresh which happens long after the file is written.
-func existingPATForUID(uid string) string {
-	if uid == "" {
-		return ""
-	}
-	files, err := hostAuthList()
-	if err != nil {
-		return ""
-	}
-	for _, f := range files {
-		if !strings.HasPrefix(strings.ToLower(f.Name), providerName+"-") {
-			continue
-		}
-		sa, err := hostAuthGet(f.AuthIndex)
-		if err != nil || sa == nil {
-			continue
-		}
-		if sa.Account.UID == uid && strings.HasPrefix(sa.Auth.PersonalToken, "pt-") {
-			return sa.Auth.PersonalToken
-		}
-	}
-	return ""
 }
 
 // handleRefreshAuth implements AuthProvider.Refresh. The two credential

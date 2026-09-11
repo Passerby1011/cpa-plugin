@@ -70,31 +70,6 @@ type userInfoResponse struct {
 	Avatar   string `json:"avatar"`
 }
 
-// fetchUserInfo queries /api/v1/userinfo with a device-token Bearer to populate
-// identity fields (uid, nickname, email for COSY signing).
-func fetchUserInfo(jt string) (*userInfoResponse, error) {
-	req, err := http.NewRequest(http.MethodGet, endpointUserInfo, nil)
-	if err != nil {
-		return nil, err
-	}
-	commonHeaders(req)
-	req.Header.Set("Authorization", "Bearer "+jt)
-	resp, err := sharedHTTPClient().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("userinfo: http %d body=%s", resp.StatusCode, truncateRedacted(string(raw), 200))
-	}
-	var out userInfoResponse
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("userinfo parse: %w (body=%s)", err, truncateRedacted(string(raw), 200))
-	}
-	return &out, nil
-}
-
 // -----------------------------------------------------------------------------
 // Device-authorization login
 // -----------------------------------------------------------------------------
@@ -148,7 +123,7 @@ func makePKCE() (string, string) {
 
 // handleStartLogin implements AuthProvider.StartLogin: build the device
 // authorization URL and stash the PKCE verifier under the returned state.
-func handleStartLogin(raw []byte) ([]byte, error) {
+func handleStartLogin(_ []byte) ([]byte, error) {
 	verifier, challenge := makePKCE()
 	nonce := uuid.NewString()
 	machineID := uuid.NewString()

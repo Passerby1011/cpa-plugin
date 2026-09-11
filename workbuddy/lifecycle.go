@@ -222,22 +222,6 @@ func peerAuthDir() string {
 	return ""
 }
 
-// applyExhaustedPolicy applies disable (CN) or delete (Global).
-func applyExhaustedPolicy(authIndex, authID string, sa *storedAuth, cr *creditsSummary, reason string) error {
-	if !lifecycleEnabled() {
-		return nil
-	}
-	action := lifecycleActionFor(accountRegion(sa), cr)
-	switch action {
-	case lifecycleDelete:
-		return deleteAuth(authIndex, authID, sa)
-	case lifecycleDisable:
-		return disableAuth(authIndex, authID, sa, cr, reason)
-	default:
-		return nil
-	}
-}
-
 // syncAuthNote writes note without changing disabled state.
 func syncAuthNote(authIndex, authID string, sa *storedAuth, cr *creditsSummary, disabled bool) error {
 	if sa == nil {
@@ -373,11 +357,7 @@ func reconcileOneAccountWithCallback(authIndex, authID string, force bool, callb
 	}
 }
 
-// reconcileAllAccounts walks WorkBuddy auths and applies lifecycle.
-func reconcileAllAccounts(force bool) []map[string]any {
-	return reconcileAllAccountsWithCallback(force, "")
-}
-
+// reconcileAllAccountsWithCallback walks WorkBuddy auths and applies lifecycle.
 func reconcileAllAccountsWithCallback(force bool, callbackID string) []map[string]any {
 	if !lifecycleEnabled() {
 		return nil

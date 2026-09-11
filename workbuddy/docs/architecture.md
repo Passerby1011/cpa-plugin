@@ -29,7 +29,7 @@ proxy.go          atomic inherit/proxy/blocked snapshot + proxy transport/error 
 executor.go       handleExecExecute / handleExecStream
 stream.go         streamEmit/Close + pumpUpstreamStream + collectUpstreamStream + aggregate*
 payload.go        prepareUpstreamBody + InPlace mutators (forceStream/normalizeTools/
-                  rewriteSystem/ensureSystemMessage/rewriteModel) + legacy wrappers
+                  rewriteSystem/ensureSystemMessageInPlace/rewriteModel) + legacy wrappers
 
 models.go         static auto/default metadata + model.for_auth response + alias/
                   exclusion handling
@@ -38,14 +38,14 @@ model_source_modelsdev.go models.dev /models.json parser, matching, and additive
 model_store.go     separated metadata/per-auth JSON caches + identity hash + atomic .bak writes
 model_readiness.go per-auth bootstrap flights + global metadata flight + immutable readiness snapshots
 
-oauth.go          handleStartLogin/PollLogin/RefreshAuth + newLoginClient + doJSON
+oauth.go          handleStartLogin/PollLogin/RefreshAuth + newLoginClient + doJSONRequest
 auth_parse.go     (in authfile.go / main.go) handleParseAuth + parseStored + toAuthData
 
 usage.go          handleUsage + publishUsage + forwardUsageToCPAMP + sseUsageCollector
 
 management.go     managementRegistration + handleManagement + auth/ratelimit
 panel.go          buildDashboardEx + summarizeCredits + servePanel + panelHTML
-checkin.go        schedulerLoop + runAutoCheckin + handleManualCheckin + 
+checkin.go        schedulerLoop + runAutoCheckin + handleManualCheckinWithCallback + 
                   classifyCheckinTargets/executeCheckinBatch/summarizeCheckinResults
 credits_handler.go handleImportAuth/CheckinConfig/ClaimTrial/SelectAuth/CreditsQuery
 billing.go        fetchCheckinStatus/fetchUserResource/fetchPaymentType/
@@ -54,7 +54,7 @@ usage_config.go   configure + resolveUsageReport + probe* + config vars
 host_auth.go      hostAuthList/Get/GetBundle (host auth-store RPC)
 
 lifecycle.go      reconcileOneAccount/AllAccounts/AfterExecutorError/ByUID +
-                  applyExhaustedPolicy + lifecycleState
+                  lifecycleState
 policy.go         lifecycleAction decisions (pure functions) + displayNote + labelForAuth
 authfile.go       authFileNameFor/sanitizeUIDForFileName/hostAuthPersist/deleteAuth +
                   path safety checks
@@ -80,7 +80,7 @@ client -> CPA -> plugin.handleExecStream
   -> parseStored(auth file)
   → resolveUpstreamModel(alias → upstream id)
   → prepareUpstreamBody (single JSON pass: forceStream + normalizeTools +
-                          rewriteSystem + ensureSystemMessage + rewriteModel)
+                          rewriteSystem + ensureSystemMessageInPlace + rewriteModel)
   → hostHTTPDoStream
       → proxy-url empty: inherited CPA host bridge/direct compatibility path
       → proxy-url set: immutable plugin proxy client (no fallback)
@@ -180,7 +180,7 @@ schedulerLoop → runAutoCheckin (sem=4 concurrent)
   → processAutoCheckinAccount per account
       → fetchCheckinStatus → performCheckinCall if needed
       → update accountCache (merge, not wipe)
-      → reconcileOneAccount → applyExhaustedPolicy
+      → reconcileOneAccount
           → policy.go decides: disable (CN) / delete (Global) / reenable (CN)
           → authfile.go applies: hostAuthPersist / deleteAuth
 ```
@@ -190,7 +190,7 @@ schedulerLoop → runAutoCheckin (sem=4 concurrent)
 ```
 panel.html → /v0/management/plugins/workbuddy/accounts
   → handleManagement (auth + ratelimit)
-  → buildDashboardEx (concurrent cachedAccountDetails per account, sem=4)
+  → buildDashboardEx (concurrent cachedAccountDetailsWithCallback per account, sem=4)
       → accountDetailFlight singleflight dedups concurrent fetches
       → accountCache hit → return cached
       → miss → 3 concurrent billing API calls (plan/checkin/credits)
@@ -214,7 +214,7 @@ panel.html → /v0/management/plugins/workbuddy/accounts
    inherit preserves the flow transport. A blocked configuration deletes the
    flow before the next request can send.
 
-2. **Single-flight per account for billing API.** `cachedAccountDetails`
+2. **Single-flight per account for billing API.** `cachedAccountDetailsWithCallback`
    uses a `sync.Map` of in-flight calls so concurrent dashboard refreshes
    and reconcile ticks for the same account share one upstream fetch
    instead of stampeding the billing API.

@@ -15,10 +15,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-// billingBase hosts the Buddy-gas-station check-in and resource-package APIs.
-// It is a var (not const) so tests can override it with an httptest server.
-var billingBase = "https://openapi.qoder.com.cn"
-
 // If the panel later wants to surface "usage export ready", re-add it and wire
 // it into buildDashboardEx's response.
 

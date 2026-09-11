@@ -98,12 +98,8 @@ func handleCheckinConfig(req pluginapi.ManagementRequest) map[string]any {
 	return map[string]any{"checkin_auto": cur, "persistent": false}
 }
 
-// handleClaimTrial claims the expert trial pack for one Global account.
-// CN accounts are rejected — the trial endpoint is Global-only.
-func handleClaimTrial(req pluginapi.ManagementRequest) map[string]any {
-	return handleClaimTrialWithCallback(req, "")
-}
-
+// handleClaimTrialWithCallback claims the expert trial pack for one Global
+// account. CN accounts are rejected — the trial endpoint is Global-only.
 func handleClaimTrialWithCallback(req pluginapi.ManagementRequest, callbackID string) map[string]any {
 	var body struct {
 		AuthIndex string `json:"auth_index"`
@@ -192,15 +188,11 @@ func handleSelectAuth(req pluginapi.ManagementRequest) map[string]any {
 	return map[string]any{"error": "account not found", "auth_index": authIndex}
 }
 
-// handleCreditsQuery returns real-time credits for one or all accounts.
-// Pass ?auth_index=<idx> to query a single account; omit for all.
+// handleCreditsQueryWithCallback returns real-time credits for one or all
+// accounts. Pass ?auth_index=<idx> to query a single account; omit for all.
 // Single-account mode returns full account info (nickname, region, credits,
 // exhausted, trial_claimed) so the panel can update one card without
 // reloading the entire dashboard.
-func handleCreditsQuery(req pluginapi.ManagementRequest) map[string]any {
-	return handleCreditsQueryWithCallback(req, "")
-}
-
 func handleCreditsQueryWithCallback(req pluginapi.ManagementRequest, callbackID string) map[string]any {
 	authIndex := ""
 	if vals := req.Query["auth_index"]; len(vals) > 0 {

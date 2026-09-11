@@ -88,10 +88,8 @@ const (
 	gatewayBaseCN  = "https://gateway.qwenwork.cn"
 	clientUA       = "qwenwork/0.1.8"
 
-	// Auth: device flow only（无 PAT/jobToken）。授权页、poll、refresh 全在单网关上。
-	endpointUserInfo   = upstreamBaseCN + "/api/v1/userinfo"
-	endpointQuotaUsage = upstreamBaseCN + "/api/v2/quota/usage"
-	endpointUserPlan   = upstreamBaseCN + "/api/v2/user/plan"
+	// Auth (device flow only, no PAT/jobToken) and billing endpoints are on
+	// upstreamBaseCN; they are built at their call sites.
 
 	// Inference: COSY 签名 + 明文 JSON body（无 Encode=1）。
 	endpointChat   = gatewayBaseCN + "/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common"
@@ -183,7 +181,7 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 }
 
 //export cliproxyPluginFree
-func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
+func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) {
 	if ptr != nil {
 		C.free(ptr)
 	}
@@ -470,13 +468,6 @@ type storedAccount struct {
 	EnterpriseID string `json:"enterpriseId"`
 	Nickname     string `json:"nickname"`
 	Email        string `json:"email"`
-}
-
-// apiEnvelope is the generic {code,msg,data} wrapper used by every QwenWork API.
-type apiEnvelope struct {
-	Code int             `json:"code"`
-	Msg  string          `json:"msg"`
-	Data json.RawMessage `json:"data"`
 }
 
 // parseStored accepts both shapes seen in the wild:

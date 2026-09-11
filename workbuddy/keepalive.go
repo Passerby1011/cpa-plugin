@@ -64,8 +64,8 @@ func isSessionDeadError(msg string) bool {
 
 // refreshCall posts to the upstream token/refresh endpoint and returns the
 // decoded envelope data plus the raw body (raw needed for error classification
-// — doJSON collapses 4xx bodies into "http_error: upstream NNN" and drops the
-// business code, e.g. 12153 "Offline user session not found").
+// — the envelope decode collapses 4xx bodies into "http_error: upstream NNN"
+// and drops the business code, e.g. 12153 "Offline user session not found").
 //
 // v0.8.0: routed via host.http.do so request-log captures the call.
 func refreshCall(sa *storedAuth) (json.RawMessage, []byte, int, error) {
@@ -99,12 +99,8 @@ func refreshCallWithCallback(sa *storedAuth, callbackID string) (json.RawMessage
 	return env.Data, raw, resp.StatusCode, nil
 }
 
-// refreshOneAuth refreshes the access token for a single WorkBuddy auth and
-// persists the result. Returns a short status string for logging/tests.
-func refreshOneAuth(authIndex, authID string) (string, error) {
-	return refreshOneAuthWithCallback(authIndex, authID, "")
-}
-
+// refreshOneAuthWithCallback refreshes the access token for a single WorkBuddy
+// auth and persists the result. Returns a short status string for logging/tests.
 func refreshOneAuthWithCallback(authIndex, authID, callbackID string) (string, error) {
 	var status string
 	var resultErr error
@@ -116,10 +112,6 @@ func refreshOneAuthWithCallback(authIndex, authID, callbackID string) (string, e
 
 func withRefreshLock(authIndex string, fn func()) {
 	withCheckinLock(authIndex, fn)
-}
-
-func refreshOneAuthUnlocked(authIndex, authID string) (string, error) {
-	return refreshOneAuthUnlockedWithCallback(authIndex, authID, "")
 }
 
 func refreshOneAuthUnlockedWithCallback(authIndex, authID, callbackID string) (string, error) {
@@ -186,7 +178,7 @@ func persistAuthTokens(authIndex string, sa *storedAuth) error {
 // field (CPA natively skips disabled auths in scheduling). The note records
 // the reason so the panel can surface "session dead, re-login required"
 // without needing a custom [SESSION-DEAD] marker.
-func markSessionDead(authIndex, authID string, sa *storedAuth) error {
+func markSessionDead(authIndex, _ string, sa *storedAuth) error {
 	phys, err := hostAuthGetPhysical(authIndex)
 	if err != nil {
 		return err
@@ -270,7 +262,7 @@ func runTokenKeepaliveWithCallback(callbackID string) *keepaliveSummary {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			row := keepaliveRow{AuthIndex: f.AuthIndex}
-			// Cheap pre-read for nickname/region; refreshOneAuth re-reads anyway
+			// Cheap pre-read for nickname/region; refreshOneAuthWithCallback re-reads anyway
 			// but the row should be populated even when refresh errors early.
 			if sa, err := hostAuthGet(f.AuthIndex); err == nil {
 				row.Nickname = displayNameFor(sa)
@@ -291,35 +283,9 @@ func runTokenKeepaliveWithCallback(callbackID string) *keepaliveSummary {
 	return sum
 }
 
-// nextKeepaliveTime mirrors nextCheckinTime but for keepaliveHours.
-func nextKeepaliveTime(now time.Time) time.Time {
-	var earliest time.Time
-	for _, h := range keepaliveHours {
-		t := time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, now.Location())
-		if !t.After(now) {
-			t = t.Add(24 * time.Hour)
-		}
-		if earliest.IsZero() || t.Before(earliest) {
-			earliest = t
-		}
-	}
-	return earliest
-}
-
-// shouldRunKeepaliveNow reports whether the current local time is within
-// one hour after any scheduled keepalive hour today. Used by schedulerLoop
-// to fire keepalive on the same tick as checkin when the schedules coincide.
-func shouldRunKeepaliveNow(now time.Time) bool {
-	return scheduledInCurrentHour(now, keepaliveHours)
-}
-
-// handleKeepaliveNow triggers a manual refresh (all accounts, or one when the
-// body carries auth_index). Manual runs ignore the token_keepalive toggle —
-// the toggle gates only the 22:00 auto-run.
-func handleKeepaliveNow(req pluginapi.ManagementRequest) map[string]any {
-	return handleKeepaliveNowWithCallback(req, "")
-}
-
+// handleKeepaliveNowWithCallback triggers a manual refresh (all accounts, or
+// one when the body carries auth_index). Manual runs ignore the token_keepalive
+// toggle — the toggle gates only the 22:00 auto-run.
 func handleKeepaliveNowWithCallback(req pluginapi.ManagementRequest, callbackID string) map[string]any {
 	var body struct {
 		AuthIndex string `json:"auth_index"`

@@ -26,19 +26,6 @@ var (
 	schedulerModeMu sync.RWMutex
 )
 
-// setSchedulerMode is a test helper that returns a restore func.
-func setSchedulerMode(mode string) func() {
-	schedulerModeMu.Lock()
-	old := schedulerMode
-	schedulerMode = mode
-	schedulerModeMu.Unlock()
-	return func() {
-		schedulerModeMu.Lock()
-		schedulerMode = old
-		schedulerModeMu.Unlock()
-	}
-}
-
 func loadedSchedulerMode() string {
 	schedulerModeMu.RLock()
 	defer schedulerModeMu.RUnlock()

@@ -1,15 +1,12 @@
 // lifecycle.go implements credit-based auth lifecycle for QwenWork:
 //   - CN exhausted  → disable auth file (disabled:true), re-enable after check-in when credits return
-//   - exhausted → delete auth file (one-shot quota)
 //   - Unknown credits → no-op (never mis-kill)
 //   - Hard credit errors from executor → recheck credits then apply policy
-//   - Soft rate limits → do not delete CN
+//   - Soft rate limits → do not disable CN
 package main
 
 import (
 	"encoding/json"
-	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -149,100 +146,6 @@ func reenableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary) 
 	rememberLifecycleState(authID, false, note)
 	accountCache.Delete(authID)
 	return nil
-}
-
-// deleteAuth removes exhausted credentials from disk.
-func deleteAuth(authIndex, authID string, sa *storedAuth) error {
-	mu := authWriteLock(authIndex)
-	mu.Lock()
-	defer mu.Unlock()
-
-	phys, err := hostAuthGetPhysical(authIndex)
-	if err != nil {
-		return err
-	}
-	path := strings.TrimSpace(phys.Path)
-	if path == "" {
-		// Try to reconstruct path from peer QwenWork files' directory + canonical name.
-		name := authFileNameFor(sa)
-		if phys.Name != "" && !isLegacyAuthName(phys.Name) {
-			name = phys.Name
-		} else if strings.TrimSpace(phys.Name) != "" && isLegacyAuthName(phys.Name) {
-			name = authFileNameFor(sa)
-		}
-		if dir := peerAuthDir(); dir != "" && name != "" {
-			candidate := filepath.Join(dir, name)
-			if isSafeAuthPath(candidate) {
-				path = candidate
-			}
-		}
-	}
-	if path == "" {
-		// Last resort: disable instead of silent no-op (never invent a random path).
-		note := displayNote(sa, nil, true) + " · 应删除但无 path"
-		raw, berr := buildAuthFileJSON(sa, true, note, nil)
-		if berr != nil {
-			return fmt.Errorf("no path and build failed: %w", berr)
-		}
-		name := authFileNameFor(sa)
-		if phys.Name != "" && !isLegacyAuthName(phys.Name) {
-			name = phys.Name
-		}
-		if err := hostAuthPersistMigrate(name, "", "", raw); err != nil {
-			return err
-		}
-		rememberLifecycleState(authID, true, note)
-		accountCache.Delete(authID)
-		clearActiveAuthIfMatch(authID)
-		return nil
-	}
-	if err := deleteAuthFileInDir(path, filepath.Dir(path)); err != nil {
-		return err
-	}
-	// Also remove legacy qwenwork.json if this UID was dual-named historically.
-	if sa != nil && strings.TrimSpace(sa.Account.UID) != "" {
-		if dir := filepath.Dir(path); dir != "" {
-			legacy := filepath.Join(dir, authFileName)
-			// A-36: same path safety as primary deleteAuthFileInDir.
-			if isLegacyAuthName(filepath.Base(legacy)) {
-				_ = deleteAuthFileInDir(legacy, dir)
-			}
-		}
-	}
-	lifecycleState.Delete(authID)
-	accountCache.Delete(authID)
-	clearActiveAuthIfMatch(authID)
-	return nil
-}
-
-// peerAuthDir returns the directory of any QwenWork auth file known to the host.
-// Uses HostAuthFileEntry.Path from the list response (A-38: was N+1 — list + getPhysical per file).
-func peerAuthDir() string {
-	files, err := hostAuthList()
-	if err != nil {
-		return ""
-	}
-	for _, f := range files {
-		p := strings.TrimSpace(f.Path)
-		if p != "" {
-			return filepath.Dir(p)
-		}
-	}
-	return ""
-}
-
-// applyExhaustedPolicy applies disable (CN) or delete (CN).
-func applyExhaustedPolicy(authIndex, authID string, sa *storedAuth, cr *creditsSummary, reason string) error {
-	if !lifecycleEnabled() {
-		return nil
-	}
-	action := lifecycleActionFor("cn", cr)
-	switch action {
-	case lifecycleDisable:
-		return disableAuth(authIndex, authID, sa, cr, reason)
-	default:
-		return nil
-	}
 }
 
 // syncAuthNote writes note without changing disabled state.

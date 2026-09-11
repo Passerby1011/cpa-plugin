@@ -198,7 +198,7 @@ func persistAuthTokens(authIndex string, sa *storedAuth) error {
 // field (CPA natively skips disabled auths in scheduling). The note records
 // the reason so the panel can surface "session dead, re-login required"
 // without needing a custom [SESSION-DEAD] marker.
-func markSessionDead(authIndex, authID string, sa *storedAuth) error {
+func markSessionDead(authIndex, _ string, sa *storedAuth) error {
 	phys, err := hostAuthGetPhysical(authIndex)
 	if err != nil {
 		return err
@@ -271,10 +271,7 @@ func runTokenKeepalive() *keepaliveSummary {
 	sem := make(chan struct{}, 4)
 	var mu sync.Mutex
 	for _, f := range files {
-		f := f
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			row := keepaliveRow{AuthIndex: f.AuthIndex}
@@ -292,7 +289,7 @@ func runTokenKeepalive() *keepaliveSummary {
 			mu.Lock()
 			sum.Results = append(sum.Results, row)
 			mu.Unlock()
-		}()
+		})
 	}
 	wg.Wait()
 	recordKeepalive(sum)

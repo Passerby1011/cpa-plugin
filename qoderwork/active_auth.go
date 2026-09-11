@@ -29,19 +29,6 @@ func setActiveAuthID(id string) {
 	activeAuthMu.Unlock()
 }
 
-// clearActiveAuthIfMatch clears the selection when the given auth is removed.
-func clearActiveAuthIfMatch(id string) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return
-	}
-	activeAuthMu.Lock()
-	if activeAuthID == id {
-		activeAuthID = ""
-	}
-	activeAuthMu.Unlock()
-}
-
 // activeAuthCandidate is a thin view used by pickActiveAuth.
 type activeAuthCandidate struct {
 	ID        string

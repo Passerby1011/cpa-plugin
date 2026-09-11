@@ -1,5 +1,5 @@
 // checkin.go implements daily check-in for CN accounts: the manual
-// handleManualCheckin endpoint, the 09:00 / 21:00 auto scheduler, and the
+// handleManualCheckinWithCallback endpoint, the 09:00 / 21:00 auto scheduler, and the
 // per-account mutex that prevents duplicate check-ins from racing browser
 // tabs. Global accounts are excluded — they use one-shot trial claims instead.
 package main
@@ -92,7 +92,7 @@ func schedulerLoop(stop chan struct{}) {
 //
 // v0.6.31: per-account work runs concurrently (sem=4) — was serial, so N accounts
 // meant 3N serial HTTP round-trips on the billing API. Matches the pattern used
-// by buildDashboardEx and handleManualCheckin.
+// by buildDashboardEx and handleManualCheckinWithCallback.
 func runAutoCheckin() {
 	checkinAutoMu.RLock()
 	doCheckin := checkinAuto
@@ -206,22 +206,18 @@ func processAutoCheckinAccount(f pluginapi.HostAuthFileEntry, doCheckin bool) {
 	}
 }
 
-// handleManualCheckin serves POST /checkin.
+// handleManualCheckinWithCallback serves POST /checkin.
 //
-// Single-account mode (body.auth_index set): runs checkinOneAccount directly —
-// one hostAuthGet + at most two upstream calls (status, then check-in). The
-// old three-phase classify/execute/summarize pipeline ran the same framework
-// for one account as for thirty (4 RPC + 5 HTTP + lock-held re-reads), which
-// routinely blew past the 30s management API timeout: the check-in succeeded
-// upstream but the response never reached the panel.
+// Single-account mode (body.auth_index set): runs checkinOneAccountWithCallback
+// directly — one hostAuthGet + at most two upstream calls (status, then
+// check-in). The old three-phase classify/execute/summarize pipeline ran the
+// same framework for one account as for thirty (4 RPC + 5 HTTP + lock-held
+// re-reads), which routinely blew past the 30s management API timeout: the
+// check-in succeeded upstream but the response never reached the panel.
 //
-// Batch mode (empty auth_index): fans out checkinOneAccount per account
-// (sem=4), preserving input order and the {results, summary} response shape
-// the panel depends on.
-func handleManualCheckin(req pluginapi.ManagementRequest) map[string]any {
-	return handleManualCheckinWithCallback(req, "")
-}
-
+// Batch mode (empty auth_index): fans out checkinOneAccountWithCallback per
+// account (sem=4), preserving input order and the {results, summary} response
+// shape the panel depends on.
 func handleManualCheckinWithCallback(req pluginapi.ManagementRequest, callbackID string) map[string]any {
 	var body struct {
 		AuthIndex string `json:"auth_index"`
@@ -303,8 +299,8 @@ func handleManualCheckinWithCallback(req pluginapi.ManagementRequest, callbackID
 	}
 }
 
-// checkinOneAccount performs the daily check-in for one account with the
-// minimum number of round-trips:
+// checkinOneAccountWithCallback performs the daily check-in for one account
+// with the minimum number of round-trips:
 //
 //	hostAuthGet ×1 (RPC) → domain gate → fetchCheckinStatus ×1 (failure
 //	tolerated, upstream is idempotent) → performCheckinCall ×1.
@@ -312,10 +308,6 @@ func handleManualCheckinWithCallback(req pluginapi.ManagementRequest, callbackID
 // No lock-held re-reads, no lifecycle reconcile (that is the scheduled
 // runAutoCheckin path's job), no redundant status refetches. Cache updates
 // merge into the previous entry so credits/plan survive.
-func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
-	return checkinOneAccountWithCallback(f, "")
-}
-
 func checkinOneAccountWithCallback(f pluginapi.HostAuthFileEntry, callbackID string) map[string]any {
 	out := map[string]any{"auth_index": f.AuthIndex}
 

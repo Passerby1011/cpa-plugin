@@ -121,10 +121,6 @@ func isTransientBillingErr(err error) bool {
 	return strings.HasPrefix(msg, "http 5") || strings.HasPrefix(msg, "http=5") || strings.Contains(msg, "status 5")
 }
 
-func billingCallOnce(sa *storedAuth, path string, body any) (json.RawMessage, error) {
-	return billingCallOnceWithCallback(sa, path, body, "")
-}
-
 func billingCallOnceWithCallback(sa *storedAuth, path string, body any, callbackID string) (json.RawMessage, error) {
 	var reader *bytes.Reader
 	if body != nil {

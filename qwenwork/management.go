@@ -15,11 +15,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-// billingBase hosts the check-in and resource-package APIs. It is a var (not
-// const) so tests can override it with an httptest server. QwenWork serves
-// billing off the same gateway as inference.
-var billingBase = "https://gateway.qwenwork.cn"
-
 // If the panel later wants to surface "usage export ready", re-add it and wire
 // it into buildDashboardEx's response.
 

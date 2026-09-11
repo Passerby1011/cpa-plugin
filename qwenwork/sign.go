@@ -177,10 +177,7 @@ func (s *cosySession) buildBearer(body, rawURL string) (payloadB64, date, bearer
 	if err != nil {
 		return "", "", "", err
 	}
-	pathSig := u.Path
-	if strings.HasPrefix(pathSig, "/algo") {
-		pathSig = pathSig[len("/algo"):]
-	}
+	pathSig := strings.TrimPrefix(u.Path, "/algo")
 	payload := map[string]string{
 		"cosyVersion": cosyVersionQwen,
 		"ideVersion":  ideVersionQwen,

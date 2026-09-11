@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright  # pyright: ignore[reportMissingImports]
 
 LAUNCH_ARGS = [
     "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",

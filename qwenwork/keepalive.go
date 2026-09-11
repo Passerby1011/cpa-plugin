@@ -175,7 +175,7 @@ func persistAuthTokens(authIndex string, sa *storedAuth) error {
 // field (CPA natively skips disabled auths in scheduling). The note records
 // the reason so the panel can surface "session dead, re-login required"
 // without needing a custom [SESSION-DEAD] marker.
-func markSessionDead(authIndex, authID string, sa *storedAuth) error {
+func markSessionDead(authIndex, _ string, sa *storedAuth) error {
 	phys, err := hostAuthGetPhysical(authIndex)
 	if err != nil {
 		return err
@@ -274,20 +274,6 @@ func runTokenKeepalive() *keepaliveSummary {
 	wg.Wait()
 	recordKeepalive(sum)
 	return sum
-}
-
-// shouldRunKeepaliveNow reports whether the current local time is within
-// one hour after any scheduled keepalive hour today. Used by schedulerLoop
-// to fire keepalive on the same tick as checkin when the schedules coincide.
-func shouldRunKeepaliveNow(now time.Time) bool {
-	for _, h := range keepaliveHours {
-		t := time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, now.Location())
-		// Within [t, t+1h) window.
-		if !now.Before(t) && now.Before(t.Add(time.Hour)) {
-			return true
-		}
-	}
-	return false
 }
 
 // handleKeepaliveNow triggers a manual refresh (all accounts, or one when the

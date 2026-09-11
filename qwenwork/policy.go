@@ -115,7 +115,7 @@ func isSoftRateLimit(status int, body string) bool {
 // lifecycleActionFor chooses disable/none from credits.
 // QwenWork is CN-only — disable (not delete) so check-in can restore credits
 // without forcing the user to re-import a PAT.
-func lifecycleActionFor(region string, cr *creditsSummary) lifecycleAction {
+func lifecycleActionFor(_ string, cr *creditsSummary) lifecycleAction {
 	if !shouldActOnCredits(cr) {
 		return lifecycleNone
 	}
@@ -138,7 +138,7 @@ func shouldReenableCN(disabled bool, cr *creditsSummary) bool {
 }
 
 // displayNote builds a one-line note for CPAMP Auth cards.
-func displayNote(sa *storedAuth, cr *creditsSummary, disabled bool) string {
+func displayNote(_ *storedAuth, cr *creditsSummary, disabled bool) string {
 	region := strings.ToUpper("cn")
 	if region == "CN" {
 		region = "CN"

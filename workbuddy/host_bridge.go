@@ -155,10 +155,6 @@ func hostHTTPDoWithCallback(req *http.Request, callbackID string) (*hostHTTPResp
 	return hostHTTPDoWithStateAndCallback(currentProxyState(), req, callbackID)
 }
 
-func hostHTTPDoWithState(state *proxyRoutingState, req *http.Request) (*hostHTTPResponse, error) {
-	return hostHTTPDoWithStateAndCallback(state, req, "")
-}
-
 func hostHTTPDoWithStateAndCallback(state *proxyRoutingState, req *http.Request, callbackID string) (*hostHTTPResponse, error) {
 	if state.mode == proxyModeBlocked || state.mode == proxyModeExplicit && state.client == nil {
 		if req.Body != nil {
