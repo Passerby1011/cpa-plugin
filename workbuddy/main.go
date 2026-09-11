@@ -348,7 +348,7 @@ func wbRegistration() registration {
 		Metadata: pluginapi.Metadata{
 			Name:             displayName,
 			Version:          version,
-			Author:           "hex-ci (based on WorkBuddy by lovingfish)",
+			Author:           "Hex",
 			GitHubRepository: "https://github.com/hex-ci/cpa-plugin",
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
