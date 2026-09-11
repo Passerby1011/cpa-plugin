@@ -160,7 +160,61 @@
         "OAuth",
         "QwenWork",
         "Management"
-      ]
+      ],
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qwenwork-v0.1.4/qwenwork_0.1.4_linux_amd64.zip",
+            "sha256": "c04ea21d7ecce93e06a451176359262e3508fe2c83770cebde1a7328c2d43e05",
+            "size": 3196878
+          },
+          {
+            "goos": "linux",
+            "goarch": "arm64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qwenwork-v0.1.4/qwenwork_0.1.4_linux_arm64.zip",
+            "sha256": "b7ce57821d70ad29183ad339c1c7fa612c750466127b06efbcead4943f800cbd",
+            "size": 2901368
+          },
+          {
+            "goos": "darwin",
+            "goarch": "amd64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qwenwork-v0.1.4/qwenwork_0.1.4_darwin_amd64.zip",
+            "sha256": "a9063c16043388814d3ad71dbea60b53530da445cd6df5cc68464679434eba34",
+            "size": 3045699
+          },
+          {
+            "goos": "darwin",
+            "goarch": "arm64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qwenwork-v0.1.4/qwenwork_0.1.4_darwin_arm64.zip",
+            "sha256": "ff4d1e318a3c18f30b2ed1955be90765899064a8598967e9f4d4eee620a9b5b7",
+            "size": 2809276
+          },
+          {
+            "goos": "windows",
+            "goarch": "amd64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qwenwork-v0.1.4/qwenwork_0.1.4_windows_amd64.zip",
+            "sha256": "efe538e21afab1f4ca306f8a5706677da2a9f902ebffc783d08e359d4a3c76a3",
+            "size": 3127727
+          },
+          {
+            "goos": "windows",
+            "goarch": "arm64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qwenwork-v0.1.4/qwenwork_0.1.4_windows_arm64.zip",
+            "sha256": "67257d7062e957c6c9ee0590df2d9ad2561a6c563dcdae18f8ca5f8af6d1dff2",
+            "size": 2877105
+          },
+          {
+            "goos": "freebsd",
+            "goarch": "amd64",
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qwenwork-v0.1.4/qwenwork_0.1.4_freebsd_amd64.zip",
+            "sha256": "9598f6a8ce11d0f7ce442d7ddc2bfa782c276f0578510d3b83189d607928e0da",
+            "size": 3116341
+          }
+        ]
+      }
     }
   ]
 }
