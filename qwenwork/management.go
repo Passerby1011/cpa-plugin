@@ -16,7 +16,7 @@ import (
 )
 
 // billingBase hosts the check-in and resource-package APIs. It is a var (not
-// const) so tests can override it with an httptest server. qwenwork serves
+// const) so tests can override it with an httptest server. QwenWork serves
 // billing off the same gateway as inference.
 var billingBase = "https://gateway.qwenwork.cn"
 

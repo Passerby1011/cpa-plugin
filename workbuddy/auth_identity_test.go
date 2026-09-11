@@ -107,7 +107,7 @@ func TestHandleParseAuth_UnhandledForNonWorkbuddy(t *testing.T) {
 	}
 	resp := decodeParseAuth(t, out)
 	if resp.Handled {
-		t.Fatal("non-workbuddy must not be handled")
+		t.Fatal("non-WorkBuddy must not be handled")
 	}
 }
 

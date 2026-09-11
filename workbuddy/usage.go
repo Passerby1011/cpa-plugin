@@ -27,7 +27,7 @@ func handleUsage(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &record); err != nil {
 		return nil, err
 	}
-	// Only forward workbuddy's own records; the host will route other plugins'
+	// Only forward WorkBuddy's own records; the host will route other plugins'
 	// usage to their own UsagePlugin.
 	if record.Provider != "" && record.Provider != providerName {
 		return okEnvelope(map[string]any{"forwarded": false})

@@ -1,4 +1,4 @@
-// keepalive.go implements proactive daily token refresh for workbuddy auths.
+// keepalive.go implements proactive daily token refresh for WorkBuddy auths.
 //
 // Motivation: upstream (codebuddy.cn / workbuddy.ai) periodically kills
 // Keycloak offline sessions; once that happens the stored refresh token is
@@ -10,7 +10,7 @@
 // Design:
 //   - Runs on the existing schedulerLoop at 22:00 local (keepaliveHours is
 //     separate from checkinHours so the two cadences can evolve independently).
-//   - Iterates all workbuddy auths via host.auth.list/get, calls
+//   - Iterates all WorkBuddy auths via host.auth.list/get, calls
 //     {realm-base}/v2/plugin/auth/token/refresh with X-Refresh-Token via
 //     the host HTTP bridge (host.http.do).
 //   - On success the auth file is persisted via host.auth.save (host watcher
@@ -99,7 +99,7 @@ func refreshCallWithCallback(sa *storedAuth, callbackID string) (json.RawMessage
 	return env.Data, raw, resp.StatusCode, nil
 }
 
-// refreshOneAuth refreshes the access token for a single workbuddy auth and
+// refreshOneAuth refreshes the access token for a single WorkBuddy auth and
 // persists the result. Returns a short status string for logging/tests.
 func refreshOneAuth(authIndex, authID string) (string, error) {
 	return refreshOneAuthWithCallback(authIndex, authID, "")
@@ -243,7 +243,7 @@ func getLastKeepalive() *keepaliveSummary {
 	return lastKeepalive
 }
 
-// runTokenKeepalive refreshes every workbuddy auth once. Returns the summary.
+// runTokenKeepalive refreshes every WorkBuddy auth once. Returns the summary.
 func runTokenKeepalive() *keepaliveSummary {
 	return runTokenKeepaliveWithCallback("")
 }

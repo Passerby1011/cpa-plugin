@@ -11,8 +11,8 @@
 | Category | Count |
 |---|---|
 | Dead code (defined, never called) | 13 |
-| Workbuddy/CodeBuddy remnants in comments | 9 |
-| Functions copied from workbuddy that don't apply to CN-only | 5 |
+| WorkBuddy/CodeBuddy remnants in comments | 9 |
+| Functions copied from WorkBuddy that don't apply to CN-only | 5 |
 | Files partially unnecessary | 4 (no file is *entirely* dead) |
 | Inefficient patterns | 8 |
 | Stale `if false {}` dead blocks | 4 |
@@ -33,7 +33,7 @@ type accountData struct {
 }
 ```
 
-**Why dead:** Defined but never instantiated, returned, or referenced anywhere. `userInfoResponse` (oauth.go:144) and `storedAccount` (main.go:460) cover the same fields. Likely a workbuddy leftover where a generic account type was used for OAuth state parsing. QoderWork's OAuth-like flow never returns this shape (it uses `userInfoResponse` directly).
+**Why dead:** Defined but never instantiated, returned, or referenced anywhere. `userInfoResponse` (oauth.go:144) and `storedAccount` (main.go:460) cover the same fields. Likely a WorkBuddy leftover where a generic account type was used for OAuth state parsing. QoderWork's OAuth-like flow never returns this shape (it uses `userInfoResponse` directly).
 
 **Action: Delete.**
 
@@ -60,7 +60,7 @@ type authStateData struct {
 func upstreamBaseFor(sa *storedAuth) string { return upstreamBaseCN }
 ```
 
-**Why dead:** Never called. The constant `upstreamBaseCN` is used directly at every call site (billing.go:121, 251, 293, 314; oauth.go:109, 126). The comment on line 536-538 admits it exists "to minimise diff against the workbuddy skeleton" — workbuddy had CN+Global realm selection. QoderWork is CN-only, so this dispatcher is vestigial.
+**Why dead:** Never called. The constant `upstreamBaseCN` is used directly at every call site (billing.go:121, 251, 293, 314; oauth.go:109, 126). The comment on line 536-538 admits it exists "to minimise diff against the WorkBuddy skeleton" — WorkBuddy had CN+Global realm selection. QoderWork is CN-only, so this dispatcher is vestigial.
 
 **Action: Delete.**
 
@@ -74,7 +74,7 @@ func backendHeaders(req *http.Request, sa *storedAuth) {
 }
 ```
 
-**Why dead:** Never called. The comment on lines 541-547 says it's kept "for parity with the workbuddy skeleton" but "the actual signing happens in `applyCosyHeaders`." Every executor path calls `applyCosyHeaders` directly (main.go:679, 787; stream.go:156). This is a no-op wrapper that does nothing but call `commonHeaders` — which is also called inside `applyCosyHeaders` indirectly.
+**Why dead:** Never called. The comment on lines 541-547 says it's kept "for parity with the WorkBuddy skeleton" but "the actual signing happens in `applyCosyHeaders`." Every executor path calls `applyCosyHeaders` directly (main.go:679, 787; stream.go:156). This is a no-op wrapper that does nothing but call `commonHeaders` — which is also called inside `applyCosyHeaders` indirectly.
 
 **Action: Delete.**
 
@@ -91,7 +91,7 @@ var billingRetryDelays = []time.Duration{300 * time.Millisecond, 900 * time.Mill
 
 **Why dead:** `billingCall` is never called. `billingCallOnce` is only called by `billingCall`. `isTransientBillingErr` is only called by `billingCall`. `billingRetryDelays` is only read by `billingCall`. All actual billing API calls (`fetchCheckinStatus`, `fetchUserResource`, `fetchPaymentType`, `performCheckinCall`) use `hostHTTPDo(req)` directly — they bypass the `billingCall` abstraction entirely.
 
-This is a workbuddy inheritance: workbuddy had a generic billing RPC layer. QoderWork's API calls are direct `http.NewRequest` → `hostHTTPDo`, so this entire retry-envelope layer is orphaned.
+This is a WorkBuddy inheritance: WorkBuddy had a generic billing RPC layer. QoderWork's API calls are direct `http.NewRequest` → `hostHTTPDo`, so this entire retry-envelope layer is orphaned.
 
 **Action: Delete all four (`billingCall`, `billingCallOnce`, `isTransientBillingErr`, `billingRetryDelays`).**
 
@@ -117,7 +117,7 @@ func billingBaseFor(sa *storedAuth) string {
 }
 ```
 
-**Why dead:** Only called by `billingCallOnce` (billing.go:64), which is itself dead (see 1.5). All live call sites use `upstreamBaseCN` constant directly. This is a workbuddy remnant where the base URL varied by realm.
+**Why dead:** Only called by `billingCallOnce` (billing.go:64), which is itself dead (see 1.5). All live call sites use `upstreamBaseCN` constant directly. This is a WorkBuddy remnant where the base URL varied by realm.
 
 **Action: Delete (along with `billingCall` cluster).**
 
@@ -153,7 +153,7 @@ func aggregateSSEWithCollector(r io.Reader, sseFramed bool, collector *sseUsageC
 func cachedCheckinToday(authID string) *bool
 ```
 
-**Why dead:** Never called. The scheduler and checkin paths check `ci.TodayCheckedIn` directly on the `checkinSummary` returned by `fetchCheckinStatus` (checkin.go:137, 288). This helper was likely from workbuddy's three-phase classify flow where cached state was consulted before hitting the API.
+**Why dead:** Never called. The scheduler and checkin paths check `ci.TodayCheckedIn` directly on the `checkinSummary` returned by `fetchCheckinStatus` (checkin.go:137, 288). This helper was likely from WorkBuddy's three-phase classify flow where cached state was consulted before hitting the API.
 
 **Action: Delete.**
 
@@ -214,22 +214,22 @@ type resourcePackage struct { ... }  // management.go:79
 func packageRemainUsed(a resourcePackage) (remain, used, size int64)  // billing.go:165
 ```
 
-**Why dead:** `packageRemainUsed` is never called. `resourcePackage` is only used as the parameter type for `packageRemainUsed`. These are workbuddy remnants — workbuddy had a `/v2/billing/meter/get-user-resource` endpoint that returned a list of `resourcePackage` objects. QoderWork uses `/api/v2/quota/usage` which returns `quotaUsageResponse` (billing.go:227) with `userQuota`/`addOnQuota` — a different shape that doesn't use `resourcePackage` at all.
+**Why dead:** `packageRemainUsed` is never called. `resourcePackage` is only used as the parameter type for `packageRemainUsed`. These are WorkBuddy remnants — WorkBuddy had a `/v2/billing/meter/get-user-resource` endpoint that returned a list of `resourcePackage` objects. QoderWork uses `/api/v2/quota/usage` which returns `quotaUsageResponse` (billing.go:227) with `userQuota`/`addOnQuota` — a different shape that doesn't use `resourcePackage` at all.
 
 **Action: Delete both.**
 
 ---
 
-## 2. Workbuddy/CodeBuddy Remnants in Comments & Strings
+## 2. WorkBuddy/CodeBuddy Remnants in Comments & Strings
 
 ### 2.1 C ABI wrapper function names — **main.go:47, 50, 223, 229**
 
 ```c
-static int wb_call_host(...)        // line 47 — "wb" = workbuddy
+static int wb_call_host(...)        // line 47 — "wb" = WorkBuddy
 static void wb_free_host_buffer(...) // line 50
 ```
 
-**What:** The C wrapper functions are named `wb_call_host` / `wb_free_host_buffer` (wb = workbuddy). Called at main.go:223, 229.
+**What:** The C wrapper functions are named `wb_call_host` / `wb_free_host_buffer` (wb = WorkBuddy). Called at main.go:223, 229.
 
 **Action: Keep** (these are C ABI symbols that must match the C struct; renaming is cosmetic but the `wb` prefix is a naming remnant. Safe to rename to `qw_call_host` for clarity but not functionally required.)
 
@@ -239,7 +239,7 @@ static void wb_free_host_buffer(...) // line 50
 func wbRegistration() registration
 ```
 
-**What:** Function name uses `wb` (workbuddy) prefix. Called at main.go:243.
+**What:** Function name uses `wb` (WorkBuddy) prefix. Called at main.go:243.
 
 **Action: Rename to `qwRegistration()` or `pluginRegistration()`** for consistency with `providerName = "qoderwork"`.
 
@@ -263,26 +263,26 @@ type wbAccount struct { ... }
 
 **Action: Rename to `qwAccount` or `dashboardAccount`.**
 
-### 2.5 Comment: "workbuddy skeleton" — **main.go:538, 545**
+### 2.5 Comment: "WorkBuddy skeleton" — **main.go:538, 545**
 
 ```go
-// the workbuddy skeleton (clean-room reference) (callers pass sa but it's ignored).
-// We keep the function signature (req, sa) for parity with the workbuddy
+// the WorkBuddy skeleton (clean-room reference) (callers pass sa but it's ignored).
+// We keep the function signature (req, sa) for parity with the WorkBuddy
 ```
 
 **What:** These comments are on `upstreamBaseFor` and `backendHeaders`, both of which are dead code (see 1.3, 1.4). Once those functions are deleted, these comments go too.
 
 **Action: Delete (with the dead functions).**
 
-### 2.6 Comment: "workbuddy helper" — **oauth.go:371**
+### 2.6 Comment: "WorkBuddy helper" — **oauth.go:371**
 
 ```go
-// toAuthDataForRefresh mirrors the workbuddy helper: blank out FileName and
+// toAuthDataForRefresh mirrors the WorkBuddy helper: blank out FileName and
 ```
 
-**What:** Comment references workbuddy. The function itself is live (called at oauth.go:358).
+**What:** Comment references WorkBuddy. The function itself is live (called at oauth.go:358).
 
-**Action: Simplify comment** — remove "workbuddy" reference, just explain what it does.
+**Action: Simplify comment** — remove "WorkBuddy" reference, just explain what it does.
 
 ### 2.7 Comment: "workbuddy-*.json auths" — **host_auth.go:49**
 
@@ -290,19 +290,19 @@ type wbAccount struct { ... }
 // workbuddy- prefix but no type field. Filename prefix is the only
 ```
 
-**What:** Comment mentions workbuddy auth files. This is in the context of explaining why filename-prefix filtering is used (to avoid accidentally matching workbuddy auth files). The concern is valid but the reference is stale.
+**What:** Comment mentions WorkBuddy auth files. This is in the context of explaining why filename-prefix filtering is used (to avoid accidentally matching WorkBuddy auth files). The concern is valid but the reference is stale.
 
-**Action: Simplify** — reword to "other plugins' auth files" instead of naming workbuddy.
+**Action: Simplify** — reword to "other plugins' auth files" instead of naming WorkBuddy.
 
-### 2.8 Comment: "workbuddy three-phase" — **checkin.go:186**
+### 2.8 Comment: "WorkBuddy three-phase" — **checkin.go:186**
 
 ```go
-// accounts. Unlike the workbuddy three-phase classify/execute/summarize flow,
+// accounts. Unlike the WorkBuddy three-phase classify/execute/summarize flow,
 ```
 
-**What:** Comment contrasts QoderWork's approach with workbuddy's. The comparison is informative but the named competitor is stale.
+**What:** Comment contrasts QoderWork's approach with WorkBuddy's. The comparison is informative but the named competitor is stale.
 
-**Action: Simplify** — remove the workbuddy reference, just describe QoderWork's approach.
+**Action: Simplify** — remove the WorkBuddy reference, just describe QoderWork's approach.
 
 ### 2.9 Comment: "Buddy-gas-station" — **management.go:18**
 
@@ -340,7 +340,7 @@ if(res.reason=="global"||(/国际版|不支持/.test(String(res.message||"")))){
 
 ---
 
-## 3. Functions Copied from Workbuddy That Don't Apply to CN-Only
+## 3. Functions Copied from WorkBuddy That Don't Apply to CN-Only
 
 ### 3.1 Region branching in `summarizeCredits()` — **panel.go:196-249**
 
@@ -378,7 +378,7 @@ func displayNote(sa *storedAuth, cr *creditsSummary, disabled bool) string {
     }
 ```
 
-**What:** Both branches set `region = "CN"`. This is a no-op if/else that was probably a realm switch in workbuddy (CN vs Global). The `strings.ToUpper("cn")` is also pointless.
+**What:** Both branches set `region = "CN"`. This is a no-op if/else that was probably a realm switch in WorkBuddy (CN vs Global). The `strings.ToUpper("cn")` is also pointless.
 
 **Action: Simplify** to `region := "CN"`.
 
@@ -395,7 +395,7 @@ func labelForAuth(sa *storedAuth) string {
 }
 ```
 
-**What:** `if "cn" == "global"` is always false — this is dead code that was a realm check in workbuddy.
+**What:** `if "cn" == "global"` is always false — this is dead code that was a realm check in WorkBuddy.
 
 **Action: Simplify** — remove the dead if, just `tag := "CN"`.
 
@@ -415,7 +415,7 @@ func lifecycleActionFor(region string, cr *creditsSummary) lifecycleAction {
 
 **What:** Since QoderWork is CN-only, `region` is always `"cn"` (hardcoded at lifecycle.go:319). The `return lifecycleDisable` branch is dead. Furthermore, the `deleteAuth` path for CN means exhausted CN accounts get their auth file **deleted** — but per KNOWLEDGE.md, QoderWork accounts are PAT-based and long-lived. Deleting an auth file means the user must re-import the PAT. This seems aggressive for a CN-only architecture where `disableAuth` would be safer.
 
-**Action: Review** — consider whether CN should also use `lifecycleDisable` instead of `lifecycleDelete`. At minimum, remove the dead `lifecycleDisable` return since region is always "cn". Actually, the CN-delete vs CN-disable distinction may have been inherited from workbuddy where CN had trial packs (one-shot, delete on exhaust) vs Global (monthly, disable). QoderWork has no trial packs per KNOWLEDGE.md, so **delete-on-exhaust may be wrong** — disable would let the user re-checkin and restore credits without re-importing PAT.
+**Action: Review** — consider whether CN should also use `lifecycleDisable` instead of `lifecycleDelete`. At minimum, remove the dead `lifecycleDisable` return since region is always "cn". Actually, the CN-delete vs CN-disable distinction may have been inherited from WorkBuddy where CN had trial packs (one-shot, delete on exhaust) vs Global (monthly, disable). QoderWork has no trial packs per KNOWLEDGE.md, so **delete-on-exhaust may be wrong** — disable would let the user re-checkin and restore credits without re-importing PAT.
 
 ### 3.5 `checkin.go` line 4 — stale CN exclusion comment
 
@@ -423,7 +423,7 @@ func lifecycleActionFor(region string, cr *creditsSummary) lifecycleAction {
 // tabs. CN accounts are excluded — they use one-shot trial claims instead.
 ```
 
-**What:** This comment is at the top of checkin.go. It says "CN accounts are excluded" from check-in, but the actual code (checkin.go:136) **does** perform CN daily check-in. The comment is a workbuddy remnant where CN (trial) and Global (check-in) had different flows. QoderWork CN uses daily check-in.
+**What:** This comment is at the top of checkin.go. It says "CN accounts are excluded" from check-in, but the actual code (checkin.go:136) **does** perform CN daily check-in. The comment is a WorkBuddy remnant where CN (trial) and Global (check-in) had different flows. QoderWork CN uses daily check-in.
 
 **Action: Delete or rewrite** the comment.
 
@@ -438,7 +438,7 @@ if false {
 }
 ```
 
-**What:** The `if false {}` block (lines 119-134) is dead code that will never execute. It's a workbuddy remnant where CN accounts skipped check-in and only did lifecycle. In QoderWork, CN accounts **do** check in (the code after the `if false` block, lines 136+). The `if false` block should be removed entirely.
+**What:** The `if false {}` block (lines 119-134) is dead code that will never execute. It's a WorkBuddy remnant where CN accounts skipped check-in and only did lifecycle. In QoderWork, CN accounts **do** check in (the code after the `if false` block, lines 136+). The `if false` block should be removed entirely.
 
 **Action: Delete** the `if false { ... }` block (lines 119-134).
 
@@ -494,7 +494,7 @@ type loginCtx struct {
 loginStates.Store(state, &loginCtx{client: nil, expires: now.Add(loginTTL), startedAt: now.UnixNano()})
 ```
 
-**What:** The `loginCtx` struct has a `client *http.Client` field that is always set to `nil` in QoderWork (oauth.go:232). In workbuddy, this held a cookie-jar-affined HTTP client for the OAuth flow. QoderWork's "OAuth" is just "paste a PAT" — no cookie jar needed.
+**What:** The `loginCtx` struct has a `client *http.Client` field that is always set to `nil` in QoderWork (oauth.go:232). In WorkBuddy, this held a cookie-jar-affined HTTP client for the OAuth flow. QoderWork's "OAuth" is just "paste a PAT" — no cookie jar needed.
 
 **Action: Simplify** — remove the `client` field from `loginCtx`. The struct becomes just `{expires, startedAt}`.
 
@@ -567,12 +567,12 @@ data, status, err := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointJobT
 ### 5.8 `keepalive.go` header comment references wrong endpoint — **keepalive.go:11-13**
 
 ```go
-//   - Iterates all qoderwork auths via host.auth.list/get, calls
+//   - Iterates all QoderWork auths via host.auth.list/get, calls
 //     {realm-base}/v2/plugin/auth/token/refresh with X-Refresh-Token via
 //     the host HTTP bridge (host.http.do).
 ```
 
-**What:** The comment says `/v2/plugin/auth/token/refresh` with `X-Refresh-Token` header — this is workbuddy's refresh endpoint. QoderWork uses `/api/v1/jobToken/refresh` with a JSON body `{refresh_token: "jrt-..."}` (as the code at line 79 correctly implements). The comment is wrong.
+**What:** The comment says `/v2/plugin/auth/token/refresh` with `X-Refresh-Token` header — this is WorkBuddy's refresh endpoint. QoderWork uses `/api/v1/jobToken/refresh` with a JSON body `{refresh_token: "jrt-..."}` (as the code at line 79 correctly implements). The comment is wrong.
 
 **Action: Rewrite** the header comment to match the actual implementation.
 
@@ -580,7 +580,7 @@ data, status, err := doRawJSON(sharedHTTPClient(), http.MethodPost, endpointJobT
 
 ## 6. `if false {}` Dead Blocks
 
-Four `if false {}` blocks exist — all are workbuddy remnants where the condition was originally a realm check (e.g., `if region == "cn" && trialClaimed`):
+Four `if false {}` blocks exist — all are WorkBuddy remnants where the condition was originally a realm check (e.g., `if region == "cn" && trialClaimed`):
 
 | File | Line | Content |
 |---|---|---|
@@ -613,15 +613,15 @@ Four `if false {}` blocks exist — all are workbuddy remnants where the conditi
 15. All four `if false {}` blocks (checkin.go:119, panel.go:104, panel.go:117, credits_handler.go:170)
 16. Orphan comment `hostAuthGetFull` (authfile.go:298)
 
-### Medium Priority (workbuddy remnants — rename/rewrite)
+### Medium Priority (WorkBuddy remnants — rename/rewrite)
 17. Rename `wb_call_host` → `qw_call_host` (main.go:47, 50, 223, 229)
 18. Rename `wbRegistration()` → `pluginRegistration()` (main.go:335)
 19. Rename `wbModels()` → `staticModels()` or `qwStaticModels()` (models.go:22)
 20. Rename `wbAccount` → `dashboardAccount` (panel.go:15)
-21. Rewrite "workbuddy skeleton" comments (main.go:538, 545)
-22. Rewrite "workbuddy helper" comment (oauth.go:371)
+21. Rewrite "WorkBuddy skeleton" comments (main.go:538, 545)
+22. Rewrite "WorkBuddy helper" comment (oauth.go:371)
 23. Rewrite "workbuddy-*.json" comment (host_auth.go:49)
-24. Rewrite "workbuddy three-phase" comment (checkin.go:186)
+24. Rewrite "WorkBuddy three-phase" comment (checkin.go:186)
 25. Rewrite "Buddy-gas-station" comment (management.go:18)
 26. Rewrite "codebuddy.cn" comment (management.go:67)
 27. Remove `loginCtx.client` field (main.go:108-112)

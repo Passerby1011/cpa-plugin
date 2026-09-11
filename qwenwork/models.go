@@ -15,7 +15,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-// wbModels is the static fallback model list for qwenwork. Keys are the
+// wbModels is the static fallback model list for QwenWork. Keys are the
 // upstream model keys (pro/flash/qwen3.8-max-preview, qwork scene). Dynamic
 // refresh via /algo/api/v2/model/list replaces this at runtime when an account
 // is present.
@@ -55,7 +55,7 @@ func fetchDynamicModels() []pluginapi.ModelInfo {
 	// Strict filename-prefix match — same filter as host_auth.go hostAuthList.
 	// (Earlier code also matched files containing "codebuddy" anywhere, which
 	// would wrongly include workbuddy-*.json auths here and cause us to call
-	// the qwenwork models API with a workbuddy token.)
+	// the QwenWork models API with a WorkBuddy token.)
 	prefix := providerName + "-"
 	for _, f := range files {
 		if !strings.HasPrefix(strings.ToLower(f.Name), prefix) {
@@ -95,8 +95,8 @@ func fetchDynamicModelsFromStorage(storageJSON []byte) []pluginapi.ModelInfo {
 
 // fetchDynamicModels calls the QwenWork API to get the latest model list.
 // Falls back to the hardcoded list on any error.
-// callModelsAPI GETs /algo/api/v2/model/list from the qwenwork gateway with
-// COSY signing (same as inference). qwenwork signs the raw body directly (no
+// callModelsAPI GETs /algo/api/v2/model/list from the QwenWork gateway with
+// COSY signing (same as inference). QwenWork signs the raw body directly (no
 // QoderEncoding); for a GET there is no body, so sign with an empty string.
 // Falls back to wbModels() on any error.
 func callModelsAPI(sa *storedAuth) ([]pluginapi.ModelInfo, error) {
@@ -121,7 +121,7 @@ func callModelsAPI(sa *storedAuth) ([]pluginapi.ModelInfo, error) {
 		return nil, fmt.Errorf("models API status %d", resp.StatusCode)
 	}
 	// Response is plain JSON: {"qwork":[...], "chat":[], "developer":[], ...}
-	// qwenwork reports its models under the "qwork" scene (the "chat" scene is
+	// QwenWork reports its models under the "qwork" scene (the "chat" scene is
 	// empty). See live /algo/api/v2/model/list (pro/flash/qwen3.8-max-preview).
 	var apiResp map[string]json.RawMessage
 	if err := json.Unmarshal(resp.Body, &apiResp); err != nil {
@@ -267,7 +267,7 @@ func parseModelAliasAttribute(attributes map[string]string) map[string]string {
 }
 
 // filterExcludedModels removes models listed in oauth-excluded-models for
-// the qwenwork provider. The host passes this config via HostConfigSummary.
+// the QwenWork provider. The host passes this config via HostConfigSummary.
 func filterExcludedModels(models []pluginapi.ModelInfo, host pluginapi.HostConfigSummary) []pluginapi.ModelInfo {
 	if len(host.ExcludedModels) == 0 {
 		return models

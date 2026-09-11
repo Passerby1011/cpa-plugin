@@ -29,7 +29,7 @@ func isWorkbuddyAuthListName(name string) bool {
 	return name == authFileName || strings.HasPrefix(name, providerName+"-")
 }
 
-// hostAuthList returns all workbuddy credentials known to the host.
+// hostAuthList returns all WorkBuddy credentials known to the host.
 func hostAuthList() ([]pluginapi.HostAuthFileEntry, error) {
 	raw, err := hostCall(pluginabi.MethodHostAuthList, nil)
 	if err != nil {

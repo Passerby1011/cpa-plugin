@@ -36,7 +36,7 @@ func TestBuildQwenBodyDesensitizesAllowedFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// system text lands in the top-level "system" field of the qwenwork body.
+	// system text lands in the top-level "system" field of the QwenWork body.
 	if got := body["system"]; got != "a"+zeroWidthSpace+"ttack" {
 		t.Errorf("system field = %q", got)
 	}

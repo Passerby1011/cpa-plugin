@@ -57,12 +57,12 @@ func TestSchedulerPick_NonWorkbuddy_Defers(t *testing.T) {
 	}
 	resp := parsePickResponse(t, raw)
 	if resp.Handled {
-		t.Fatal("non-workbuddy candidates should defer")
+		t.Fatal("non-WorkBuddy candidates should defer")
 	}
 }
 
 // TestSchedulerPick_OffMode_Defers covers the v0.6.31 fix: scheduler_mode=off
-// must make the plugin decline to handle routing, even for workbuddy candidates.
+// must make the plugin decline to handle routing, even for WorkBuddy candidates.
 func TestSchedulerPick_OffMode_Defers(t *testing.T) {
 	setActiveAuthID("")
 	restoreMode := setSchedulerMode(schedulerModeOff)

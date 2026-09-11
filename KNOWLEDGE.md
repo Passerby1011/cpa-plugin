@@ -392,7 +392,7 @@ qoder.com.cn/users/sign-in
 | `/tmp/cpa-plugin/qoderwork/body.go` | Go body 模板构造 |
 | `/tmp/qw_extract/` | 桌面客户端解压（1.5G，参考） |
 
-**注意：** `/tmp/cpa-plugin/qoderwork/` 只保留**已验证的库代码**（sign/encoding/body）。之前写的 main.go/auth.go/executor.go 已删——直接抄 workbuddy 的 RPC 层结构再改更安全，那次部署出错是 RPC 层返回空 `stream_id` 导致 scheduler 死循环。
+**注意：** `/tmp/cpa-plugin/qoderwork/` 只保留**已验证的库代码**（sign/encoding/body）。之前写的 main.go/auth.go/executor.go 已删——直接抄 WorkBuddy 的 RPC 层结构再改更安全，那次部署出错是 RPC 层返回空 `stream_id` 导致 scheduler 死循环。
 
 ### 10.2 开源参考
 
@@ -442,24 +442,24 @@ data:{"body":"{\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"role\":\"as
 
 ## 12. 下一步（写 CPA 插件时）
 
-**教训（2026-07-26）：** 第一次部署失败——我自己写的 main.go RPC 层 `stream_id` 返回空导致 scheduler 死循环报错。**不要从零写 RPC 层**，直接**抄 workbuddy 的 main.go 整个文件**，然后只替换以下内容：
+**教训（2026-07-26）：** 第一次部署失败——我自己写的 main.go RPC 层 `stream_id` 返回空导致 scheduler 死循环报错。**不要从零写 RPC 层**，直接**抄 WorkBuddy 的 main.go 整个文件**，然后只替换以下内容：
 
 按这个顺序：
 
-1. **Loop 1 骨架**：**完整复制 workbuddy main.go** → 改 providerName/logo/models → 删 CodeBuddy 特有逻辑（OAuth flow、CN/Global 切换）
-2. **Loop 2 auth**：**保留 workbuddy auth.go 骨架**（storedAuth、authStorage、handleParseAuth 等），把 OAuth token exchange 换成 PAT → jobToken
-3. **Loop 3 sign**：把 workbuddy 里所有 `backendHeaders()` 换成 qoderwork 的 COSY 签名（参考 `/tmp/cpa-plugin/qoderwork/sign.go`）
-4. **Loop 4 executor**：**保留 workbuddy executor.go 骨架**（streamEmit/pumpUpstreamStream/aggregateCompletion），把 CodeBuddy SSE 格式换成 qoderwork 的 `data:{"body":"..."}` 嵌套格式
-5. **Loop 5 checkin/credits**：抄 workbuddy 的 CN 签到逻辑，端点换成 qoderwork 的 `/sash/api/v1/me/daily-check-in/*`
-6. **Loop 6 scheduler/lifecycle**：**完全照抄 workbuddy**，不改
-7. **Loop 7 management/panel**：**完全照抄 workbuddy**，路由换 qoderwork 端点
+1. **Loop 1 骨架**：**完整复制 WorkBuddy main.go** → 改 providerName/logo/models → 删 CodeBuddy 特有逻辑（OAuth flow、CN/Global 切换）
+2. **Loop 2 auth**：**保留 WorkBuddy auth.go 骨架**（storedAuth、authStorage、handleParseAuth 等），把 OAuth token exchange 换成 PAT → jobToken
+3. **Loop 3 sign**：把 WorkBuddy 里所有 `backendHeaders()` 换成 QoderWork 的 COSY 签名（参考 `/tmp/cpa-plugin/qoderwork/sign.go`）
+4. **Loop 4 executor**：**保留 WorkBuddy executor.go 骨架**（streamEmit/pumpUpstreamStream/aggregateCompletion），把 CodeBuddy SSE 格式换成 QoderWork 的 `data:{"body":"..."}` 嵌套格式
+5. **Loop 5 checkin/credits**：抄 WorkBuddy 的 CN 签到逻辑，端点换成 QoderWork 的 `/sash/api/v1/me/daily-check-in/*`
+6. **Loop 6 scheduler/lifecycle**：**完全照抄 WorkBuddy**，不改
+7. **Loop 7 management/panel**：**完全照抄 WorkBuddy**，路由换 QoderWork 端点
 
 **关键参考代码（已验证，直接可用）：**
 - COSY 签名：`/tmp/cpa-plugin/qoderwork/sign.go`
 - QoderEncoding：`/tmp/cpa-plugin/qoderwork/encoding.go`
 - Body 模板构造：`/tmp/cpa-plugin/qoderwork/body.go`
 - Python 参考：`/tmp/qw_web/qoder_chat_test.py`
-- workbuddy 完整骨架：`/tmp/cpa-plugin/workbuddy-ref/`
+- WorkBuddy 完整骨架：`/tmp/cpa-plugin/workbuddy-ref/`
 
 ---
 

@@ -238,7 +238,7 @@ func parseDisabledFromAuthJSON(raw []byte) bool {
 	return m.Disabled
 }
 
-// isSafeWorkbuddyAuthPath rejects non-workbuddy filenames, empty paths, and
+// isSafeWorkbuddyAuthPath rejects non-WorkBuddy filenames, empty paths, and
 // traversal attempts. It validates both the basename pattern AND that the path
 // does not escape via ".." segments. Callers that need to confine deletes to
 // a specific directory should additionally check isPathUnder(path, dir).
@@ -288,7 +288,7 @@ func isPathUnder(path, dir string) bool {
 	return rel != "." && !strings.HasPrefix(rel, "..") && !strings.Contains(rel, string(filepath.Separator)+"..")
 }
 
-// deleteAuthFileAt removes a workbuddy auth file. Missing file is success.
+// deleteAuthFileAt removes a WorkBuddy auth file. Missing file is success.
 // Deprecated: use deleteAuthFileInDir instead (adds directory + absolute path
 // confinement). Retained for test coverage of the base safe-delete path.
 

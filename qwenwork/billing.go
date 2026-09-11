@@ -1,11 +1,11 @@
 // billing.go owns the upstream billing surface: account context (user + plan +
-// credits). qwenwork reports credits for BOTH enterprise and personal accounts
+// credits). QwenWork reports credits for BOTH enterprise and personal accounts
 // through /api/v1/adapter/user/account-context?include=user,plan,quota — the
 // older /api/v2/quota/usage returns null quota for personal (free) accounts,
 // which is why free-account credits looked "empty". account-context gives every
 // account a quota.remaining (and total/used for enterprise, null totals for free).
 //
-// qwenwork has NO daily check-in (both enterprise and personal accounts return
+// QwenWork has NO daily check-in (both enterprise and personal accounts return
 // 404 on /sash/api/v1/me/daily-check-in/*), so check-in code stays removed.
 package main
 
@@ -19,7 +19,7 @@ import (
 )
 
 func billingHeaders(req *http.Request, sa *storedAuth) {
-	// qwenwork account-context authenticates with the device token as a plain
+	// QwenWork account-context authenticates with the device token as a plain
 	// Bearer. No COSY signing (this is an /api/v1 route).
 	req.Header.Set("Authorization", "Bearer "+sa.Auth.AccessToken)
 	req.Header.Set("Accept", "application/json")

@@ -160,22 +160,22 @@ Header: Authorization: Bearer {jt}
 
 | 模块 | 文件 | 功能 |
 |---|---|---|
-| main.go | C ABI + handleMethod dispatch | 照抄 workbuddy |
+| main.go | C ABI + handleMethod dispatch | 照抄 WorkBuddy |
 | auth.go | PAT parse + jobToken exchange/refresh + storage | 新方法 |
 | sign.go | COSY 签名 | 新 |
 | encoding.go | QoderEncoding | 新 |
 | body.go | baseprompt 模板构造 | 新 |
-| executor.go | execute + execute_stream (SSE 解析 + OpenAI 转换) | 参考 workbuddy |
+| executor.go | execute + execute_stream (SSE 解析 + OpenAI 转换) | 参考 WorkBuddy |
 | credits.go | quota/usage 查询 | 新 |
-| checkin.go | 签到 | 参考 workbuddy CN 签到 |
-| scheduler.go | 按 remaining 选账号 | 照抄 workbuddy |
-| lifecycle.go | 耗尽 disable | 照抄 workbuddy |
-| management.go | /checkin /credits /invitation 路由 | 参考 workbuddy |
-| panel.html | 管理面板 | 参考 workbuddy |
+| checkin.go | 签到 | 参考 WorkBuddy CN 签到 |
+| scheduler.go | 按 remaining 选账号 | 照抄 WorkBuddy |
+| lifecycle.go | 耗尽 disable | 照抄 WorkBuddy |
+| management.go | /checkin /credits /invitation 路由 | 参考 WorkBuddy |
+| panel.html | 管理面板 | 参考 WorkBuddy |
 
-### 2.2 Auth 流程（与 workbuddy 不同）
+### 2.2 Auth 流程（与 WorkBuddy 不同）
 
-workbuddy 是 OAuth device flow；qoderwork 是 **PAT 手动粘贴**：
+WorkBuddy 是 OAuth device flow；QoderWork 是 **PAT 手动粘贴**：
 
 - `auth.login_start` → 返回 `manual_instructions`：
   ```
@@ -246,7 +246,7 @@ go test ./... # 单元测试全过
 
 ## 4. 参考代码
 
-- **workbuddy 骨架：** `/root/qoderwork/workbuddy/`（抄 main.go 的 C ABI + handleMethod + envelope + hostCall + streamEmit + publishUsage + scheduler.go + lifecycle.go + management.go 结构）
+- **WorkBuddy 骨架：** `/root/qoderwork/workbuddy/`（抄 main.go 的 C ABI + handleMethod + envelope + hostCall + streamEmit + publishUsage + scheduler.go + lifecycle.go + management.go 结构）
 - **Python 签名参考（已验证）：** `/tmp/qw_web/qoder_chat_test.py`
 - **Java 签名参考：** 可 `curl https://raw.githubusercontent.com/cubk1/qoder2api/master/src/main/java/us/cubk/BearerBuilder.java`
 - **body 模板：** 从 `https://raw.githubusercontent.com/cubk1/qoder2api/master/baseprompt.json` 下载后清理占位符，存为 `qoderwork/baseprompt.json`（embed 进 Go）

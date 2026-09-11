@@ -1,4 +1,4 @@
-// cosy_session.go manages per-auth cosySession instances. Each qwenwork
+// cosy_session.go manages per-auth cosySession instances. Each QwenWork
 // account gets one session (RSA-wrapped AES key + identity) reused across
 // requests until the token is refreshed (which changes security_oauth_token
 // and forces a session rebuild).

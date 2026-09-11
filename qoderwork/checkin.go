@@ -168,8 +168,8 @@ func processAutoCheckinAccount(f pluginapi.HostAuthFileEntry, doCheckin bool) {
 	}
 }
 
-// handleManualCheckin checks in one account (auth_index) or all qoderwork
-// accounts. Unlike the workbuddy three-phase classify/execute/summarize flow,
+// handleManualCheckin checks in one account (auth_index) or all QoderWork
+// accounts. Unlike the WorkBuddy three-phase classify/execute/summarize flow,
 // QoderWork's checkin is a simple Bearer GET+POST — we run it directly per
 // account under an 8s timeout, no classify stage.
 func handleManualCheckin(req pluginapi.ManagementRequest) map[string]any {

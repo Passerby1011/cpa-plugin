@@ -1,13 +1,13 @@
-// Package main implements the workbuddy CLIProxyAPI dynamic plugin.
+// Package main implements the WorkBuddy CLIProxyAPI dynamic plugin.
 //
-// workbuddy wraps Tencent CodeBuddy (copilot.tencent.com) as a cliproxy
+// WorkBuddy wraps Tencent CodeBuddy (copilot.tencent.com) as a cliproxy
 // provider: it performs the CodeBuddy web login flow, refreshes access
 // tokens, and forwards OpenAI-compatible chat completion requests to the
 // upstream /v2/chat/completions endpoint.
 //
 // This file is a clean-room reimplementation reconstructed from the public
 // workbuddy.so binary (symbol table, string constants and RPC shape) published
-// by Sliverkiss. Original credit for the workbuddy plugin goes to Sliverkiss;
+// by Sliverkiss. Original credit for the WorkBuddy plugin goes to Sliverkiss;
 // see https://github.com/Sliverkiss/cpa-plugin. Built with -buildmode=c-shared
 // and exports the cliproxy C ABI entry points.
 package main
@@ -78,7 +78,10 @@ import (
 )
 
 const (
-	providerName  = "workbuddy"
+	providerName = "workbuddy"
+	// displayName is the human-readable plugin title shown by management clients;
+	// providerName stays the stable identifier (config keys, routes, auth files).
+	displayName   = "WorkBuddy"
 	authFileName  = "workbuddy.json"
 	pluginLogoURL = "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/WorkBuddy.png"
 	// CN chat/auth gateway (iss = codebuddy.cn realm).
@@ -343,9 +346,9 @@ func wbRegistration() registration {
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
-			Name:             providerName,
+			Name:             displayName,
 			Version:          version,
-			Author:           "hex-ci (based on workbuddy by lovingfish)",
+			Author:           "hex-ci (based on WorkBuddy by lovingfish)",
 			GitHubRepository: "https://github.com/hex-ci/cpa-plugin",
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
@@ -409,7 +412,7 @@ var modelAliasCache struct {
 // config → env → docker secret files (see resolveUsageReport).
 // usage.Detail is still used as a pure token-counter struct.
 
-// storedAuth is the on-disk shape of a workbuddy credential.
+// storedAuth is the on-disk shape of a WorkBuddy credential.
 type storedAuth struct {
 	Auth    storedTokens  `json:"auth"`
 	Account storedAccount `json:"account"`
@@ -603,7 +606,7 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 	// back to polling every plugin — first Handled=true wins. Only claim files
 	// whose declared type matches us — or, for type-less legacy files, when the
 	// host already routed this to us or the filename carries our prefix.
-	// Symmetric with the qoderwork plugin's guard (commit 7b776a9).
+	// Symmetric with the QoderWork plugin's guard (commit 7b776a9).
 	var probeType struct {
 		Type string `json:"type"`
 	}
@@ -622,7 +625,7 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 	}
 	sa, err := parseStored(req.RawJSON)
 	if err != nil {
-		// Not a workbuddy credential; let the host try other providers.
+		// Not a WorkBuddy credential; let the host try other providers.
 		return okEnvelope(pluginapi.AuthParseResponse{Handled: false})
 	}
 	// CRITICAL: echo back the host-provided FileName AND leave ID empty.

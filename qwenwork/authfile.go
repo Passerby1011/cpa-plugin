@@ -208,7 +208,7 @@ func parseDisabledFromAuthJSON(raw []byte) bool {
 	return m.Disabled
 }
 
-// isSafeAuthPath rejects non-qwenwork filenames, empty paths, and
+// isSafeAuthPath rejects non-QwenWork filenames, empty paths, and
 // traversal attempts. It validates both the basename pattern AND that the path
 // does not escape via ".." segments. Callers that need to confine deletes to
 // a specific directory should additionally check isPathUnder(path, dir).

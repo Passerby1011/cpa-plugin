@@ -24,7 +24,7 @@ type rpcHostAuthGetResponse struct {
 	JSON      json.RawMessage `json:"json"`
 }
 
-// hostAuthList returns all qoderwork credentials known to the host.
+// hostAuthList returns all QoderWork credentials known to the host.
 func hostAuthList() ([]pluginapi.HostAuthFileEntry, error) {
 	raw, err := hostCall(pluginabi.MethodHostAuthList, nil)
 	if err != nil {

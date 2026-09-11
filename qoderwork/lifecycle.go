@@ -1,4 +1,4 @@
-// lifecycle.go implements credit-based auth lifecycle for qoderwork:
+// lifecycle.go implements credit-based auth lifecycle for QoderWork:
 //   - CN exhausted  → disable auth file (disabled:true), re-enable after check-in when credits return
 //   - exhausted → delete auth file (one-shot quota)
 //   - Unknown credits → no-op (never mis-kill)
@@ -154,7 +154,7 @@ func deleteAuth(authIndex, authID string, sa *storedAuth) error {
 	}
 	path := strings.TrimSpace(phys.Path)
 	if path == "" {
-		// Try to reconstruct path from peer qoderwork files' directory + canonical name.
+		// Try to reconstruct path from peer QoderWork files' directory + canonical name.
 		name := authFileNameFor(sa)
 		if phys.Name != "" && !isLegacyAuthName(phys.Name) {
 			name = phys.Name
@@ -206,7 +206,7 @@ func deleteAuth(authIndex, authID string, sa *storedAuth) error {
 	return nil
 }
 
-// peerAuthDir returns the directory of any qoderwork auth file known to the host.
+// peerAuthDir returns the directory of any QoderWork auth file known to the host.
 // Uses HostAuthFileEntry.Path from the list response (A-38: was N+1 — list + getPhysical per file).
 func peerAuthDir() string {
 	files, err := hostAuthList()
@@ -351,7 +351,7 @@ func reconcileOneAccount(authIndex, authID string, force bool) (action lifecycle
 	}
 }
 
-// reconcileAllAccounts walks qoderwork auths and applies lifecycle.
+// reconcileAllAccounts walks QoderWork auths and applies lifecycle.
 func reconcileAllAccounts(force bool) []map[string]any {
 	if !lifecycleEnabled() {
 		return nil
@@ -443,7 +443,7 @@ func resolveAuthIndexAndID(authID string) (string, string) {
 	return "", ""
 }
 
-// reconcileByUID finds qoderwork auth by account UID and applies executor-error lifecycle.
+// reconcileByUID finds QoderWork auth by account UID and applies executor-error lifecycle.
 func reconcileByUID(uid string, status int, body string) {
 	uid = strings.TrimSpace(uid)
 	if uid == "" || !lifecycleEnabled() {

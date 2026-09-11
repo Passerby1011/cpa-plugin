@@ -16,7 +16,7 @@
 | 端到端对话 | ✅ 200 OK | qwen3.8-max 实测返回 "Hi!"，SSE 流正常 |
 | WASM 路线 | ❌ 已废弃 | 只用于解密响应 + httpdns，签名不需要 |
 | qodercli 子进程 | ❌ 已废弃 | 桌面端 WorkerTransport 直签，不 spawn CLI |
-| workbuddy 集成 | ⏸ 未开始 | 等 plugin 骨架 |
+| WorkBuddy 集成 | ⏸ 未开始 | 等 plugin 骨架 |
 | CPA 部署 | ⏸ 未开始 | /root/cpa-manager-plus 还没装新插件 |
 
 ---
@@ -272,7 +272,7 @@ worker 里模型对话**首选 gRPC**（`GrpcTransport`），HTTP `/model/v1/cha
 
 ## 5. 待办清单（按优先级）
 
-- [ ] **P0**: 写 `qoderwork` Go plugin 骨架（基于 workbuddy 模板）
+- [ ] **P0**: 写 `qoderwork` Go plugin 骨架（基于 WorkBuddy 模板）
 - [ ] **P0**: Go 实现 COSY 签名（RSA/AES/MD5 全标准库）+ QoderEncoding
 - [ ] **P0**: Go 实现 PAT → jobToken exchange + refresh
 - [ ] **P1**: OpenAI `/v1/chat/completions` → QoderWork body 转换 + SSE 转发

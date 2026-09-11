@@ -13,7 +13,7 @@
 | **每日签到** | 面板手动签到（单账号/批量）+ 09:00/21:00 定时自动签到，签到后返回最新积分快照 |
 | **积分面板** | 账号卡片：昵称/积分/计划/签到状态/操作（签到/刷新/选用） |
 | **token 保活** | 22:00 定时刷新；按 token 前缀路由（drt- → deviceToken/refresh，jrt- → jobToken/refresh），PAT 永不劫持 OAuth 刷新 |
-| **auth 隔离** | 文件名前缀 `qoderwork-` 过滤，与 workbuddy 等其他插件互不干扰 |
+| **auth 隔离** | 文件名前缀 `qoderwork-` 过滤，与 WorkBuddy 等其他插件互不干扰 |
 
 ## 安装
 
@@ -98,4 +98,4 @@ auth 文件字段（可共存）：
 
 ## License
 
-MIT（based on workbuddy by lovingfish，见 [LICENSE](LICENSE)）
+MIT（based on WorkBuddy by lovingfish，见 [LICENSE](LICENSE)）

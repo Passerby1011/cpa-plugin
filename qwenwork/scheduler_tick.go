@@ -1,4 +1,4 @@
-// scheduler_tick.go owns the daily background timer. qwenwork has no check-in,
+// scheduler_tick.go owns the daily background timer. QwenWork has no check-in,
 // so the only scheduled work is the 22:00 token keepalive, which also carries
 // the lifecycle reconcile (disable exhausted / re-enable after quota reset).
 package main

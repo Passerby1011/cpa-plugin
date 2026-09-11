@@ -1,6 +1,6 @@
 # Development Guide
 
-Local build, test, debug, and release workflow for the workbuddy plugin.
+Local build, test, debug, and release workflow for the WorkBuddy plugin.
 
 ## Prerequisites
 

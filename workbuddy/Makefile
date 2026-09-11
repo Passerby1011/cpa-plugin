@@ -44,5 +44,5 @@ release: clean
 
 # Tag a new release (usage: make tag VERSION=0.9.4). Tag format matches the CI release trigger.
 tag:
-	git tag -a workbuddy-v$(VERSION) -m "workbuddy v$(VERSION)"
+	git tag -a workbuddy-v$(VERSION) -m "WorkBuddy v$(VERSION)"
 	git push origin workbuddy-v$(VERSION)

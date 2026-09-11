@@ -408,7 +408,7 @@ func TestModelRuntimeSameAuthSingleflight(t *testing.T) {
 		}
 	}
 	if workBuddyCalls.Load() != 1 || metadataCalls.Load() != 1 {
-		t.Fatalf("calls: workbuddy=%d metadata=%d", workBuddyCalls.Load(), metadataCalls.Load())
+		t.Fatalf("calls: WorkBuddy=%d metadata=%d", workBuddyCalls.Load(), metadataCalls.Load())
 	}
 }
 
@@ -1040,7 +1040,7 @@ func TestModelRuntimeConfigGenerationInvalidatesSnapshot(t *testing.T) {
 
 		newResult := runtime.ensureForAuth(req)
 		if workBuddyCalls.Load() != 2 || metadataCalls.Load() != 2 || newResult.State != modelReady || len(newResult.Models) != 1 || newResult.Models[0].ID != "serve-alpha" {
-			t.Fatalf("workbuddy=%d metadata=%d new result=%#v", workBuddyCalls.Load(), metadataCalls.Load(), newResult)
+			t.Fatalf("WorkBuddy=%d metadata=%d new result=%#v", workBuddyCalls.Load(), metadataCalls.Load(), newResult)
 		}
 	})
 }
@@ -1246,7 +1246,7 @@ func TestModelRuntimeStaleMatrix(t *testing.T) {
 				HostCallbackID:   "callback-stale",
 			})
 			if workBuddyCalls != 1 || metadataCalls != 1 {
-				t.Fatalf("refresh calls: workbuddy=%d metadata=%d, want 1 each", workBuddyCalls, metadataCalls)
+				t.Fatalf("refresh calls: WorkBuddy=%d metadata=%d, want 1 each", workBuddyCalls, metadataCalls)
 			}
 			if got.State != tt.wantState || got.ModelSource != tt.wantModelSource || got.MetadataSource != tt.wantMetadataSource {
 				t.Fatalf("snapshot = %#v", got)

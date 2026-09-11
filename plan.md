@@ -9,7 +9,7 @@
 
 ```
 CPA Gateway
-  └─ qoderwork plugin (Go, c-shared)
+  └─ QoderWork plugin (Go, c-shared)
        ├─ auth: PAT (pt-) → jobToken/exchange → jt- (24h) → jrt- refresh (48h)
        ├─ sign: COSY 纯 Go 实现 (RSA PKCS1v15 + AES-128-CBC + MD5)
        ├─ encode: QoderEncoding (自定义 base64 字母表 + 三段重排)

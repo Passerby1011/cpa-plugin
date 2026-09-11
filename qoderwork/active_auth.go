@@ -49,7 +49,7 @@ type activeAuthCandidate struct {
 	Exhausted bool
 }
 
-// pickActiveAuth chooses which qoderwork auth to use from host candidates.
+// pickActiveAuth chooses which QoderWork auth to use from host candidates.
 // The panel selection is sticky: it stays on the current account unless that
 // account is no longer in the candidate list (disabled/deleted by host) or
 // is marked exhausted in cache. When switching, it picks the first

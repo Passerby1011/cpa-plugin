@@ -1,6 +1,6 @@
-# 分析：qoderwork 真·OAuth 登录（设备授权流程，替代 PAT）
+# 分析：QoderWork 真·OAuth 登录（设备授权流程，替代 PAT）
 
-> 2026-07-27 · 目标：CPA auth 页面点 qoderwork OAuth 卡片 → 浏览器授权 → 插件拿到
+> 2026-07-27 · 目标：CPA auth 页面点 QoderWork OAuth 卡片 → 浏览器授权 → 插件拿到
 > device token（dt-/drt-），全程不需要用户手工创建/粘贴 PAT。
 
 ## 已验证的客户端流程（三源交叉确认）
@@ -85,7 +85,7 @@ PAT 导入保留（存量账号+应急），文案补充"推荐 OAuth 登录"。
 ## 验证计划
 1. 编译部署后，用 CPA management API 触发 StartLogin → 拿 URL
 2. 浏览器（已登录 qoder.com.cn 的账号）打开 URL 授权
-3. PollLogin 应返回 Success + auth 文件落盘（type=qoderwork）
+3. PollLogin 应返回 Success + auth 文件落盘（type=QoderWork）
 4. curl chat 实测 dt- 是否可直接推理（关键未知数）
 5. 强制 expiresAt 过期触发 refresh，确认 deviceToken/refresh 通路
 

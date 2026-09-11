@@ -1,14 +1,14 @@
-// Package main implements the qwenwork CLIProxyAPI dynamic plugin.
+// Package main implements the QwenWork CLIProxyAPI dynamic plugin.
 //
-// qwenwork wraps the QwenWork (千问办公, gateway.qwenwork.cn) OpenAPI as a
+// QwenWork wraps the QwenWork (千问办公, gateway.qwenwork.cn) OpenAPI as a
 // cliproxy provider: device-authorization login (PKCE), COSY-signed inference,
-// dynamic models, and the standard chat-completions interface. qwenwork shares
+// dynamic models, and the standard chat-completions interface. QwenWork shares
 // Qoder's underlying protocol (same RSA key / COSY / device flow) but has no
 // PAT/jobToken path and signs plain JSON bodies (no QoderEncoding).
 //
 // This file is a clean-room reimplementation reconstructed from the public
 // qwenwork.so binary (symbol table, string constants and RPC shape) published
-// by Sliverkiss. Original credit for the qwenwork plugin goes to Sliverkiss;
+// by Sliverkiss. Original credit for the QwenWork plugin goes to Sliverkiss;
 // see https://github.com/Sliverkiss/cpa-plugin. Built with -buildmode=c-shared
 // and exports the cliproxy C ABI entry points.
 package main
@@ -75,11 +75,14 @@ import (
 )
 
 const (
-	providerName  = "qwenwork"
+	providerName = "qwenwork"
+	// displayName is the human-readable plugin title shown by management clients;
+	// providerName stays the stable identifier (config keys, routes, auth files).
+	displayName   = "QwenWork"
 	authFileName  = "qwenwork.json"
 	pluginLogoURL = "https://img.alicdn.com/imgextra/i2/O1CN01j5Zn121gj7WSX4g7x_!!6000000004177-55-tps-540-120.svg"
 	// QwenWork (千问办公) 单网关 gateway.qwenwork.cn，同时承载鉴权/账单/COSY 推理。
-	// 与 qoderwork 同属阿里 Qoder 底层：RSA 公钥相同、COSY 签名同构、deviceFlow 同构。
+	// 与 QoderWork 同属阿里 Qoder 底层：RSA 公钥相同、COSY 签名同构、deviceFlow 同构。
 	// 差异：单域名、明文 JSON body（无 Encode=1）、cosyVersion 1.1.18、无 PAT/jobToken 路径。
 	upstreamBaseCN = "https://gateway.qwenwork.cn"
 	gatewayBaseCN  = "https://gateway.qwenwork.cn"
@@ -337,9 +340,9 @@ func wbRegistration() registration {
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
-			Name:             providerName,
+			Name:             displayName,
 			Version:          version,
-			Author:           "hex-ci (based on qoderwork by lovingfish)",
+			Author:           "hex-ci (based on QoderWork by lovingfish)",
 			GitHubRepository: "https://github.com/hex-ci/cpa-plugin",
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
@@ -445,19 +448,19 @@ func hostAuthGetByIndex(authIndex string) ([]byte, error) {
 	return resp.JSON, nil
 }
 
-// storedAuth is the on-disk shape of a qwenwork credential.
+// storedAuth is the on-disk shape of a QwenWork credential.
 type storedAuth struct {
 	Auth    storedTokens  `json:"auth"`
 	Account storedAccount `json:"account"`
 }
 
-// storedTokens holds the device-token credential. qwenwork has a single
+// storedTokens holds the device-token credential. QwenWork has a single
 // family: accessToken=JWT, refreshToken=ory_rt_. personalToken is kept for
 // auth-file shape compatibility but is always empty (no PAT path).
 type storedTokens struct {
 	AccessToken   string `json:"accessToken"`
 	RefreshToken  string `json:"refreshToken"`
-	PersonalToken string `json:"personalToken"` // unused for qwenwork (no PAT)
+	PersonalToken string `json:"personalToken"` // unused for QwenWork (no PAT)
 	ExpiresAt     int64  `json:"expiresAt"`
 	Domain        string `json:"domain"` // realm: gateway.qwenwork.cn
 }
@@ -567,7 +570,7 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 	// Ownership check (CPA native contract): the host routes by the file's
 	// top-level "type" field (synthesizer/file.go). Files without a type fall
 	// back to polling every plugin — first Handled=true wins. To prevent
-	// claiming foreign providers' legacy files (e.g. workbuddy's type-less
+	// claiming foreign providers' legacy files (e.g. WorkBuddy's type-less
 	// auths, which parseStored would otherwise accept because the nested
 	// {auth,account} shape is identical), only claim files whose declared
 	// type matches us — or whose filename carries our prefix.
@@ -591,7 +594,7 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 	}
 	sa, err := parseStored(req.RawJSON)
 	if err != nil {
-		// Not a qwenwork credential; let the host try other providers.
+		// Not a QwenWork credential; let the host try other providers.
 		return okEnvelope(pluginapi.AuthParseResponse{Handled: false})
 	}
 	// CRITICAL: echo back the host-provided FileName AND leave ID empty.
@@ -664,8 +667,8 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	if sa.Account.UID != "" {
 		authUID = sa.Account.UID
 	}
-	// Build the qwenwork agent_chat_generation body (plain JSON) from the
-	// OpenAI request. No QoderEncoding — qwenwork signs the raw JSON directly.
+	// Build the QwenWork agent_chat_generation body (plain JSON) from the
+	// OpenAI request. No QoderEncoding — QwenWork signs the raw JSON directly.
 	var payload map[string]any
 	if err := json.Unmarshal(req.Payload, &payload); err != nil && len(req.Payload) > 0 {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "payload parse: "+err.Error())
@@ -743,7 +746,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		authUID = sa.Account.UID
 	}
 
-	// Build the qwenwork body (plain JSON) and sign it directly.
+	// Build the QwenWork body (plain JSON) and sign it directly.
 	bodyRaw := req.Payload
 	if len(bodyRaw) == 0 {
 		bodyRaw = req.OriginalRequest

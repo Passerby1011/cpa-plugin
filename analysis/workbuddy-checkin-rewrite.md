@@ -1,4 +1,4 @@
-# 分析：workbuddy 签到链重写
+# 分析：WorkBuddy 签到链重写
 
 > 2026-07-27 · 用户反馈：签到链太长、单卡片签到也触发全部、签到成功却提示超时
 
@@ -26,7 +26,7 @@ Phase3 summarize
 
 **单个签到 = 4 次 RPC + 最多 5 次上游 HTTP + 每次 HTTP 最多 3 次重试（间隔 0.3s/0.9s）。**
 最坏情况：5 HTTP × 3 次 × (上游 RTT + 1.2s 重试间隔) → 30s+，撞上 CPA management API 超时
-（v0.1.11 qoderwork 同款病根：30s context canceled）。
+（v0.1.11 QoderWork 同款病根：30s context canceled）。
 
 ### "单卡片签到触发全部"的体感来源
 
@@ -40,7 +40,7 @@ Phase3 summarize
 `classifyCheckinTargets → executeCheckinBatch → summarizeCheckinResults` 是为 29 账号批量设计的，
 单账号也走完整框架，且 Phase1/Phase2 重复 `hostAuthGet` + `fetchCheckinStatus`（锁内再读一遍）。
 
-## 重写方案（对齐 qoderwork v0.1.11 已验证模式）
+## 重写方案（对齐 QoderWork v0.1.11 已验证模式）
 
 ```
 handleManualCheckin:

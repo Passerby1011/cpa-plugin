@@ -1,8 +1,8 @@
-// scheduler.go implements the CPA scheduler.pick capability for workbuddy.
+// scheduler.go implements the CPA scheduler.pick capability for WorkBuddy.
 //
 // Routing uses the panel-selected active account (region from that card's
 // domain). When the selection is exhausted/disabled/missing, randomly switch
-// to another non-exhausted workbuddy candidate. Non-workbuddy candidates are
+// to another non-exhausted WorkBuddy candidate. Non-WorkBuddy candidates are
 // always deferred so the built-in scheduler handles them.
 package main
 
@@ -45,8 +45,8 @@ func loadedSchedulerMode() string {
 	return schedulerMode
 }
 
-// handleSchedulerPick selects a workbuddy auth candidate based on the
-// panel-selected active account. Non-workbuddy candidates are always deferred
+// handleSchedulerPick selects a WorkBuddy auth candidate based on the
+// panel-selected active account. Non-WorkBuddy candidates are always deferred
 // (Handled: false) so the built-in scheduler handles them.
 //
 // scheduler_mode:
@@ -68,7 +68,7 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
 	}
 
-	// Collect workbuddy candidates only.
+	// Collect WorkBuddy candidates only.
 	var wbCandidates []pluginapi.SchedulerAuthCandidate
 	for _, c := range req.Candidates {
 		if c.Provider != providerName {

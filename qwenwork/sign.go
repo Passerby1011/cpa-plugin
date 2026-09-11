@@ -1,6 +1,6 @@
 // sign.go implements QwenWork's COSY request signing: RSA-wrapped AES session
 // key + AES-128-CBC encrypted identity + MD5 request signature. The algorithm
-// is the SAME Qoder scheme qoderwork uses (same RSA public key), but qwenwork
+// is the SAME Qoder scheme QoderWork uses (same RSA public key), but QwenWork
 // passes a different cosyVersion/ideVersion, a 5-field identity, and a
 // different header set (X-QwenWork-* + title-case Cosy-*). Pure-Go port of
 // Buddy2api providers/qwenwork/cosy.py (which mirrors the official 0.1.8 asar
@@ -28,7 +28,7 @@ import (
 )
 
 // serverPubKeyPEM is Qoder's RSA public key, hardcoded in the desktop client
-// and identical for qwenwork. Wraps the per-session AES key.
+// and identical for QwenWork. Wraps the per-session AES key.
 const serverPubKeyPEM = `-----BEGIN PUBLIC KEY-----
 MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
 4k6Pz1EaDicBMpdpxKduSZu5OANqUq8er4GM95omAGIOPOh+Nx0spthYA2BqGz+l
@@ -50,7 +50,7 @@ func init() {
 	serverPubKey = k.(*rsa.PublicKey)
 }
 
-// qwenwork protocol constants (official QwenWorkCN 0.1.8).
+// QwenWork protocol constants (official QwenWorkCN 0.1.8).
 const (
 	cosyVersionQwen     = "1.1.18"
 	ideVersionQwen      = "0.1.8"
@@ -75,8 +75,8 @@ type cosySession struct {
 	Info         string `json:"info"`     // base64(AES-CBC(identityJSON, tempKey))
 }
 
-// cosyIdentity is the plaintext inside `info`. qwenwork carries 5 fields (no
-// organization/user_type/yx_uid/refresh_token — unlike qoderwork).
+// cosyIdentity is the plaintext inside `info`. QwenWork carries 5 fields (no
+// organization/user_type/yx_uid/refresh_token — unlike QoderWork).
 type cosyIdentity struct {
 	Name               string
 	AID                string
@@ -171,7 +171,7 @@ func newCosySession(id cosyIdentity) (*cosySession, error) {
 
 // buildBearer constructs the Authorization header for one request. pathSig is
 // url.Path with the "/algo" prefix stripped; body is the raw (plain JSON)
-// request body string — qwenwork signs the raw JSON directly (no QoderEncoding).
+// request body string — QwenWork signs the raw JSON directly (no QoderEncoding).
 func (s *cosySession) buildBearer(body, rawURL string) (payloadB64, date, bearer string, err error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {

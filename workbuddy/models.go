@@ -128,7 +128,7 @@ func parseModelAliasAttribute(attributes map[string]string) map[string]string {
 }
 
 // filterExcludedModels removes models listed in oauth-excluded-models for
-// the workbuddy provider. The host passes this config via HostConfigSummary.
+// the WorkBuddy provider. The host passes this config via HostConfigSummary.
 func filterExcludedModels(models []pluginapi.ModelInfo, host pluginapi.HostConfigSummary) []pluginapi.ModelInfo {
 	if len(host.ExcludedModels) == 0 {
 		return models

@@ -64,4 +64,4 @@ CI 自动刷新，用户在商店 UI 即可一键安装/更新，无需手工下
 https://raw.githubusercontent.com/hex-ci/cpa-plugin/main/registry.json
 ```
 
-添加后在商店 UI 安装/更新 **workbuddy**、**qoderwork** 和 **qwenwork**。
+添加后在商店 UI 安装/更新 **WorkBuddy**、**QoderWork** 和 **QwenWork**。

@@ -1,6 +1,6 @@
-// body.go constructs the qwenwork agent_chat_generation request body from an
-// OpenAI-style chat completion payload. qwenwork (千问办公) 走明文 JSON —— 没有
-// qoderwork 的 QoderEncoding/base64 与 baseprompt 模板；结构对齐官方 0.1.8
+// body.go constructs the QwenWork agent_chat_generation request body from an
+// OpenAI-style chat completion payload. QwenWork (千问办公) 走明文 JSON —— 没有
+// QoderWork 的 QoderEncoding/base64 与 baseprompt 模板；结构对齐官方 0.1.8
 // asar 与 Buddy2api 的 build_body。
 package main
 
@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// cpaToUpstreamKey maps CPA-facing model names to upstream keys. qwenwork's
+// cpaToUpstreamKey maps CPA-facing model names to upstream keys. QwenWork's
 // real model keys (from /algo/api/v2/model/list, qwork scene) are "pro"
 // (default), "flash", "qwen3.8-max-preview". Unknown names pass through.
 func cpaToUpstreamKey(cpaModel string) string {
@@ -92,7 +92,7 @@ func buildQwenBody(payload map[string]any, modelKey string) ([]byte, error) {
 		modelKey = "pro"
 	}
 	// Desensitize the configured prompt and tool metadata fields before the
-	// OpenAI payload is folded into the qwenwork body (same scope as the
+	// OpenAI payload is folded into the QwenWork body (same scope as the
 	// WorkBuddy plugin: system/developer text, marker-flagged user text,
 	// tool title/description only).
 	applyDesensitizeInPlace(payload, currentFeatureRuntime())

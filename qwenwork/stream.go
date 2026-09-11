@@ -508,10 +508,10 @@ func stripDataPrefix(s string) string {
 	return s
 }
 
-// unwrapQwenSSE extracts the inner OpenAI chunk payload from one qwenwork SSE
+// unwrapQwenSSE extracts the inner OpenAI chunk payload from one QwenWork SSE
 // data frame. Mirrors Buddy2api unwrap_sse_payload: a frame is either a plain
 // OpenAI chunk (has "choices"/"object") or an envelope {"body": "<chunk>"} /
-// {"body": {...}}. qwenwork surfaces upstream errors as an envelope carrying
+// {"body": {...}}. QwenWork surfaces upstream errors as an envelope carrying
 // statusCodeValue >= 400 (HTTP transport is still 200), so those are peeled
 // into errMsg. Returns (body, errMsg, ok); ok=false for keepalive/[DONE]/empty.
 func unwrapQwenSSE(payload string) (string, string, bool) {
@@ -577,7 +577,7 @@ func fmtBodyText(v any) string {
 	}
 }
 
-// bodyCodeMessage returns a human message when the payload is a qwenwork
+// bodyCodeMessage returns a human message when the payload is a QwenWork
 // business-error object ({"code":"403","message":...}) — the "Model is not
 // available for this user" class. status is only used for a fallback label.
 func bodyCodeMessage(raw string, status int) string {

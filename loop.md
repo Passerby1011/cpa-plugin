@@ -9,7 +9,7 @@
 
 ```
 CPA Gateway
-  └─ qoderwork plugin (Go, c-shared)
+  └─ QoderWork plugin (Go, c-shared)
        ├─ auth: PAT → jobToken/exchange → jt-/jrt-
        ├─ sign: COSY (RSA + AES-CBC + MD5) 纯 Go
        ├─ encode: QoderEncoding (custom base64 + 三段重排)
@@ -199,7 +199,7 @@ Body: qoderEncode(json(baseprompt_template))
 
 ## 执行策略
 
-- **Loop 1-3**: Hermes 直接写（参考 workbuddy + cubk1）
+- **Loop 1-3**: Hermes 直接写（参考 WorkBuddy + cubk1）
 - **Loop 4**: Hermes 写框架 + 实测（已有 Python 参考）
 - **Loop 5-7**: Claudium 后台（逻辑明确，多文件）
 

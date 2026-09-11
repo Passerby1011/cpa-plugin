@@ -407,7 +407,7 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 		})
 	}
 
-	// Panel-import path: a new qoderwork auth file appeared since StartLogin.
+	// Panel-import path: a new QoderWork auth file appeared since StartLogin.
 	files, err := hostAuthList()
 	if err == nil {
 		for _, f := range files {
@@ -481,7 +481,7 @@ func buildStoredAuthFromDeviceToken(tok *deviceTokenResponse, ui *userInfoRespon
 	}
 }
 
-// existingPATForUID looks up an existing qoderwork auth file for the same
+// existingPATForUID looks up an existing QoderWork auth file for the same
 // uid and returns its stored PAT (empty when none). Lets OAuth re-login
 // preserve a previously imported PAT instead of wiping it.
 //
@@ -582,7 +582,7 @@ func preserveExpiry(newExpiry, oldExpiry int64) int64 {
 	return oldExpiry
 }
 
-// toAuthDataForRefresh mirrors the workbuddy helper: blank out FileName and
+// toAuthDataForRefresh mirrors the WorkBuddy helper: blank out FileName and
 // ID so the host backfills from the original auth path (prevents ID mismatch
 // duplicate files when Refresh round-trips the record).
 func toAuthDataForRefresh(sa *storedAuth) pluginapi.AuthData {

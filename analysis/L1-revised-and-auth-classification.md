@@ -7,10 +7,10 @@
 用户反馈两个问题：
 
 1. **L1 未达预期**：v0.1.12 把 StartLogin 指向面板 PAT 表单，但 CPA 前端仍然渲染
-   "通过 qoderwork 插件的 OAuth 流程登录"卡片。用户要求：**直接不展示这张卡片**，
+   "通过 QoderWork 插件的 OAuth 流程登录"卡片。用户要求：**直接不展示这张卡片**，
    但不得影响 ①oauth 别名（oauth-model-alias）②oauth 模型禁用（excluded-models）。
 2. **auth 分类串扰**：workbuddy/qoderwork 各自插件面板都正确只显示自己账号，
-   但 CPA 的 auth 文件管理页分类显示"30 个 qoderwork 文件"，workbuddy 分类消失。
+   但 CPA 的 auth 文件管理页分类显示"30 个 QoderWork 文件"，WorkBuddy 分类消失。
 
 ## 问题 2 根因（分类串扰）—— 高置信度
 
@@ -25,38 +25,38 @@ watcher 扫到 auth 文件
 
 关键事实（已验证）：
 
-- workbuddy 的 29 个 auth 文件**没有 "type"/"provider" 字段**
+- WorkBuddy 的 29 个 auth 文件**没有 "type"/"provider" 字段**
   （legacy 格式：`{"auth":{...},"account":{...}}`）。
-- qoderwork 的文件**有** `"type":"qoderwork"`。
-- workbuddy 和 qoderwork 的 `parseStored()` **完全同构**（嵌套 `{"auth":{accessToken...}}`，
+- QoderWork 的文件**有** `"type":"qoderwork"`。
+- WorkBuddy 和 QoderWork 的 `parseStored()` **完全同构**（嵌套 `{"auth":{accessToken...}}`，
   只检查 accessToken 非空，**不检查 type/provider/domain**）。
-- 对无 type 的 workbuddy 文件，宿主按插件注册顺序轮询 ParseAuth：
-  - workbuddy 先注册 → 认领 ✓（正常情况）
-  - **qoderwork 先注册（或某次重载后顺序变化）→ qoderwork 的 parseStored
-    成功解析 workbuddy 文件 → Handled=true → 文件被标为 provider=qoderwork** ✗
+- 对无 type 的 WorkBuddy 文件，宿主按插件注册顺序轮询 ParseAuth：
+  - WorkBuddy 先注册 → 认领 ✓（正常情况）
+  - **QoderWork 先注册（或某次重载后顺序变化）→ QoderWork 的 parseStored
+    成功解析 WorkBuddy 文件 → Handled=true → 文件被标为 provider=QoderWork** ✗
 
-实测验证：`workbuddy-00e26541...json` 满足 qoderwork parseStored 的全部条件
-（嵌套 auth + accessToken 非空），qoderwork 会认领它。
+实测验证：`workbuddy-00e26541...json` 满足 QoderWork parseStored 的全部条件
+（嵌套 auth + accessToken 非空），QoderWork 会认领它。
 
-这就是"30 个文件全部归到 qoderwork、workbuddy 分类消失"的根因：
-**qoderwork 的 ParseAuth 缺少 provider 身份校验，把 workbuddy 文件认领走了。**
+这就是"30 个文件全部归到 QoderWork、WorkBuddy 分类消失"的根因：
+**QoderWork 的 ParseAuth 缺少 provider 身份校验，把 WorkBuddy 文件认领走了。**
 
-workbuddy 文件 domain=`www.codebuddy.cn`，qoderwork domain=`qoder.com.cn`，
+WorkBuddy 文件 domain=`www.codebuddy.cn`，QoderWork domain=`qoder.com.cn`，
 天然有区分特征。
 
 ### 修法（参考社区惯例 + 对称防御）
 
-在 qoderwork 的 `handleParseAuth` / `parseStored` 加**所有权校验**：
+在 QoderWork 的 `handleParseAuth` / `parseStored` 加**所有权校验**：
 
 1. 文件带 `"type"` 字段时：仅当 `type == "qoderwork"` 才 Handled=true，
-   其他（如 "workbuddy"）直接 Handled=false。
+   其他（如 "WorkBuddy"）直接 Handled=false。
 2. 文件无 type（legacy）：看 `auth.domain`——
    `qoder.com.cn` / `qoder.com` → 认领；`codebuddy.cn` / `workbuddy.ai` → 拒绝。
 3. 两者都无 → 拒绝（Handled=false，保守不抢）。
 
-同时建议 workbuddy 侧也加对称校验（但它不归本 LOOP 边界管，只提建议，
-不动它源码——本 LOOP 只改 qoderwork，修完即可解决，因为 qoderwork 拒绝后
-宿主会轮询到 workbuddy 自己认领）。
+同时建议 WorkBuddy 侧也加对称校验（但它不归本 LOOP 边界管，只提建议，
+不动它源码——本 LOOP 只改 QoderWork，修完即可解决，因为 QoderWork 拒绝后
+宿主会轮询到 WorkBuddy 自己认领）。
 
 ## 问题 1（OAuth 卡片）—— 机制约束
 

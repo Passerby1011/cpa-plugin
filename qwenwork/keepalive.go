@@ -1,4 +1,4 @@
-// keepalive.go implements proactive daily token refresh for qwenwork auths.
+// keepalive.go implements proactive daily token refresh for QwenWork auths.
 //
 // Motivation: upstream (openapi.qoder.com.cn) issues jobTokens (24h) and
 // refreshTokens (48h). When they expire mid-flight, every billing and
@@ -8,7 +8,7 @@
 //   - Runs on the existing schedulerLoop at 22:00 local (keepaliveHours is
 //     separate from checkinHours so the two cadences can evolve independently).
 //     separate from checkinHours so the two cadences can evolve independently).
-//   - Iterates all qwenwork auths via host.auth.list/get, calls
+//   - Iterates all QwenWork auths via host.auth.list/get, calls
 //     {realm-base}/v2/plugin/auth/token/refresh with X-Refresh-Token via
 //     the host HTTP bridge (host.http.do).
 //   - On success the auth file is persisted via host.auth.save (host watcher
@@ -73,7 +73,7 @@ func refreshBody(refreshToken string) []byte {
 	return body
 }
 
-// refreshCall refreshes the token pair for one auth. qwenwork has a single
+// refreshCall refreshes the token pair for one auth. QwenWork has a single
 // credential family (JWT access + ory_rt_ refresh): POST /api/v1/deviceToken/refresh
 // with the refresh token.
 //
@@ -89,7 +89,7 @@ func refreshCall(sa *storedAuth) (json.RawMessage, []byte, int, error) {
 	return data, data, status, nil
 }
 
-// refreshOneAuth refreshes the access token for a single qwenwork auth and
+// refreshOneAuth refreshes the access token for a single QwenWork auth and
 // persists the result. Returns a short status string for logging/tests.
 func refreshOneAuth(authIndex, authID string) (string, error) {
 	sa, err := hostAuthGet(authIndex)
@@ -232,7 +232,7 @@ func getLastKeepalive() *keepaliveSummary {
 	return lastKeepalive
 }
 
-// runTokenKeepalive refreshes every qwenwork auth once. Returns the summary.
+// runTokenKeepalive refreshes every QwenWork auth once. Returns the summary.
 func runTokenKeepalive() *keepaliveSummary {
 	sum := &keepaliveSummary{When: time.Now()}
 	if !keepaliveEnabled() {

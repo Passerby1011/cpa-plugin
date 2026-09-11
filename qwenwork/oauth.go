@@ -1,17 +1,17 @@
-// oauth.go implements qwenwork's device-authorization login. One flow only:
+// oauth.go implements QwenWork's device-authorization login. One flow only:
 //
 //  1. StartLogin: build the /device/selectAccounts PKCE URL (challenge +
 //     nonce + machine_id + client_id + redirect_uri) and stash the verifier
 //     under the returned state.
 //  2. PollLogin: poll /api/v1/deviceToken/poll with nonce + verifier until the
-//     grant lands (404/202 = pending). qwenwork has NO PAT/jobToken path
+//     grant lands (404/202 = pending). QwenWork has NO PAT/jobToken path
 //     (jobToken/exchange returns 404) — device tokens only.
 //
 // Refresh (handleRefreshAuth) uses POST /api/v1/deviceToken/refresh with the
 // ory_rt_ refresh token plus target:"c".
 //
 // Reverse-engineered from the official QwenWorkCN desktop client login URL
-// (2026-09-02, live capture) — same Qoder device flow as qoderwork, but on
+// (2026-09-02, live capture) — same Qoder device flow as QoderWork, but on
 // gateway.qwenwork.cn with client_id e883ade2-… and redirect_uri qwenwork-cn://.
 package main
 
@@ -106,7 +106,7 @@ const (
 )
 
 // deviceTokenResponse mirrors /api/v1/deviceToken/{poll,refresh} payloads.
-// Poll returns expires_at (RFC3339) AND expires_in (qwenwork expresses it in
+// Poll returns expires_at (RFC3339) AND expires_in (QwenWork expresses it in
 // SECONDS, e.g. 604800 = 7d); refresh returns only expires_at. See
 // deviceExpiryUnix for the second/ms magnitude handling.
 type deviceTokenResponse struct {
@@ -235,7 +235,7 @@ func refreshDeviceToken(drt string) (*deviceTokenResponse, error) {
 }
 
 // handlePollLogin implements AuthProvider.PollLogin. Only the device-
-// authorization poll — qwenwork has no PAT pasted-in path.
+// authorization poll — QwenWork has no PAT pasted-in path.
 func handlePollLogin(raw []byte) ([]byte, error) {
 	var req pluginapi.AuthLoginPollRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -279,8 +279,8 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 
 // deviceExpiryUnix resolves the access-token expiry from a deviceToken
 // poll/refresh response. Poll returns both expires_at (RFC3339) and
-// expires_in; qwenwork expresses expires_in in SECONDS (e.g. 604800 = 7d),
-// unlike qoderwork (milliseconds) — detect by magnitude. Default: 30 days.
+// expires_in; QwenWork expresses expires_in in SECONDS (e.g. 604800 = 7d),
+// unlike QoderWork (milliseconds) — detect by magnitude. Default: 30 days.
 func deviceExpiryUnix(tok *deviceTokenResponse) int64 {
 	if tok.ExpiresAt != "" {
 		if t, err := time.Parse(time.RFC3339, tok.ExpiresAt); err == nil {
@@ -325,7 +325,7 @@ func buildStoredAuthFromDeviceToken(tok *deviceTokenResponse, ui *userInfoRespon
 		Auth: storedTokens{
 			AccessToken:   tok.accessToken(),
 			RefreshToken:  tok.RefreshToken,
-			PersonalToken: "", // qwenwork has no PAT
+			PersonalToken: "", // QwenWork has no PAT
 			ExpiresAt:     expiresAt,
 			Domain:        "gateway.qwenwork.cn",
 		},
@@ -333,7 +333,7 @@ func buildStoredAuthFromDeviceToken(tok *deviceTokenResponse, ui *userInfoRespon
 	}
 }
 
-// handleRefreshAuth implements AuthProvider.Refresh. qwenwork has a single
+// handleRefreshAuth implements AuthProvider.Refresh. QwenWork has a single
 // credential family: POST /api/v1/deviceToken/refresh with the ory_rt_ token.
 func handleRefreshAuth(raw []byte) ([]byte, error) {
 	var req pluginapi.AuthRefreshRequest
@@ -366,7 +366,7 @@ func preserveExpiry(newExpiry, oldExpiry int64) int64 {
 	return oldExpiry
 }
 
-// toAuthDataForRefresh mirrors the workbuddy helper: blank out FileName and
+// toAuthDataForRefresh mirrors the WorkBuddy helper: blank out FileName and
 // ID so the host backfills from the original auth path (prevents ID mismatch
 // duplicate files when Refresh round-trips the record).
 func toAuthDataForRefresh(sa *storedAuth) pluginapi.AuthData {

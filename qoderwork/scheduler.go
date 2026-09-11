@@ -1,8 +1,8 @@
-// scheduler.go implements the CPA scheduler.pick capability for qoderwork.
+// scheduler.go implements the CPA scheduler.pick capability for QoderWork.
 //
 // Routing uses the panel-selected active account (region from that card's
 // domain). When the selection is exhausted/disabled/missing, randomly switch
-// to another non-exhausted qoderwork candidate. Non-qoderwork candidates are
+// to another non-exhausted QoderWork candidate. Non-QoderWork candidates are
 // always deferred so the built-in scheduler handles them.
 package main
 
@@ -45,8 +45,8 @@ func loadedSchedulerMode() string {
 	return schedulerMode
 }
 
-// handleSchedulerPick selects a qoderwork auth candidate based on the
-// panel-selected active account. Non-qoderwork candidates are always deferred
+// handleSchedulerPick selects a QoderWork auth candidate based on the
+// panel-selected active account. Non-QoderWork candidates are always deferred
 // (Handled: false) so the built-in scheduler handles them.
 //
 // scheduler_mode:
@@ -68,7 +68,7 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
 	}
 
-	// Collect qoderwork candidates only.
+	// Collect QoderWork candidates only.
 	var wbCandidates []pluginapi.SchedulerAuthCandidate
 	for _, c := range req.Candidates {
 		if c.Provider != providerName {

@@ -90,7 +90,7 @@ auth 文件（nested 形状，5 字段共存）：
 - ❌ 不改 panel.html（JS 契约不变）
 - ❌ 不动 host auto-refresh 的调用方式（宿主行为，插件侧 handleRefreshAuth 已正确路由）
 - ❌ 不加 existingOAuthForUID（PAT 导入是显式切换，见 P1-3 决策）
-- ❌ 不动 workbuddy 插件
+- ❌ 不动 WorkBuddy 插件
 
 ## 五、实施顺序（每步 commit）
 

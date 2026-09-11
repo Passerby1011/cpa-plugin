@@ -1,13 +1,13 @@
-// Package main implements the qoderwork CLIProxyAPI dynamic plugin.
+// Package main implements the QoderWork CLIProxyAPI dynamic plugin.
 //
-// qoderwork wraps the QoderWork CN (qoder.com.cn) OpenAPI as a cliproxy
+// QoderWork wraps the QoderWork CN (qoder.com.cn) OpenAPI as a cliproxy
 // provider: it exchanges a PAT for a jobToken, refreshes it, signs inference
 // requests with COSY, and exposes the standard chat-completions interface.
 // upstream /v2/chat/completions endpoint.
 //
 // This file is a clean-room reimplementation reconstructed from the public
 // qoderwork.so binary (symbol table, string constants and RPC shape) published
-// by Sliverkiss. Original credit for the qoderwork plugin goes to Sliverkiss;
+// by Sliverkiss. Original credit for the QoderWork plugin goes to Sliverkiss;
 // see https://github.com/Sliverkiss/cpa-plugin. Built with -buildmode=c-shared
 // and exports the cliproxy C ABI entry points.
 package main
@@ -74,7 +74,10 @@ import (
 )
 
 const (
-	providerName  = "qoderwork"
+	providerName = "qoderwork"
+	// displayName is the human-readable plugin title shown by management clients;
+	// providerName stays the stable identifier (config keys, routes, auth files).
+	displayName   = "QoderWork"
 	authFileName  = "qoderwork.json"
 	pluginLogoURL = "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/QoderWork.png"
 	// QoderWork CN: OpenAPI for auth/billing, gateway for COSY-signed inference.
@@ -340,9 +343,9 @@ func wbRegistration() registration {
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
-			Name:             providerName,
+			Name:             displayName,
 			Version:          version,
-			Author:           "hex-ci (based on qoderwork by lovingfish)",
+			Author:           "hex-ci (based on QoderWork by lovingfish)",
 			GitHubRepository: "https://github.com/hex-ci/cpa-plugin",
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
@@ -447,7 +450,7 @@ func hostAuthGetByIndex(authIndex string) ([]byte, error) {
 	return resp.JSON, nil
 }
 
-// storedAuth is the on-disk shape of a qoderwork credential.
+// storedAuth is the on-disk shape of a QoderWork credential.
 type storedAuth struct {
 	Auth    storedTokens  `json:"auth"`
 	Account storedAccount `json:"account"`
@@ -572,7 +575,7 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 	// Ownership check (CPA native contract): the host routes by the file's
 	// top-level "type" field (synthesizer/file.go). Files without a type fall
 	// back to polling every plugin — first Handled=true wins. To prevent
-	// claiming foreign providers' legacy files (e.g. workbuddy's type-less
+	// claiming foreign providers' legacy files (e.g. WorkBuddy's type-less
 	// auths, which parseStored would otherwise accept because the nested
 	// {auth,account} shape is identical), only claim files whose declared
 	// type matches us — or whose filename carries our prefix.
@@ -596,7 +599,7 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 	}
 	sa, err := parseStored(req.RawJSON)
 	if err != nil {
-		// Not a qoderwork credential; let the host try other providers.
+		// Not a QoderWork credential; let the host try other providers.
 		return okEnvelope(pluginapi.AuthParseResponse{Handled: false})
 	}
 	// CRITICAL: echo back the host-provided FileName AND leave ID empty.

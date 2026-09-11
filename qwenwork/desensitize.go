@@ -183,7 +183,7 @@ var desensitizeUserMarkers = []string{
 
 // applyDesensitizeInPlace changes only the prompt and tool metadata fields
 // allowed by the configured desensitization scope. Call it on the OpenAI-style
-// payload before buildQwenBody folds it into the qwenwork request.
+// payload before buildQwenBody folds it into the QwenWork request.
 //
 // When a mutation happens, it emits one host.log line carrying the number of
 // zero-width-space insertions (never the matched terms or payload text) so

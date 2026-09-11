@@ -1,4 +1,4 @@
-# Multi-arch CPA plugin build & release (workbuddy + qoderwork + qwenwork).
+# Multi-arch CPA plugin build & release (WorkBuddy + QoderWork + QwenWork).
 # Each plugin versions INDEPENDENTLY:
 #   - tag '<id>-v*'       → release that plugin at that version
 #   - workflow_dispatch   → pick plugin + version manually
@@ -80,7 +80,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # workbuddy native
+          # WorkBuddy native
           - id: workbuddy
             goos: linux
             goarch: amd64
@@ -106,7 +106,7 @@ jobs:
             goarch: amd64
             runner: windows-2025
             ext: dll
-          # qoderwork native
+          # QoderWork native
           - id: qoderwork
             goos: linux
             goarch: amd64
@@ -132,7 +132,7 @@ jobs:
             goarch: amd64
             runner: windows-2025
             ext: dll
-          # qwenwork native
+          # QwenWork native
           - id: qwenwork
             goos: linux
             goarch: amd64
@@ -375,12 +375,19 @@ jobs:
             *) echo "unsupported plugin $P"; exit 1 ;;
           esac
           V="${V#v}"
+          # Display name for release titles/notes; the plugin id stays lowercase.
+          case "$P" in
+            workbuddy) NAME="WorkBuddy" ;;
+            qoderwork) NAME="QoderWork" ;;
+            qwenwork)  NAME="QwenWork" ;;
+          esac
           {
             echo "plugin=$P"
+            echo "name=$NAME"
             echo "version=$V"
             echo "tag=${P}-v${V}"
           } >> "$GITHUB_OUTPUT"
-          echo "Releasing $P v$V"
+          echo "Releasing $NAME v$V (id $P)"
 
       - name: Download build artifacts
         uses: actions/download-artifact@v8
@@ -413,6 +420,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.meta.outputs.tag }}
           PLUGIN: ${{ steps.meta.outputs.plugin }}
+          NAME: ${{ steps.meta.outputs.name }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
@@ -420,12 +428,12 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
-              git tag -a "${TAG}" -m "Release ${PLUGIN} ${TAG}"
+              git tag -a "${TAG}" -m "Release ${NAME} ${TAG}"
               git push origin "${TAG}"
             fi
           fi
           NOTES=$(cat <<EOF
-          ## ${PLUGIN} CPA plugin v${VERSION}
+          ## ${NAME} CPA plugin v${VERSION}
 
           Multi-arch builds for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin store (\`direct\` install type).
 
@@ -457,7 +465,7 @@ jobs:
             gh release upload "${TAG}" out/"${PLUGIN}_"*.zip out/checksums.txt --clobber --repo "${GITHUB_REPOSITORY}"
           elif ! gh release create "${TAG}" out/"${PLUGIN}_"*.zip out/checksums.txt \
               --repo "${GITHUB_REPOSITORY}" \
-              --title "${PLUGIN} v${VERSION}" \
+              --title "${NAME} v${VERSION}" \
               --notes "${NOTES}"; then
             # A tag push can re-trigger this workflow; the sibling run may have
             # created the release between our check and create. Upload instead.

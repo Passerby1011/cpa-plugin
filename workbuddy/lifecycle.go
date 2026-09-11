@@ -1,4 +1,4 @@
-// lifecycle.go implements credit-based auth lifecycle for workbuddy:
+// lifecycle.go implements credit-based auth lifecycle for WorkBuddy:
 //   - CN exhausted  → disable auth file (disabled:true), re-enable after check-in when credits return
 //   - Global exhausted → delete auth file (one-shot quota)
 //   - Unknown credits → no-op (never mis-kill)
@@ -155,7 +155,7 @@ func deleteAuth(authIndex, authID string, sa *storedAuth) error {
 	}
 	path := strings.TrimSpace(phys.Path)
 	if path == "" {
-		// Try to reconstruct path from peer workbuddy files' directory + canonical name.
+		// Try to reconstruct path from peer WorkBuddy files' directory + canonical name.
 		name := authFileNameFor(sa)
 		if phys.Name != "" && !isLegacyWorkbuddyAuthName(phys.Name) {
 			name = phys.Name
@@ -206,7 +206,7 @@ func deleteAuth(authIndex, authID string, sa *storedAuth) error {
 	return nil
 }
 
-// peerAuthDir returns the directory of any workbuddy auth file known to the host.
+// peerAuthDir returns the directory of any WorkBuddy auth file known to the host.
 // Uses HostAuthFileEntry.Path from the list response (A-38: was N+1 — list + getPhysical per file).
 func peerAuthDir() string {
 	files, err := hostAuthList()
@@ -373,7 +373,7 @@ func reconcileOneAccountWithCallback(authIndex, authID string, force bool, callb
 	}
 }
 
-// reconcileAllAccounts walks workbuddy auths and applies lifecycle.
+// reconcileAllAccounts walks WorkBuddy auths and applies lifecycle.
 func reconcileAllAccounts(force bool) []map[string]any {
 	return reconcileAllAccountsWithCallback(force, "")
 }
@@ -469,7 +469,7 @@ func resolveAuthIndexAndID(authID string) (string, string) {
 	return "", ""
 }
 
-// reconcileByUID finds workbuddy auth by account UID and applies executor-error lifecycle.
+// reconcileByUID finds WorkBuddy auth by account UID and applies executor-error lifecycle.
 func reconcileByUID(uid string, status int, body string) {
 	uid = strings.TrimSpace(uid)
 	if uid == "" || !lifecycleEnabled() {

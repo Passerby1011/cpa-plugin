@@ -62,7 +62,7 @@ func fetchDynamicModels() []pluginapi.ModelInfo {
 	// Strict filename-prefix match — same filter as host_auth.go hostAuthList.
 	// (Earlier code also matched files containing "codebuddy" anywhere, which
 	// would wrongly include workbuddy-*.json auths here and cause us to call
-	// the qoderwork models API with a workbuddy token.)
+	// the QoderWork models API with a WorkBuddy token.)
 	prefix := providerName + "-"
 	for _, f := range files {
 		if !strings.HasPrefix(strings.ToLower(f.Name), prefix) {
@@ -275,7 +275,7 @@ func parseModelAliasAttribute(attributes map[string]string) map[string]string {
 }
 
 // filterExcludedModels removes models listed in oauth-excluded-models for
-// the qoderwork provider. The host passes this config via HostConfigSummary.
+// the QoderWork provider. The host passes this config via HostConfigSummary.
 func filterExcludedModels(models []pluginapi.ModelInfo, host pluginapi.HostConfigSummary) []pluginapi.ModelInfo {
 	if len(host.ExcludedModels) == 0 {
 		return models
