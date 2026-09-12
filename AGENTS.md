@@ -51,6 +51,7 @@ make -C qwenwork tag           # → qwenwork-v0.1.5
 - **显示名 vs 标识符**：面向用户的文案（面板标题、`Metadata.Name`、README、日志）一律用 CamelCase 显示名 **WorkBuddy / QoderWork / QwenWork**；标识符（插件 ID、`providerName` 常量、目录/module/文件名、`plugins.configs.<id>` 配置键、`/v0/management/plugins/<id>/*` 路由、`/v0/resource/plugins/<id>/*` 资源路由、auth 文件名前缀 `<id>-<uid>.json`、tag `<id>-vX.Y.Z`、commit scope、CI 插件键）保持小写。插件 ID 由 .so 文件名派生（版本化名 `<id>-v<version>.so` 会剥离版本段），`Metadata.Name` 只做显示，宿主不用于任何匹配。
 - 每个插件目录完全自包含：自己的 `go.mod`（go 1.26）、`go.sum`、`VERSION`、`Makefile`、`panel.html`、`README.md`/`README_CN.md`、`LICENSE`；插件之间不共享依赖。
 - module 路径统一为 `github.com/hex-ci/cpa-plugin/<id>`。
+- **logo 一律入本仓库**：图标文件存 `<id>/assets/`，`main.go` 的 `pluginLogoURL` 与 `registry.json` 的 `logo` 均引用 `https://raw.githubusercontent.com/hex-ci/cpa-plugin/main/<id>/assets/<file>`，不直连上游 CDN（防对方 URL 变更导致图标失效）。配套 `<id>` 包内断言前缀 + 本地文件存在的单测。（现存例外：workbuddy/qoderwork 仍指向第三方 ai-icon 仓库，待逐插件迁移。）
 - `panel.html` 经 `go:embed` 嵌入二进制——改完必须重新 `make build`，gofmt/vet 不碰它。
 - 所有上游 HTTP 走宿主桥（`host_auth.go`/`host_bridge.go`），插件内不直接用 net/http。
 - commit 风格：Conventional Commits + 插件 scope，如 `feat(qwenwork): ...`、`fix(workbuddy): ...`，信息可用中文。

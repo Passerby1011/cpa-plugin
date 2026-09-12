@@ -152,7 +152,7 @@
       "author": "Hex",
       "version": "0.1.5",
       "repository": "https://github.com/hex-ci/cpa-plugin",
-      "logo": "https://img.alicdn.com/imgextra/i2/O1CN01j5Zn121gj7WSX4g7x_!!6000000004177-55-tps-540-120.svg",
+      "logo": "https://raw.githubusercontent.com/hex-ci/cpa-plugin/main/qwenwork/assets/qwenwork.svg",
       "homepage": "https://github.com/hex-ci/cpa-plugin/tree/main/qwenwork",
       "license": "MIT",
       "tags": [
