@@ -75,25 +75,56 @@ type workBuddyCatalog struct {
 	Models   []modelFacts          `json:"models"`
 }
 
+// workBuddyModelEntryWire is one entry of the upstream model catalog. It covers
+// BOTH catalog shapes: /v3/config's data.models[] and the fuller
+// /console/enterprises/{personal|<id>}/models payload. Field names follow the
+// upstream's actual keys (maxOutputTokens / maxInputTokens) — an earlier
+// revision used maxTokens / contextWindow, which never matched anything and
+// left every limit nil, silently falling back to models.dev.
+type workBuddyModelEntryWire struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	DescriptionEn string `json:"descriptionEn"`
+	DescriptionZh string `json:"descriptionZh"`
+	Disabled      bool   `json:"disabled"`
+	MaxOutput     *int64 `json:"maxOutputTokens"`
+	MaxInput      *int64 `json:"maxInputTokens"`
+}
+
+// fact converts a catalog entry into modelFacts. The upstream sends the display
+// name plus a localized description under descriptionEn/descriptionZh (the flat
+// "description" field only exists in some older shapes), so each is resolved
+// from whichever field the catalog actually populated.
+func (m workBuddyModelEntryWire) fact() modelFacts {
+	f := modelFacts{
+		ID:   m.ID,
+		Name: firstNonEmpty(m.Name, m.DescriptionEn),
+		// maxInputTokens is the model's input window; the client uses it as the
+		// context length (maxAllowedSize is a separate, larger allowance).
+		Description:         firstNonEmpty(m.Description, m.DescriptionEn, m.DescriptionZh),
+		ContextLength:       m.MaxInput,
+		MaxCompletionTokens: m.MaxOutput,
+	}
+	return f
+}
+
+// workBuddyAgentWire is the cli agent entry; its models[] is a plain ID list.
 type workBuddyAgentWire struct {
 	Name   string   `json:"name"`
 	Models []string `json:"models"`
 }
 
-type workBuddyLegacyModelWire struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Description   string `json:"description"`
-	Disabled      bool   `json:"disabled"`
-	ContextWindow *int64 `json:"contextWindow"`
-	MaxTokens     *int64 `json:"maxTokens"`
-}
-
+// parseWorkBuddyV3Config reads the /v3/config payload. The cli agent's models[]
+// is the authoritative ORDERED id list; data.models[] carries the per-model
+// limits, so the two are joined by id (limits are evidence-based, ids are the
+// roster — the roster wins on membership, the detail map only enriches).
 func parseWorkBuddyV3Config(raw []byte) ([]modelFacts, error) {
 	var response struct {
 		Code *int `json:"code"`
 		Data *struct {
-			Agents []workBuddyAgentWire `json:"agents"`
+			Agents []workBuddyAgentWire      `json:"agents"`
+			Models []workBuddyModelEntryWire `json:"models"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &response); err != nil {
@@ -122,18 +153,36 @@ func parseWorkBuddyV3Config(raw []byte) ([]modelFacts, error) {
 		return nil, fmt.Errorf("v3 config cli agent is missing")
 	}
 
-	models := make([]modelFacts, len(modelIDs))
-	for i, id := range modelIDs {
-		models[i].ID = id
+	details := make(map[string]workBuddyModelEntryWire, len(response.Data.Models))
+	for _, entry := range response.Data.Models {
+		id := strings.TrimSpace(entry.ID)
+		if id == "" {
+			continue
+		}
+		details[id] = entry
+	}
+
+	models := make([]modelFacts, 0, len(modelIDs))
+	for _, id := range modelIDs {
+		entry, ok := details[strings.TrimSpace(id)]
+		if !ok {
+			// Roster id with no detail row: keep it, limits stay nil.
+			models = append(models, modelFacts{ID: id})
+			continue
+		}
+		models = append(models, entry.fact())
 	}
 	return validateModelFacts(models)
 }
 
+// parseWorkBuddyLegacyModels reads the /console/enterprises/.../models payload,
+// whose data.models[] carries the same entry shape (the fuller variant also
+// includes iconUrl/isDefault/top_k, which this parser deliberately ignores).
 func parseWorkBuddyLegacyModels(raw []byte) ([]modelFacts, error) {
 	var response struct {
 		Code *int `json:"code"`
 		Data *struct {
-			Models []workBuddyLegacyModelWire `json:"models"`
+			Models []workBuddyModelEntryWire `json:"models"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &response); err != nil {
@@ -148,13 +197,7 @@ func parseWorkBuddyLegacyModels(raw []byte) ([]modelFacts, error) {
 
 	models := make([]modelFacts, len(response.Data.Models))
 	for i, model := range response.Data.Models {
-		models[i] = modelFacts{
-			ID:                  model.ID,
-			Name:                model.Name,
-			Description:         model.Description,
-			ContextLength:       model.ContextWindow,
-			MaxCompletionTokens: model.MaxTokens,
-		}
+		models[i] = model.fact()
 	}
 	models, err := validateModelFacts(models)
 	if err != nil {
@@ -165,6 +208,9 @@ func parseWorkBuddyLegacyModels(raw []byte) ([]modelFacts, error) {
 		if !response.Data.Models[i].Disabled {
 			enabled = append(enabled, model)
 		}
+	}
+	if len(enabled) == 0 {
+		return nil, fmt.Errorf("model snapshot is empty")
 	}
 	return validateModelFacts(enabled)
 }

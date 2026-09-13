@@ -1,8 +1,28 @@
 # Changelog
 
-## 0.9.3
+## 0.9.5
 
-### Dynamic model bootstrap
+### Official-client wire alignment
+
+- Decode the upstream model catalog with its real field names
+  (`maxOutputTokens` / `maxInputTokens`). An earlier revision read
+  `maxTokens` / `contextWindow`, which the service never sends, so every model's
+  limits stayed empty and were silently filled from models.dev values up to 5x
+  the models' actual allowance.
+- Join `/v3/config`'s ordered `agents[].models` roster with its `data.models[]`
+  limit metadata, so the preferred catalog path carries per-model context and
+  output limits instead of bare ids. Both the personal and enterprise routes
+  serve the same shape and are covered by one parser.
+- Keep upstream descriptions when they arrive as `descriptionEn` /
+  `descriptionZh` rather than the flat `description` field.
+- Send `reasoning_summary: "auto"` and `verbosity: "high"` on requests that ask
+  for thinking, mirroring the official client's thinking configuration (which is
+  not part of the compatibility pipeline it skips for its own gateway). Requests
+  with no thinking signal stay untouched and caller values are never overwritten.
+- Add the `X-Trace-ID` and `X-Root-Request-ID` headers the official client sends
+  on model requests.
+
+## 0.9.3
 
 - Accept the production CN JWT issuer host `www.codebuddy.cn` during per-auth model bootstrap.
 

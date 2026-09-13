@@ -23,13 +23,103 @@ func TestParseWorkBuddyV3ConfigSelectsCompleteCLIList(t *testing.T) {
 }
 
 func TestParseWorkBuddyLegacyModelsDropsDisabled(t *testing.T) {
-	raw := []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","name":"Alpha","disabled":false,"contextWindow":4096,"maxTokens":512},{"id":"serve-off","disabled":true}]}}`)
+	raw := []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","name":"Alpha","disabled":false,"maxInputTokens":4096,"maxOutputTokens":512},{"id":"serve-off","disabled":true}]}}`)
 	got, err := parseWorkBuddyLegacyModels(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].ID != "serve-alpha" || got[0].ContextLength == nil || *got[0].ContextLength != 4096 {
 		t.Fatalf("models = %#v", got)
+	}
+	if got[0].MaxCompletionTokens == nil || *got[0].MaxCompletionTokens != 512 {
+		t.Fatalf("max completion tokens = %#v, want 512", got[0].MaxCompletionTokens)
+	}
+}
+
+// The upstream catalog uses maxOutputTokens / maxInputTokens. An earlier
+// revision decoded maxTokens / contextWindow, which never matched, so every
+// limit stayed nil and the plugin fell back to models.dev values that were up
+// to 5x larger than the models' real allowance. This test pins the real keys.
+func TestParseWorkBuddyLegacyModelsUsesUpstreamLimitKeys(t *testing.T) {
+	raw := []byte(`{"code":0,"data":{"models":[{"id":"deepseek-v4.1-flash","name":"Deepseek-V4.1-Flash",` +
+		`"maxInputTokens":1000000,"maxOutputTokens":128000,"maxAllowedSize":1000000,` +
+		`"onlyReasoning":true,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"}}]}}`)
+	got, err := parseWorkBuddyLegacyModels(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("models = %#v", got)
+	}
+	m := got[0]
+	if m.ID != "deepseek-v4.1-flash" || m.Name != "Deepseek-V4.1-Flash" {
+		t.Fatalf("id/name = %q/%q", m.ID, m.Name)
+	}
+	if m.ContextLength == nil || *m.ContextLength != 1000000 {
+		t.Fatalf("context length = %#v, want 1000000", m.ContextLength)
+	}
+	if m.MaxCompletionTokens == nil || *m.MaxCompletionTokens != 128000 {
+		t.Fatalf("max completion tokens = %#v, want 128000", m.MaxCompletionTokens)
+	}
+}
+
+// A description may arrive as description / descriptionEn / descriptionZh
+// depending on catalog shape; the parser must not depend on the flat field.
+func TestParseWorkBuddyModelEntryDescriptionFallbacks(t *testing.T) {
+	raw := []byte(`{"code":0,"data":{"models":[` +
+		`{"id":"flat","description":"flat-desc"},` +
+		`{"id":"en","descriptionEn":"en-desc"},` +
+		`{"id":"zh","descriptionZh":"zh-desc"},` +
+		`{"id":"none"}]}}`)
+	got, err := parseWorkBuddyLegacyModels(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]modelFacts{}
+	for _, m := range got {
+		byID[m.ID] = m
+	}
+	for id, want := range map[string]string{
+		"flat": "flat-desc", "en": "en-desc", "zh": "zh-desc", "none": "",
+	} {
+		if byID[id].Description != want {
+			t.Errorf("%s description = %q, want %q", id, byID[id].Description, want)
+		}
+	}
+}
+
+// /v3/config's data.models[] carries the limits; the cli agent's models[] is the
+// ordered roster. They must be joined by id so limits stop being dropped.
+func TestParseWorkBuddyV3ConfigJoinsRosterWithLimits(t *testing.T) {
+	raw := []byte(`{"code":0,"data":{` +
+		`"agents":[{"name":"cli","models":["serve-alpha","serve-beta","serve-gamma"]}],` +
+		`"models":[` +
+		`{"id":"serve-alpha","name":"Alpha","maxInputTokens":200000,"maxOutputTokens":24000},` +
+		`{"id":"serve-beta","name":"Beta","maxInputTokens":1000000,"maxOutputTokens":128000}` +
+		`]}}`)
+	got, err := parseWorkBuddyV3Config(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("models = %#v", got)
+	}
+	// order follows the roster, not the detail list
+	if got[0].ID != "serve-alpha" || got[1].ID != "serve-beta" || got[2].ID != "serve-gamma" {
+		t.Fatalf("roster order lost: %#v", got)
+	}
+	if got[0].MaxCompletionTokens == nil || *got[0].MaxCompletionTokens != 24000 {
+		t.Fatalf("alpha max completion = %#v, want 24000", got[0].MaxCompletionTokens)
+	}
+	if got[0].ContextLength == nil || *got[0].ContextLength != 200000 {
+		t.Fatalf("alpha context = %#v, want 200000", got[0].ContextLength)
+	}
+	if got[1].MaxCompletionTokens == nil || *got[1].MaxCompletionTokens != 128000 {
+		t.Fatalf("beta max completion = %#v, want 128000", got[1].MaxCompletionTokens)
+	}
+	// roster id with no detail row survives with nil limits
+	if got[2].MaxCompletionTokens != nil || got[2].ContextLength != nil {
+		t.Fatalf("gamma limits should be nil: %#v", got[2])
 	}
 }
 
@@ -103,16 +193,16 @@ func TestParseWorkBuddyLegacyModelsRejectsInvalidSnapshots(t *testing.T) {
 			raw:  []byte(`{"code":0,"data":{"models":[{"id":"` + strings.Repeat("x", maxDiscoveredModelIDBytes+1) + `"}]}}`),
 		},
 		{
-			name: "negative contextWindow",
-			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","contextWindow":-1}]}}`),
+			name: "negative maxInputTokens",
+			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","maxInputTokens":-1}]}}`),
 		},
 		{
-			name: "negative maxTokens",
-			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","maxTokens":-1}]}}`),
+			name: "negative maxOutputTokens",
+			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","maxOutputTokens":-1}]}}`),
 		},
 		{
 			name: "invalid disabled entry",
-			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha"},{"id":"serve-off","disabled":true,"maxTokens":-1}]}}`),
+			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha"},{"id":"serve-off","disabled":true,"maxOutputTokens":-1}]}}`),
 		},
 		{
 			name: "malformed JSON",
@@ -124,7 +214,7 @@ func TestParseWorkBuddyLegacyModelsRejectsInvalidSnapshots(t *testing.T) {
 		},
 		{
 			name: "wrong field type",
-			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","contextWindow":"4096"}]}}`),
+			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","maxInputTokens":"4096"}]}}`),
 		},
 	}
 

@@ -49,11 +49,69 @@ func prepareUpstreamBody(payload, original []byte, sa *storedAuth, upstreamModel
 	// 6. ensureSystemMessage: inject minimal system msg for Global only.
 	ensureSystemMessageInPlace(obj, sa)
 
+	// 7. alignThinkingFields: mirror the official CLI's configureThinkingSettings,
+	// which is NOT part of the compatibility pipeline it skips for internal
+	// domains, so these fields are what the real client sends to this gateway.
+	alignThinkingFieldsInPlace(obj)
+
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return src
 	}
 	return out
+}
+
+// alignThinkingFieldsInPlace adds the two thinking-side fields the official
+// client always sets on model requests but this plugin never did:
+//
+//	reasoning_summary: "auto"  — the SDK-level thinking summary control
+//	verbosity:         "high"  — text verbosity
+//
+// They are only added when the caller is asking for thinking at all (an
+// explicit reasoning_effort/reasoning.effort, or a reasoning_summary of its
+// own). A request with no thinking signal must stay untouched: the official
+// client only reaches configureThinkingSettings' body mutations on the
+// thinking-enabled path, and adding a summary to a non-thinking request would
+// flip the upstream's own "is thinking on" inference.
+//
+// Existing caller values always win — this only fills fields that are absent,
+// and never overwrites an explicit "verbosity".
+func alignThinkingFieldsInPlace(obj map[string]any) bool {
+	if !requestWantsThinking(obj) {
+		return false
+	}
+	changed := false
+	if _, ok := obj["reasoning_summary"]; !ok {
+		obj["reasoning_summary"] = "auto"
+		changed = true
+	}
+	if _, ok := obj["verbosity"]; !ok {
+		obj["verbosity"] = "high"
+		changed = true
+	}
+	return changed
+}
+
+// requestWantsThinking reports whether the body carries any thinking signal,
+// matching the official client's isThinkingEnabled + the effort it reads off
+// modelSettings. reasoning_effort and reasoning.effort are both honoured
+// because callers use either shape.
+func requestWantsThinking(obj map[string]any) bool {
+	if _, ok := obj["reasoning_summary"]; ok {
+		return true
+	}
+	if v, ok := obj["reasoning_effort"].(string); ok && strings.TrimSpace(v) != "" {
+		return true
+	}
+	if r, ok := obj["reasoning"].(map[string]any); ok {
+		if v, ok := r["effort"].(string); ok && strings.TrimSpace(v) != "" {
+			return true
+		}
+		if enabled, ok := r["enabled"].(bool); ok && enabled {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeToolsInPlace is the in-place form of normalizeToolsForUpstream.
