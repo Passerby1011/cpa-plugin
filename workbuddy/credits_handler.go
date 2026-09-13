@@ -32,8 +32,9 @@ func handleImportAuth(req pluginapi.ManagementRequest) map[string]any {
 	if err != nil {
 		return map[string]any{"success": false, "error": err.Error()}
 	}
-	// Persist nested storage + top-level type/note/logo/disabled for Auth page.
-	fileJSON, err := buildAuthFileJSON(sa, false, displayNote(sa, nil, false), nil)
+	// Persist nested storage + top-level type/note/logo/disabled for Auth page,
+	// carrying over any user-owned fields the imported JSON already declared.
+	fileJSON, err := buildAuthFileJSON(raw, sa, false, displayNote(sa, nil, false), nil)
 	if err != nil {
 		return map[string]any{"success": false, "error": err.Error()}
 	}

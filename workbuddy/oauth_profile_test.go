@@ -64,6 +64,66 @@ func TestWorkBuddyProfileBuildsDesktopStateRequest(t *testing.T) {
 	}
 }
 
+func TestWorkBuddyAIProfileBuildsInternationalStateRequest(t *testing.T) {
+	req, err := buildAuthStateRequest(oauthProfileForMode(oauthClientModeWorkBuddyAI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Method != http.MethodPost || req.URL.String() != upstreamBaseGlobal+pluginAuthStatePath+"?platform=workbuddy-ai" {
+		t.Fatalf("international state request = %s %s", req.Method, req.URL)
+	}
+	for key, want := range map[string]string{
+		"User-Agent":           "WorkBuddy/5.3.14 WorkBuddy/5.3.14 CLI/2.115.0",
+		"Origin":               "https://www.workbuddy.ai",
+		"Referer":              "https://www.workbuddy.ai/",
+		"X-No-Authorization":   "true",
+		"X-No-User-Id":         "true",
+		"X-No-Enterprise-Id":   "true",
+		"X-No-Department-Info": "true",
+	} {
+		if got := req.Header.Get(key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+// TestAuthEndpointsFollowProfileGateway pins the rule that token polling and
+// the account lookup stay on the gateway that issued the state.
+func TestAuthEndpointsFollowProfileGateway(t *testing.T) {
+	cases := []struct {
+		mode  string
+		base  string
+		state string
+	}{
+		{oauthClientModeCLI, upstreamBaseCN, upstreamBaseCN + pluginAuthStatePath + "?platform=CLI"},
+		{oauthClientModeWorkBuddy, upstreamBaseCN, upstreamBaseCN + pluginAuthStatePath + "?platform=workbuddy"},
+		{oauthClientModeWorkBuddyAI, upstreamBaseGlobal, upstreamBaseGlobal + pluginAuthStatePath + "?platform=workbuddy-ai"},
+	}
+	for _, tc := range cases {
+		profile := oauthProfileForMode(tc.mode)
+		if profile.stateURL != tc.state {
+			t.Errorf("%s stateURL = %q, want %q", tc.mode, profile.stateURL, tc.state)
+		}
+		tokenReq, err := buildAuthTokenRequest(profile, "s1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := tc.base + pluginAuthTokenPath + "s1"; tokenReq.URL.String() != want {
+			t.Errorf("%s token URL = %q, want %q", tc.mode, tokenReq.URL, want)
+		}
+		accountReq, err := buildLoginAccountRequest(profile, "s1", "tok")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := tc.base + pluginLoginAccountPath + "s1"; accountReq.URL.String() != want {
+			t.Errorf("%s account URL = %q, want %q", tc.mode, accountReq.URL, want)
+		}
+		if got := accountReq.Header.Get("Authorization"); got != "Bearer tok" {
+			t.Errorf("%s account authorization = %q", tc.mode, got)
+		}
+	}
+}
+
 func TestDecorateDesktopAuthURLPreservesBrowserQuery(t *testing.T) {
 	got, err := decorateDesktopAuthURL("https://example.test/login?state=s", "0123456789abcdef0123456789abcdef")
 	if err != nil {
@@ -75,6 +135,25 @@ func TestDecorateDesktopAuthURLPreservesBrowserQuery(t *testing.T) {
 	}
 	if u.Query().Get("state") != "s" || u.Query().Get("version") != "5.3.14" || u.Query().Get("loginSessionId") != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("query = %v", u.Query())
+	}
+}
+
+// TestDecorateDesktopAuthURLOmitsEmptySessionID covers the international
+// desktop, whose login page has no loginSessionId parameter.
+func TestDecorateDesktopAuthURLOmitsEmptySessionID(t *testing.T) {
+	got, err := decorateDesktopAuthURL("https://www.workbuddy.ai/login?state=s", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Query().Get("state") != "s" || u.Query().Get("version") != "5.3.14" {
+		t.Fatalf("query = %v", u.Query())
+	}
+	if u.Query().Has("loginSessionId") {
+		t.Fatalf("loginSessionId must be absent, query = %v", u.Query())
 	}
 }
 

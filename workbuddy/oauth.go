@@ -92,31 +92,54 @@ func doJSONRequest(client *http.Client, req *http.Request) (json.RawMessage, int
 
 type oauthRequestProfile struct {
 	mode      string
+	base      string
 	stateURL  string
 	userAgent string
 	origin    string
 }
 
+// oauthProfileForMode returns the login request profile for one client mode.
+// Desktop logins are region split: workbuddy uses the CN gateway with
+// platform=workbuddy, workbuddy-ai the international gateway with
+// platform=workbuddy-ai. Everything downstream keys off the token response's
+// domain field, so the profile only has to pick the right gateway.
 func oauthProfileForMode(mode string) oauthRequestProfile {
-	if mode == oauthClientModeWorkBuddy {
+	switch mode {
+	case oauthClientModeWorkBuddy:
 		return oauthRequestProfile{
 			mode:      oauthClientModeWorkBuddy,
-			stateURL:  upstreamBaseCN + "/v2/plugin/auth/state?platform=workbuddy",
+			base:      upstreamBaseCN,
+			stateURL:  upstreamBaseCN + pluginAuthStatePath + "?platform=workbuddy",
 			userAgent: "WorkBuddy/5.3.14 WorkBuddy/5.3.14 CLI/2.115.0",
 			origin:    "https://www.workbuddy.cn",
+		}
+	case oauthClientModeWorkBuddyAI:
+		return oauthRequestProfile{
+			mode:      oauthClientModeWorkBuddyAI,
+			base:      upstreamBaseGlobal,
+			stateURL:  upstreamBaseGlobal + pluginAuthStatePath + "?platform=workbuddy-ai",
+			userAgent: "WorkBuddy/5.3.14 WorkBuddy/5.3.14 CLI/2.115.0",
+			origin:    originRefererGlobal,
 		}
 	}
 	return oauthRequestProfile{
 		mode:      oauthClientModeCLI,
+		base:      upstreamBaseCN,
 		stateURL:  endpointAuthState,
 		userAgent: clientUA,
 		origin:    originReferer,
 	}
 }
 
+// isDesktopOAuthMode reports the plugin's desktop-client login profiles, which
+// share the browser decoration and the X-No-* header treatment.
+func isDesktopOAuthMode(mode string) bool {
+	return mode == oauthClientModeWorkBuddy || mode == oauthClientModeWorkBuddyAI
+}
+
 func applyOAuthProfileHeaders(req *http.Request, profile oauthRequestProfile) {
 	commonHeaders(req)
-	if profile.mode != oauthClientModeWorkBuddy {
+	if !isDesktopOAuthMode(profile.mode) {
 		return
 	}
 	req.Header.Set("User-Agent", profile.userAgent)
@@ -126,13 +149,21 @@ func applyOAuthProfileHeaders(req *http.Request, profile oauthRequestProfile) {
 
 func applyAnonymousOAuthHeaders(req *http.Request, profile oauthRequestProfile) {
 	applyOAuthProfileHeaders(req, profile)
-	if profile.mode != oauthClientModeWorkBuddy {
+	if !isDesktopOAuthMode(profile.mode) {
 		return
 	}
 	req.Header.Set("X-No-Authorization", "true")
 	req.Header.Set("X-No-User-Id", "true")
 	req.Header.Set("X-No-Enterprise-Id", "true")
 	req.Header.Set("X-No-Department-Info", "true")
+}
+
+// authEndpointFor joins one gateway-relative plugin OAuth path with the
+// profile's gateway. Logins must poll the gateway that issued the state —
+// mixing them (CN state on www.workbuddy.ai) silently yields a different
+// account, so the base always travels with the profile.
+func authEndpointFor(profile oauthRequestProfile, path string) string {
+	return profile.base + path
 }
 
 func buildAuthStateRequest(profile oauthRequestProfile) (*http.Request, error) {
@@ -145,7 +176,7 @@ func buildAuthStateRequest(profile oauthRequestProfile) (*http.Request, error) {
 }
 
 func buildAuthTokenRequest(profile oauthRequestProfile, state string) (*http.Request, error) {
-	req, err := http.NewRequest(http.MethodGet, endpointAuthToken+state, nil)
+	req, err := http.NewRequest(http.MethodGet, authEndpointFor(profile, pluginAuthTokenPath)+state, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -154,13 +185,13 @@ func buildAuthTokenRequest(profile oauthRequestProfile, state string) (*http.Req
 }
 
 func buildLoginAccountRequest(profile oauthRequestProfile, state, accessToken string) (*http.Request, error) {
-	req, err := http.NewRequest(http.MethodGet, endpointLoginAcct+state, nil)
+	req, err := http.NewRequest(http.MethodGet, authEndpointFor(profile, pluginLoginAccountPath)+state, nil)
 	if err != nil {
 		return nil, err
 	}
 	applyOAuthProfileHeaders(req, profile)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	if profile.mode == oauthClientModeWorkBuddy {
+	if isDesktopOAuthMode(profile.mode) {
 		req.Header.Set("X-No-User-Id", "true")
 		req.Header.Set("X-No-Enterprise-Id", "true")
 		req.Header.Set("X-No-Department-Info", "true")
@@ -197,7 +228,11 @@ func decorateDesktopAuthURL(rawURL, loginSessionID string) (string, error) {
 	}
 	query := u.Query()
 	query.Set("version", "5.3.14")
-	query.Set("loginSessionId", loginSessionID)
+	// loginSessionId is the CN desktop's telemetry session id; the
+	// international login bundle has no such parameter, so it stays CN-only.
+	if loginSessionID != "" {
+		query.Set("loginSessionId", loginSessionID)
+	}
 	u.RawQuery = query.Encode()
 	return u.String(), nil
 }
@@ -228,6 +263,8 @@ func handleStartLogin(_ []byte) ([]byte, error) {
 	loginSessionID := ""
 	if profile.mode == oauthClientModeWorkBuddy {
 		loginSessionID = randomHex(16)
+	}
+	if isDesktopOAuthMode(profile.mode) {
 		st.AuthURL, err = decorateDesktopAuthURL(st.AuthURL, loginSessionID)
 		if err != nil {
 			return nil, fmt.Errorf("auth state: invalid authUrl: %w", err)
@@ -383,7 +420,7 @@ func handleRefreshAuth(raw []byte) ([]byte, error) {
 	// refreshed credential itself after Refresh returns (conductor.go
 	// refreshAuth → m.Update → persist). Writing from the plugin too would
 	// double-write the file.
-	response, err := okEnvelope(pluginapi.AuthRefreshResponse{Auth: toAuthDataForRefresh(sa)})
+	response, err := okEnvelope(pluginapi.AuthRefreshResponse{Auth: toAuthDataForRefresh(sa, req.Metadata)})
 	if err != nil {
 		return nil, err
 	}
@@ -440,8 +477,13 @@ func preserveExpiry(newExpiry, oldExpiry int64) int64 {
 // NEW file, and the old one stays → duplicate auth records.
 //
 // Returning empty FileName = "keep what you had" → no rename, no dup.
-func toAuthDataForRefresh(sa *storedAuth) pluginapi.AuthData {
-	ad := toAuthDataOpts(sa, nil, false)
+//
+// carrier is the host-side Metadata of the record being refreshed: it holds the
+// user's own settings (weight, priority, proxy_url, prefix, request_retry, …)
+// which the host's plugin-token-storage Save would otherwise overwrite with our
+// small Metadata map, dropping them from the auth file on every refresh.
+func toAuthDataForRefresh(sa *storedAuth, carrier map[string]any) pluginapi.AuthData {
+	ad := toAuthDataOpts(sa, nil, false, carrier)
 	ad.FileName = "" // let host backfill original
 	ad.ID = ""       // let host compute from path (prevents ID mismatch dupes)
 	return ad

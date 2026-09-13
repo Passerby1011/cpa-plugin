@@ -338,11 +338,13 @@ func workBuddyRealmFromAccessToken(accessToken string) (workBuddyRealm, error) {
 	if err != nil || !issuer.IsAbs() || issuer.Hostname() == "" {
 		return "", fmt.Errorf("JWT issuer is not an absolute URL")
 	}
+	switch {
+	case isGlobalDomain(issuer.Hostname()):
+		return workBuddyRealmGlobal, nil
+	}
 	switch strings.ToLower(issuer.Hostname()) {
 	case "codebuddy.cn", "www.codebuddy.cn", "copilot.tencent.com":
 		return workBuddyRealmCN, nil
-	case "workbuddy.ai":
-		return workBuddyRealmGlobal, nil
 	default:
 		return "", fmt.Errorf("JWT issuer host is unsupported")
 	}

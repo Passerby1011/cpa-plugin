@@ -72,12 +72,29 @@ func refreshCall(sa *storedAuth) (json.RawMessage, []byte, int, error) {
 	return refreshCallWithCallback(sa, "")
 }
 
-func refreshCallWithCallback(sa *storedAuth, callbackID string) (json.RawMessage, []byte, int, error) {
+// oauthProfileForAuth resolves the request profile for calls tied to one stored
+// account (token refresh) instead of to the login flow the user last started.
+// The realm always follows the account: a Global token only exists on
+// www.workbuddy.ai, so it must refresh there no matter which channel is
+// configured for logins. CN accounts keep the configured desktop channel —
+// workbuddy-ai collapses to workbuddy because only the realm differs — and
+// fall back to the CLI profile when that is what the config asks for.
+func oauthProfileForAuth(sa *storedAuth) oauthRequestProfile {
+	if sa != nil && isGlobalDomain(sa.Auth.Domain) {
+		return oauthProfileForMode(oauthClientModeWorkBuddyAI)
+	}
 	mode := oauthClientModeCLI
 	if features := currentFeatureRuntime(); features != nil {
 		mode = features.oauthClientMode
 	}
-	req, err := buildTokenRefreshRequest(oauthProfileForMode(mode), sa)
+	if mode == oauthClientModeWorkBuddyAI {
+		mode = oauthClientModeWorkBuddy
+	}
+	return oauthProfileForMode(mode)
+}
+
+func refreshCallWithCallback(sa *storedAuth, callbackID string) (json.RawMessage, []byte, int, error) {
+	req, err := buildTokenRefreshRequest(oauthProfileForAuth(sa), sa)
 	if err != nil {
 		return nil, nil, 0, err
 	}

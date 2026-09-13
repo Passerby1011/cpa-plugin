@@ -456,3 +456,37 @@ test("partial import all failure keeps modal open and sanitizes long names", asy
   assert.equal(modal.classList.contains("show"), true);
   assert.equal(toastDetail, "0 成功 / 1 失败 · " + "x".repeat(120) + "：导入失败");
 });
+
+// Long account names used to stretch the <h2> row and wrap the badge group onto
+// a second line. The name span now truncates with an ellipsis and carries the
+// full value in title=.
+test("card name truncates with ellipsis and exposes the full value via title", () => {
+  const { context } = loadPanel();
+  const long = "very-long-account-name-that-would-otherwise-wrap-the-badges";
+  const html = context.card({ auth_index: "a1", nickname: long, region: "cn", plan: "pro" });
+  assert.match(html, /<span class="card-name" title="[^"]*">/, "name span carries a title attribute");
+  assert.match(html, /class="card-name"[^>]*>very-long-account-name/, "name renders inside the span");
+  assert.match(html, /class="card-badges"/, "badges keep their own container");
+});
+
+test("card name title falls back through nickname, label and name", () => {
+  const { context } = loadPanel();
+  assert.match(context.card({ auth_index: "a2", label: "Label Only", region: "cn" }), /title="Label Only"/);
+  assert.match(context.card({ auth_index: "a3", name: "file-name.json", region: "cn" }), /title="file-name.json"/);
+});
+
+test("card name title escapes markup from the account name", () => {
+  const { context } = loadPanel();
+  const html = context.card({ auth_index: "a4", nickname: 'x" onmouseover="alert(1)', region: "cn" });
+  assert.doesNotMatch(html, /onmouseover="alert\(1\)"/, "attribute injection must be escaped");
+  assert.match(html, /&quot;/);
+});
+
+test("panel CSS truncates the card name and keeps badges on one line", () => {
+  const html = fs.readFileSync(path.join(__dirname, "panel.html"), "utf8");
+  assert.match(html, /\.card-name\{[^}]*text-overflow:ellipsis/);
+  assert.match(html, /\.card-name\{[^}]*white-space:nowrap/);
+  assert.match(html, /\.card-name\{[^}]*min-width:0/);
+  assert.match(html, /\.card-badges\{[^}]*flex:0 0 auto/);
+  assert.match(html, /\.card-badges\{[^}]*white-space:nowrap/);
+});

@@ -93,12 +93,17 @@ const (
 	originReferer       = "https://www.codebuddy.cn"
 	originRefererGlobal = "https://www.workbuddy.ai"
 
+	// Plugin OAuth paths, gateway-relative: oauthProfileForMode picks the
+	// gateway per client mode (CN for cli/workbuddy, www.workbuddy.ai for
+	// workbuddy-ai), so only the CN forms below pin a base.
+	pluginAuthStatePath    = "/v2/plugin/auth/state"
+	pluginAuthTokenPath    = "/v2/plugin/auth/token?state="
+	pluginLoginAccountPath = "/v2/plugin/login/account?state="
+
 	// CN endpoint aliases (login / chat). upstreamBaseCN is the only
 	// CN base; Global has its own upstreamBaseGlobal. No "upstreamBase" legacy
 	// alias — removed in v0.6.31 dead-code sweep.
-	endpointAuthState = upstreamBaseCN + "/v2/plugin/auth/state?platform=CLI"
-	endpointLoginAcct = upstreamBaseCN + "/v2/plugin/login/account?state="
-	endpointAuthToken = upstreamBaseCN + "/v2/plugin/auth/token?state="
+	endpointAuthState = upstreamBaseCN + pluginAuthStatePath + "?platform=CLI"
 
 	loginTTL = 5 * time.Minute
 )
@@ -356,7 +361,7 @@ func wbRegistration() registration {
 				{Name: "desensitize", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Insert U+200B into configured blocked terms in system/developer prompt text and tool title/description fields (default false)."},
 				{Name: "desensitize_terms", Type: pluginapi.ConfigFieldTypeArray, Description: "Editable literal term list for desensitize; missing uses the built-in 85 terms and [] means an empty custom list."},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model IDs, single-line strings only. A non-empty list is the complete catalog and bypasses WorkBuddy catalog HTTP and cache; models.dev metadata fetch and cache still apply. Missing, null, or [] keeps dynamic WorkBuddy discovery."},
-				{Name: "oauth_client_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{oauthClientModeCLI, oauthClientModeWorkBuddy}, Description: "OAuth request profile: cli (default) or explicit WorkBuddy desktop profile."},
+				{Name: "oauth_client_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{oauthClientModeCLI, oauthClientModeWorkBuddy, oauthClientModeWorkBuddyAI}, Description: "OAuth login channel: cli (default), workbuddy (CN desktop, platform=workbuddy) or workbuddy-ai (international desktop, platform=workbuddy-ai on www.workbuddy.ai)."},
 				{Name: "enterprise_credits", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Probe strict CN enterprise credits before personal resource packages (default false; Global unchanged)."},
 				{Name: "management_key", Type: pluginapi.ConfigFieldTypeString, Description: "Optional Bearer key enforced by WorkBuddy for mutating management endpoints; also env WB_MANAGEMENT_KEY."},
 				{Name: "proxy-url", Type: pluginapi.ConfigFieldTypeString, Description: "Optional plugin-level proxy for all WorkBuddy HTTP traffic. Supports http, https, socks5, and socks5h; empty preserves existing routing and host-bridged calls inherit CPA. Invalid settings fail closed. Explicit proxy traffic bypasses CPA request-log."},
@@ -608,6 +613,11 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
+	// User-owned auth metadata (weight, priority, proxy_url, prefix, headers,
+	// request_retry…) lives at the JSON top level, not under auth/account. The
+	// host hands us the raw file, so read it straight from there: returning a
+	// Metadata map without these keys makes the host drop them on rewrite.
+	carrier := parseAuthMetadataCarrier(req.RawJSON)
 	// Ownership check (CPA native contract): the host routes by the file's
 	// top-level "type" field (synthesizer/file.go). Files without a type fall
 	// back to polling every plugin — first Handled=true wins. Only claim files
@@ -645,7 +655,7 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 	// By leaving ID empty, CPA falls back to authIDForPath(path) which
 	// derives ID from the file path → always matches the watcher's key.
 	// FileName is also echoed back to avoid rename-based duplicates.
-	ad := toAuthDataOpts(sa, nil, false)
+	ad := toAuthDataOpts(sa, nil, false, carrier)
 	ad.ID = "" // let host compute from path (prevents ID mismatch dupes)
 	if fn := strings.TrimSpace(req.FileName); fn != "" {
 		ad.FileName = fn
@@ -657,11 +667,59 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 }
 
 func toAuthData(sa *storedAuth) pluginapi.AuthData {
-	return toAuthDataOpts(sa, nil, false)
+	return toAuthDataOpts(sa, nil, false, nil)
+}
+
+// authMetadataUserKeys are the top-level auth-file fields the host treats as
+// user configuration. They must survive every plugin-driven rewrite, so a
+// carrier built from an auth file only forwards these keys (never credentials
+// or plugin-owned presentation fields).
+var authMetadataUserKeys = []string{
+	"weight",
+	"priority",
+	"proxy_url",
+	"proxy-url",
+	"prefix",
+	"headers",
+	"request_retry",
+	"request-retry",
+	"excluded_models",
+	"excluded-models",
+	"model_aliases",
+	"model-aliases",
+	"disable_cooling",
+	"disable-cooling",
+	"websockets",
+	"note",
+}
+
+// parseAuthMetadataCarrier extracts user-owned metadata from a raw auth file.
+func parseAuthMetadataCarrier(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil
+	}
+	carrier := make(map[string]any, len(authMetadataUserKeys))
+	for _, key := range authMetadataUserKeys {
+		if value, ok := doc[key]; ok {
+			carrier[key] = value
+		}
+	}
+	if len(carrier) == 0 {
+		return nil
+	}
+	return carrier
 }
 
 // toAuthDataOpts builds AuthData with optional credits snapshot and disabled flag.
-func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool) pluginapi.AuthData {
+// carrier is the auth record the host already holds (from AuthRefreshRequest or
+// AuthParseRequest); when present, its user-owned metadata (weight, priority,
+// proxy_url, prefix, headers, request_retry, note…) is merged in so the host's
+// Save path does not overwrite it with the plugin's small Metadata map.
+func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool, carrier map[string]any) pluginapi.AuthData {
 	storage, _ := json.Marshal(sa)
 	id := providerName
 	fileName := authFileName
@@ -673,6 +731,17 @@ func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool) pluginapi
 	}
 	label := labelForAuth(sa)
 	meta := enrichAuthMetadata(sa, cr, disabled)
+	// Host-owned keys stay authoritative: `note` is the plugin's live credits
+	// summary and `disabled` is the lifecycle flag. Everything else the user
+	// configured is carried through untouched.
+	meta["note"] = displayNote(sa, cr, disabled)
+	meta["disabled"] = disabled
+	for key, value := range carrier {
+		if _, pluginOwned := meta[key]; pluginOwned {
+			continue
+		}
+		meta[key] = value
+	}
 	return pluginapi.AuthData{
 		Provider:    providerName,
 		ID:          id,

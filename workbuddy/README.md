@@ -12,6 +12,12 @@ built-in management dashboard.
 
 - **OAuth login** — multi-account `workbuddy-<uid>.json` auth files via the
   host's auth store. CN and Global realms share one plugin, one config block.
+  `oauth_client_mode` picks the login channel: `cli` (default), `workbuddy`
+  (CN desktop: `platform=workbuddy` on `copilot.tencent.com`), or
+  `workbuddy-ai` (international desktop: `platform=workbuddy-ai` on
+  `www.workbuddy.ai`). The mode only shapes the login flow — the issued token's
+  domain decides routing afterwards, so no extra config is needed to run both
+  realms side by side.
 - **Model catalog**: by default the plugin discovers and caches each
   authenticated account's model entitlements. An optional authoritative YAML
   list can replace WorkBuddy discovery. Both modes enrich missing metadata from
@@ -115,6 +121,15 @@ plugins:
       # Empty/unset inherits existing CPA routing. Invalid settings and runtime
       # proxy failures fail closed and never fall back to CPA or a direct route.
       proxy-url: ""
+
+      # OAuth login channel (default "cli"):
+      #   cli         → CLI client profile on copilot.tencent.com (platform=CLI)
+      #   workbuddy   → CN desktop profile (platform=workbuddy)
+      #   workbuddy-ai → international desktop profile: platform=workbuddy-ai on
+      #                  www.workbuddy.ai. Required to log in an international
+      #                  account; the issued token's domain then routes the
+      #                  account to the Global gateway automatically.
+      oauth_client_mode: "cli"
 
       # Daily check-in automation for CN accounts (default true).
       # Runs at 09:00 and 21:00 local time.

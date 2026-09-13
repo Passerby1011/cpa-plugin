@@ -9,7 +9,11 @@
 ## 功能
 
 - **OAuth 登录** — 通过宿主 auth store 管理多账号 `workbuddy-<uid>.json`，
-  CN 和 Global 共用一个插件、一份配置。
+  CN 和 Global 共用一个插件、一份配置。`oauth_client_mode` 选择登录通道：
+  `cli`（默认）、`workbuddy`（国内桌面版，`platform=workbuddy` 走
+  `copilot.tencent.com`）、`workbuddy-ai`（国际桌面版，`platform=workbuddy-ai`
+  走 `www.workbuddy.ai`）。该配置只影响登录流程，登录拿到的 token 由 domain
+  字段决定后续路由，所以两个区域可以同时用，不需要额外配置。
 - **模型目录**：默认按已认证账号发现并缓存可用模型，也可以用 YAML 中的完整
   列表替代 WorkBuddy discovery。两种模式都会用 models.dev 补充缺失的 metadata。
   宿主侧 `oauth-model-alias` / `oauth-excluded-models` 配置仍然生效。
@@ -101,6 +105,14 @@ plugins:
       # 空值或未设置时继承现有 CPA 路由；配置无效或代理运行失败时
       # fail closed，不会回退到 CPA 全局代理或直连。
       proxy-url: ""
+
+      # OAuth 登录通道（默认 "cli"）：
+      #   cli          → CLI 客户端 profile，走 copilot.tencent.com（platform=CLI）
+      #   workbuddy    → 国内桌面版 profile（platform=workbuddy）
+      #   workbuddy-ai → 国际桌面版 profile：platform=workbuddy-ai 走
+      #                  www.workbuddy.ai。登录国际版账号需要它；拿到的 token
+      #                  由 domain 字段决定后续路由，自动走 Global 网关。
+      oauth_client_mode: "cli"
 
       # CN 账号每日自动签到（默认 true），09:00 和 21:00 本地时间。
       checkin_auto: true

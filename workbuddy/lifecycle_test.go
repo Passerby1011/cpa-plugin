@@ -135,7 +135,7 @@ func TestBuildAuthFileJSON_ContainsDisabledAndNote(t *testing.T) {
 		Auth:    storedTokens{AccessToken: "at", RefreshToken: "rt", Domain: "www.codebuddy.cn"},
 		Account: storedAccount{UID: "u1", Nickname: "nick"},
 	}
-	raw, err := buildAuthFileJSON(sa, true, "CN · test", nil)
+	raw, err := buildAuthFileJSON(nil, sa, true, "CN · test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

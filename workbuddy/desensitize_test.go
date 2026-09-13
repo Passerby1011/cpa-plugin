@@ -82,9 +82,22 @@ func TestParseFeatureRuntimeRejectsUnsafeTermsAndModes(t *testing.T) {
 		"desensitize_terms: [x]\n",
 		"desensitize_terms: ['a​b']\n",
 		"oauth_client_mode: browser\n",
+		"oauth_client_mode: workbuddy-ai-oversea\n",
 	} {
 		if _, err := parseFeatureRuntime([]byte(raw)); err == nil {
 			t.Fatalf("parseFeatureRuntime(%q) succeeded", raw)
+		}
+	}
+}
+
+func TestParseFeatureRuntimeAcceptsEveryOAuthClientMode(t *testing.T) {
+	for _, mode := range []string{oauthClientModeCLI, oauthClientModeWorkBuddy, oauthClientModeWorkBuddyAI} {
+		cfg, err := parseFeatureRuntime([]byte("oauth_client_mode: " + mode + "\n"))
+		if err != nil {
+			t.Fatalf("parseFeatureRuntime(%q): %v", mode, err)
+		}
+		if cfg.oauthClientMode != mode {
+			t.Fatalf("oauthClientMode = %q, want %q", cfg.oauthClientMode, mode)
 		}
 	}
 }

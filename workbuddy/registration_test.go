@@ -68,7 +68,7 @@ func TestRegistrationExposesForkFusionConfig(t *testing.T) {
 	if !ok {
 		t.Fatal("missing oauth_client_mode config field")
 	}
-	if mode.Type != pluginapi.ConfigFieldTypeEnum || !sameStrings(mode.EnumValues, []string{"cli", "workbuddy"}) {
+	if mode.Type != pluginapi.ConfigFieldTypeEnum || !sameStrings(mode.EnumValues, []string{"cli", "workbuddy", "workbuddy-ai"}) {
 		t.Fatalf("oauth_client_mode = %#v", mode)
 	}
 }

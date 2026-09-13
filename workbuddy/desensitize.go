@@ -15,6 +15,9 @@ const (
 	zeroWidthSpace           = "​"
 	oauthClientModeCLI       = "cli"
 	oauthClientModeWorkBuddy = "workbuddy"
+	// oauthClientModeWorkBuddyAI is the international (WorkBuddy AI) channel:
+	// login against www.workbuddy.ai with platform=workbuddy-ai.
+	oauthClientModeWorkBuddyAI = "workbuddy-ai"
 )
 
 var defaultDesensitizeTerms = []string{
@@ -96,8 +99,8 @@ func parseFeatureRuntime(raw []byte) (*featureRuntimeConfig, error) {
 	if mode == "" {
 		mode = oauthClientModeCLI
 	}
-	if mode != oauthClientModeCLI && mode != oauthClientModeWorkBuddy {
-		return nil, errors.New("oauth_client_mode must be cli or workbuddy")
+	if mode != oauthClientModeCLI && mode != oauthClientModeWorkBuddy && mode != oauthClientModeWorkBuddyAI {
+		return nil, errors.New("oauth_client_mode must be cli, workbuddy or workbuddy-ai")
 	}
 
 	terms, source, err := normalizedDesensitizeTerms(doc.DesensitizeTerms)

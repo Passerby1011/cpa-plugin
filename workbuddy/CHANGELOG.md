@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+### 新增
+
+- **国际版（WorkBuddy AI）OAuth 登录**：`oauth_client_mode: workbuddy-ai` 走
+  `www.workbuddy.ai` + `platform=workbuddy-ai`，对齐官方国际版桌面客户端。
+  此前只有国内登录通道，国际版账号只能手动导入凭证。
+- token 轮询与账号查询改为跟随登录网关（此前硬编码在国内网关）。state、token、
+  account 三个端点必须在签发 state 的那台网关上轮询——跨网关不会报错，但会静默
+  换回另一个账号。
+- `loginSessionId` 只在国内桌面 profile 上追加：它是国内桌面端的上报会话 ID，
+  国际版登录页不认识这个参数。
+- `oauth_client_mode` 枚举值由 `cli | workbuddy` 扩为
+  `cli | workbuddy | workbuddy-ai`。
+
+### 修复
+
+- **账号卡片长用户名截断**：卡片标题行左侧的用户名过长时会把右侧徽标（使用中/已禁用/耗尽/区域/套餐）
+  挤到第二行。现在用户名用省略号截断，`title` 暴露完整内容，徽标固定在同一行。
+- **刷新不再丢用户配置**：auth 文件顶层的用户字段（`weight` 权重、`priority`、
+  `proxy_url`、`prefix`、`headers`、`request_retry`、`websockets` 等）此前会在每轮
+  重写 auth 文件时被抹掉——写文件的几条路径都从零构造 JSON，只保留
+  type/provider/logo/disabled/note/auth/account。现在统一改成「读现有文件 → 只覆盖
+  插件自有键」，刷新/生命周期/导入三条路径都保留用户字段。
+- **`weight` 保持不变**：CPA 的 auth 文件 `weight` 字段是宿主调度权重，插件重写时
+  原来会丢掉，导致每次刷新后权重回到默认值。
+- **国际版账号模型目录 `auth_invalid`**：`workBuddyRealmFromAccessToken` 只认裸
+  `workbuddy.ai`，而国际版 JWT issuer 是 `https://www.workbuddy.ai/auth/realms/copilot`，
+  落到 unknown 分支 → 模型引导判定 `auth_invalid`、面板显示「模型目录不可用」。改为按
+  `isGlobalDomain` 匹配（`workbuddy.ai` 及任意子域）。
+- **token 刷新改为跟随账号区域**：刷新端点此前按全局 `oauth_client_mode` 选网关，
+  国际版账号在 CN 模式下会刷新到错误主机。现在按账号 `domain` 选网关（`www.workbuddy.ai`
+  ↔ `copilot.tencent.com`）。
+
 ## 0.9.5
 
 ### Official-client wire alignment

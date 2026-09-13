@@ -57,7 +57,9 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .card,.summary{background:var(--card);border:1px solid var(--border);border-radius:12px}
 .card{padding:16px}
 .card.selected{border-color:var(--acc);box-shadow:0 0 0 2px var(--acc-ring)}
-.card h2{font-size:15px;margin:0 0 2px;display:flex;justify-content:space-between;align-items:center}
+.card h2{font-size:15px;margin:0 0 2px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.card-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card-badges{display:flex;gap:6px;align-items:center;flex:0 0 auto;white-space:nowrap}
 .uid{color:var(--mut);font-size:11px;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:12px}
 .badge{font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-border)}
 .badge.exhausted{background:var(--err-soft);color:var(--err);border:1px solid var(--err-border)}
@@ -393,6 +395,7 @@ function card(a){
   const isEnt=!!a.enterprise;
   const disabled=!!a.disabled;
   const selected=!!a.selected;
+  const displayName=a.nickname||a.label||a.name||"";
   const regionBadge=`<span class="badge ${region}">${isGlobal?"Global":"CN"}</span>`;
   // Enterprise: no check-in / no trial claim (quota is admin-managed).
   // CN: 签到 button; Global: 领取专家加油包 button (or 已领取 if trial_claimed)
@@ -419,7 +422,7 @@ function card(a){
   const planLabel=plan==="enterprise"?"企业版":(a.plan||"-");
   const badges=(selected?`<span class="badge" style="background:var(--acc-ring);color:var(--acc);border-color:var(--acc)">使用中</span>`:"")+(disabled?`<span class="badge disabled">已禁用</span>`:"")+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${plan}">${esc(planLabel)}</span>`;
   return `<div class="card${selected?" selected":""}" data-region="${region}" data-auth="${esc(a.auth_index)}">
-  <h2>${esc(a.nickname||a.label||a.name)} <span style="display:flex;gap:6px;align-items:center">${badges}</span></h2>
+  <h2><span class="card-name" title="${esc(displayName)}">${esc(displayName)}</span><span class="card-badges">${badges}</span></h2>
   <div class="uid">${esc(a.uid||"")} · ${esc(a.name||"")}</div>
   ${progressHTML(cr)}
   ${a.error?`<div class="row"><span class="k">错误</span><span class="v err">${esc(a.error)}</span></div>`:""}
