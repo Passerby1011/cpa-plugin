@@ -338,7 +338,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.9.4"
+var version = "0.9.5"
 
 func wbRegistration() registration {
 	return registration{
@@ -569,7 +569,16 @@ func backendHeaders(req *http.Request, sa *storedAuth) {
 	req.Header.Set("X-IDE-Name", "CLI")
 	req.Header.Set("X-IDE-Version", "2.63.2")
 	req.Header.Set("X-Agent-Intent", "craft")
+	// Headers the official CLI also sends on model requests (module 63355's
+	// constant table). X-Trace-ID/X-Root-Request-ID are per-request trace ids;
+	// X-Parent-Conversation-ID and X-Agent-Type are only sent when the session
+	// actually has them, so they stay absent here (an empty value would be a
+	// shape the official client never produces). X-Session-ID and
+	// X-Product-Version are declared by the CLI but never assigned on the chat
+	// path, so the plugin mirrors that by not sending them.
+	req.Header.Set("X-Trace-ID", randomHex(16))
 	req.Header.Set("X-Request-ID", randomHex(16))
+	req.Header.Set("X-Root-Request-ID", randomHex(16))
 	req.Header.Set("X-Conversation-ID", randomHex(16))
 	req.Header.Set("X-Conversation-Request-ID", randomHex(16))
 	req.Header.Set("X-Conversation-Message-ID", randomHex(16))
