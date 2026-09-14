@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.8
+
+### 新增
+
+- **模型列表显示消耗倍率**：上游两个目录端点（`/v3/config` 的 `data.models[]`、
+  `/console/enterprises/personal/models`）都为每个模型下发 `credits` 字段，值即
+  该模型的扣费倍率（如 `x0.79 credits`；个别条目为无单位的 `x0.05`）。现在解析
+  该字段并写进 `display_name`，形如 `Balanced · x0.59 credits`。这同时修掉了
+  workbuddy 模型 `DisplayName` 恒空的问题——此前 Claude 格式 `/v1/models` 只能
+  回落显示模型 ID。
+
+  可见位置：认证文件列表的「模型」弹窗（宿主该端点只回 `id`/`display_name`/
+  `type`，`display_name` 是唯一能多显示一列的字段）、Claude 格式 `/v1/models`、
+  Codex 格式 `/v1/models?client_version=1`、Gemini 格式 `/v1beta/models`。
+
+  目录未下发倍率的模型保持 `display_name` 为空（宿主回落到模型 ID），行为与改动
+  前一致。倍率随目录一起缓存，无额外上游请求。
+
+  注意：模型目录缓存 schema 版本未提升，服务中的进程要等下一次成功的目录刷新
+  （或重启、`POST /v0/management/plugins/workbuddy/refresh`）才会出现倍率。
+
 ## 0.9.7
 
 ### 修复

@@ -212,6 +212,22 @@ func cloneModelFacts(facts modelFacts) modelFacts {
 	return facts
 }
 
+// modelDisplayName appends the upstream charge rate to the model name for the
+// host's display_name surfaces, so a picked model shows what it costs. Empty
+// when the catalog sent no rate, which leaves display_name at its prior value
+// (the host then falls back to the model ID).
+func modelDisplayName(name, credits string) string {
+	name = strings.TrimSpace(name)
+	credits = strings.TrimSpace(credits)
+	if credits == "" {
+		return ""
+	}
+	if name == "" {
+		return credits
+	}
+	return name + " \u00b7 " + credits
+}
+
 func fillMissingModelFacts(dst *modelFacts, src modelFacts) {
 	if dst.Name == "" {
 		dst.Name = src.Name
@@ -240,6 +256,9 @@ func modelInfoFromSources(serving modelFacts, canonical *modelFacts) pluginapi.M
 	}
 	info := defaultModelInfo(serving.ID, merged.Name)
 	info.Description = merged.Description
+	if display := modelDisplayName(merged.Name, merged.Credits); display != "" {
+		info.DisplayName = display
+	}
 	if merged.ContextLength != nil {
 		info.ContextLength = *merged.ContextLength
 	}

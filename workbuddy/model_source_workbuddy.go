@@ -18,6 +18,7 @@ type modelFacts struct {
 	ID                        string   `json:"id"`
 	Name                      string   `json:"name,omitempty"`
 	Description               string   `json:"description,omitempty"`
+	Credits                   string   `json:"credits,omitempty"`
 	ContextLength             *int64   `json:"context_length,omitempty"`
 	MaxCompletionTokens       *int64   `json:"max_completion_tokens,omitempty"`
 	SupportedInputModalities  []string `json:"supported_input_modalities,omitempty"`
@@ -88,8 +89,12 @@ type workBuddyModelEntryWire struct {
 	DescriptionEn string `json:"descriptionEn"`
 	DescriptionZh string `json:"descriptionZh"`
 	Disabled      bool   `json:"disabled"`
-	MaxOutput     *int64 `json:"maxOutputTokens"`
-	MaxInput      *int64 `json:"maxInputTokens"`
+	// Credits is the upstream per-model charge rate ("x0.79 credits"; some
+	// entries send a bare "x0.05"). Only the two catalog endpoints populate it;
+	// it is what the host surfaces as a model's display_name.
+	Credits   string `json:"credits"`
+	MaxOutput *int64 `json:"maxOutputTokens"`
+	MaxInput  *int64 `json:"maxInputTokens"`
 }
 
 // fact converts a catalog entry into modelFacts. The upstream sends the display
@@ -103,6 +108,7 @@ func (m workBuddyModelEntryWire) fact() modelFacts {
 		// maxInputTokens is the model's input window; the client uses it as the
 		// context length (maxAllowedSize is a separate, larger allowance).
 		Description:         firstNonEmpty(m.Description, m.DescriptionEn, m.DescriptionZh),
+		Credits:             strings.TrimSpace(m.Credits),
 		ContextLength:       m.MaxInput,
 		MaxCompletionTokens: m.MaxOutput,
 	}

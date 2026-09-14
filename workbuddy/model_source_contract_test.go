@@ -56,9 +56,15 @@ func TestParseRealV3CatalogCarriesUpstreamLimits(t *testing.T) {
 	if ds.Description == "" {
 		t.Fatal("description lost (should fall back to descriptionEn)")
 	}
+	if ds.Credits != "x0.03 credits" {
+		t.Fatalf("credits = %q, want x0.03 credits", ds.Credits)
+	}
 	// roster ids without a detail row survive with nil limits
 	if byID["hy4-preview"].MaxCompletionTokens != nil {
 		t.Fatalf("hy4-preview should have nil limits: %#v", byID["hy4-preview"])
+	}
+	if byID["hy4-preview"].Credits != "" {
+		t.Fatalf("hy4-preview should have empty credits: %#v", byID["hy4-preview"])
 	}
 }
 
@@ -85,6 +91,9 @@ func TestParseRealFullCatalogCarriesUpstreamLimits(t *testing.T) {
 	if glm.MaxCompletionTokens == nil || *glm.MaxCompletionTokens != 32000 {
 		t.Fatalf("glm-5.3-flash max completion = %#v, want 32000", glm.MaxCompletionTokens)
 	}
+	if glm.Credits != "" {
+		t.Fatalf("glm-5.3-flash credits = %q, want empty (fixture omits it)", glm.Credits)
+	}
 }
 
 // Both account routes serve the same catalog shape; the parser must not depend
@@ -110,5 +119,77 @@ func TestParseCatalogIsRouteIndependent(t *testing.T) {
 	// round-trip must be clean JSON
 	if _, err := json.Marshal(viaV3); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The upstream sends the charge rate either as "x0.79 credits" or, for some
+// entries, as a bare "x0.05" with no unit. Both must survive parsing, and the
+// host may only ever show display_name, so the rate rides along there.
+func TestParseCatalogAcceptsBothCreditsShapes(t *testing.T) {
+	raw := []byte(`{"code":0,"data":{"models":[
+	  {"id":"serve-unit","name":"Unit","credits":"x0.79 credits"},
+	  {"id":"serve-bare","name":"Bare","credits":"x0.05"},
+	  {"id":"serve-zero","name":"Zero","credits":"x0.00 credits"}
+	]}}`)
+	got, err := parseWorkBuddyLegacyModels(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]modelFacts{}
+	for _, m := range got {
+		byID[m.ID] = m
+	}
+	for id, want := range map[string]string{
+		"serve-unit": "x0.79 credits",
+		"serve-bare": "x0.05",
+		"serve-zero": "x0.00 credits",
+	} {
+		if byID[id].Credits != want {
+			t.Errorf("%s credits = %q, want %q", id, byID[id].Credits, want)
+		}
+	}
+}
+
+// The rate has to survive the on-disk catalog cache, or a cache-served snapshot
+// would show models with no rate until the next successful upstream fetch.
+func TestModelFactsCreditsSurviveCacheRoundTrip(t *testing.T) {
+	original := []modelFacts{{ID: "serve-unit", Name: "Unit", Credits: "x0.79 credits"}}
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored []modelFacts
+	if err := json.Unmarshal(raw, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if len(restored) != 1 || restored[0].Credits != "x0.79 credits" {
+		t.Fatalf("credits lost through cache round-trip: %#v", restored)
+	}
+}
+
+// modelInfoFromSources is the only place that writes display_name, so pin its
+// composition and its no-rate fallback here.
+func TestModelInfoFromSourcesSetsDisplayNameFromCredits(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		facts    modelFacts
+		wantShow string
+	}{
+		{"name and rate", modelFacts{ID: "serve-alpha", Name: "Alpha", Credits: "x0.79 credits"}, "Alpha \u00b7 x0.79 credits"},
+		{"no rate keeps display_name empty", modelFacts{ID: "serve-alpha", Name: "Alpha"}, ""},
+		{"rate without a name shows the rate", modelFacts{ID: "serve-alpha", Credits: "x0.05"}, "x0.05"},
+		{"padded rate is trimmed", modelFacts{ID: "serve-alpha", Name: "Alpha", Credits: "  x0.79 credits  "}, "Alpha \u00b7 x0.79 credits"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := modelInfoFromSources(tc.facts, nil).DisplayName; got != tc.wantShow {
+				t.Errorf("DisplayName = %q, want %q", got, tc.wantShow)
+			}
+		})
+	}
+	// An empty display_name must not override what the host shows instead: the
+	// Name stays intact either way.
+	info := modelInfoFromSources(modelFacts{ID: "serve-alpha", Name: "Alpha"}, nil)
+	if info.Name != "Alpha" || info.DisplayName != "" {
+		t.Fatalf("no-rate model = %#v", info)
 	}
 }
