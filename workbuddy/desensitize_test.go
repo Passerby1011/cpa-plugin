@@ -80,7 +80,7 @@ func TestParseFeatureRuntimeDistinguishesDefaultCustomEmptyAndNull(t *testing.T)
 func TestParseFeatureRuntimeRejectsUnsafeTermsAndModes(t *testing.T) {
 	for _, raw := range []string{
 		"desensitize_terms: [x]\n",
-		"desensitize_terms: ['a​b']\n",
+		"desensitize_terms: ['a\u200bb']\n",
 		"oauth_client_mode: browser\n",
 		"oauth_client_mode: workbuddy-ai-oversea\n",
 	} {
@@ -111,14 +111,14 @@ func TestDesensitizeMatcherIsLiteralCaseInsensitiveConvergentAndIdempotent(t *te
 		in   string
 		want string
 	}{
-		{"DDoS", "D​D​oS"},
-		{"EXPLOIT-free skill", "E​XPLOIT-free sk​ill"},
-		{"attacker", "a​ttacker"},
-		{"noreply@anthropic.com", "n​oreply@a​nthropic.com"},
-		{"abcd", "a​b​cd"},
-		{"a+b", "a​+b"},
-		{"Codex codex", "C​odex c​odex"},
-		{"a​ttack", "a​ttack"},
+		{"DDoS", "D\u200bD\u200boS"},
+		{"EXPLOIT-free skill", "E\u200bXPLOIT-free sk\u200bill"},
+		{"attacker", "a\u200bttacker"},
+		{"noreply@anthropic.com", "n\u200boreply@a\u200bnthropic.com"},
+		{"abcd", "a\u200bb\u200bcd"},
+		{"a+b", "a\u200b+b"},
+		{"Codex codex", "C\u200bodex c\u200bodex"},
+		{"a\u200bttack", "a\u200bttack"},
 	} {
 		got := cfg.matcher.replace(tt.in)
 		if got != tt.want {

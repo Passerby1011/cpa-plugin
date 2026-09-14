@@ -1792,3 +1792,82 @@ func assertModelRuntimeSnapshotRedacted(t *testing.T, got modelReadinessSnapshot
 		}
 	}
 }
+
+// TestModelRuntimeStaleMetadataRetriesAfterBackoff covers the production
+// failure mode: models.dev fails while a valid on-disk metadata cache exists.
+// The cached fallback must be served, but the failure must NOT settle
+// permanently — once the retry window elapses the next rebuild must call
+// upstream again and recover to ready.
+//
+// The test does not poke metadataRetryAt directly: it shortens the configured
+// backoff so the real expiry path (metadataSettledLocked) is exercised.
+func TestModelRuntimeStaleMetadataRetriesAfterBackoff(t *testing.T) {
+	previousBackoff := metadataRetryBackoff
+	metadataRetryBackoff = 500 * time.Millisecond
+	t.Cleanup(func() { metadataRetryBackoff = previousBackoff })
+
+	root := t.TempDir()
+	sa := syntheticStoredAuth(t, workBuddyRealmCN)
+	modelRuntimeSeedLastGood(t, root, "auth-stale-retry", sa)
+
+	metadataCalls := 0
+	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
+		switch req.URL.Host {
+		case "copilot.tencent.com":
+			return modelRuntimeFreshWorkBuddyResponse(), nil
+		case "models.dev":
+			metadataCalls++
+			if metadataCalls == 1 {
+				return nil, errors.New(modelRuntimeRawMetadataTransport)
+			}
+			return modelRuntimeFreshMetadataResponse(), nil
+		default:
+			t.Fatalf("unexpected model request %s", req.URL)
+			return nil, nil
+		}
+	}
+
+	runtime := newModelRuntime(newModelStore(root), do)
+	request := authModelRequestWire{
+		AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-stale-retry", StorageJSON: mustJSON(sa)},
+		HostCallbackID:   "callback-stale-retry",
+	}
+
+	first := runtime.ensureForAuth(request)
+	if first.State != modelStale || first.MetadataSource != modelSourceCache || first.ErrorCode != modelErrorModelsDevTransport {
+		t.Fatalf("first snapshot = %#v", first)
+	}
+	if metadataCalls != 1 {
+		t.Fatalf("metadata calls = %d, want 1", metadataCalls)
+	}
+
+	// Immediately after the failure the settled stale result is reused without
+	// upstream I/O (the dedup/backoff both rely on this).
+	runtime.advanceConfigGeneration()
+	second := runtime.ensureForAuth(request)
+	if metadataCalls != 1 {
+		t.Fatalf("metadata calls immediately after failure = %d, want 1", metadataCalls)
+	}
+	if second.State != modelStale || second.MetadataSource != modelSourceCache || second.ErrorCode != modelErrorModelsDevTransport {
+		t.Fatalf("second snapshot = %#v", second)
+	}
+
+	// Once the window elapses the runtime must retry and recover on its own.
+	time.Sleep(2 * metadataRetryBackoff)
+	runtime.advanceConfigGeneration()
+	third := runtime.ensureForAuth(request)
+	if metadataCalls != 2 {
+		t.Fatalf("metadata calls after window = %d, want 2 (failure was latched)", metadataCalls)
+	}
+	if third.State != modelReady || third.MetadataSource != modelSourceFresh || third.ErrorCode != modelErrorNone {
+		t.Fatalf("third snapshot = %#v", third)
+	}
+
+	// Recovery clears the backoff so a later rebuild settles immediately.
+	runtime.metadataMu.Lock()
+	retryAt := runtime.metadataRetryAt
+	runtime.metadataMu.Unlock()
+	if !retryAt.IsZero() {
+		t.Fatalf("metadataRetryAt = %s after recovery, want zero", retryAt)
+	}
+}

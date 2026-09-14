@@ -442,11 +442,7 @@ func buildLoginStoredAuth(tok tokenData, acct accountData) (*storedAuth, error) 
 			ExpiresAt:    expiryFromExpiresIn(tok.ExpiresIn, 0),
 			Domain:       tok.Domain,
 		},
-		Account: storedAccount{
-			UID:          acct.UID,
-			EnterpriseID: acct.EnterpriseID,
-			Nickname:     acct.Nickname,
-		},
+		Account: storedAccount(acct),
 	}, nil
 }
 

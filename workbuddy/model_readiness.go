@@ -161,6 +161,12 @@ type metadataCall struct {
 	committed bool
 }
 
+// metadataRetryBackoff bounds how long a failed upstream refresh keeps serving
+// the cached fallback before the next caller retries. Without it a single
+// transient failure would either wedge the settled result for the lifetime of
+// the process or hammer models.dev on every snapshot rebuild.
+var metadataRetryBackoff = 5 * time.Minute
+
 type modelRuntime struct {
 	store            *modelStore
 	do               modelHTTPDo
@@ -173,6 +179,14 @@ type modelRuntime struct {
 	metadataCall     *metadataCall
 	metadataCache    *metadataCacheV1
 	metadataResult   *modelMetadataResult
+	// metadataRetryAt marks when a cached fallback may be retried upstream.
+	// Zero means "retry on the next rebuild"; set only while serving a stale
+	// result after a failed refresh.
+	metadataRetryAt time.Time
+	// metadataLastFailure keeps the code the next in-window caller reports, so
+	// suppressing the upstream call does not turn a real failure into a
+	// different-looking one.
+	metadataLastFailure modelErrorCode
 }
 
 var activeModelRuntime atomic.Pointer[modelRuntime]
@@ -518,17 +532,29 @@ func (r *modelRuntime) authGenerationCurrent(slot *modelAuthSlot, key modelGener
 	return r.authGenerationCurrentLocked(slot, key, authGeneration)
 }
 
+// metadataSettledLocked reports whether the settled metadata result may still be
+// reused. A stale result (cached fallback after a failed refresh) expires so the
+// next caller retries upstream instead of serving it forever.
+func (r *modelRuntime) metadataSettledLocked() bool {
+	if r.metadataRetryAt.IsZero() {
+		return true
+	}
+	return time.Now().Before(r.metadataRetryAt)
+}
+
 func (r *modelRuntime) metadataForAuth(callbackID string, slot *modelAuthSlot, key modelGenerationKey, authGeneration uint64) modelMetadataResult {
 	var call *metadataCall
 	var cached metadataCacheV1
 	var cachedOK bool
 	var cacheReadFailed bool
+	var retryNotBefore time.Time
+	var lastFailure modelErrorCode
 	for {
 		if !r.authGenerationCurrent(slot, key, authGeneration) {
 			return modelMetadataResult{}
 		}
 		r.metadataMu.Lock()
-		if r.metadataResult != nil && r.metadataResult.ok {
+		if r.metadataResult != nil && r.metadataResult.ok && r.metadataSettledLocked() {
 			result := *r.metadataResult
 			r.metadataMu.Unlock()
 			return result
@@ -549,6 +575,8 @@ func (r *modelRuntime) metadataForAuth(callbackID string, slot *modelAuthSlot, k
 			cached = *r.metadataCache
 		}
 		cacheReadFailed = r.metadataResult != nil && r.metadataResult.errorCode == modelErrorCacheRead
+		retryNotBefore = r.metadataRetryAt
+		lastFailure = r.metadataLastFailure
 		r.metadataMu.Unlock()
 		break
 	}
@@ -557,24 +585,33 @@ func (r *modelRuntime) metadataForAuth(callbackID string, slot *modelAuthSlot, k
 	freshOK := false
 	needsSave := false
 	failure := modelErrorNone
-	fetched, err := fetchModelsDevMetadata(cached.ETag, callbackID, r.do)
-	if err != nil {
-		failure = modelsDevModelErrorCode(err)
-	} else if fetched.NotModified {
-		if cachedOK {
-			fresh = cached
-			freshOK = true
+	if retryNotBefore.IsZero() || !time.Now().Before(retryNotBefore) {
+		fetched, err := fetchModelsDevMetadata(cached.ETag, callbackID, r.do)
+		if err != nil {
+			failure = modelsDevModelErrorCode(err)
+		} else if fetched.NotModified {
+			if cachedOK {
+				fresh = cached
+				freshOK = true
+			} else {
+				failure = modelErrorModelsDevSchema
+			}
 		} else {
-			failure = modelErrorModelsDevSchema
+			fresh = metadataCacheV1{
+				SchemaVersion: modelCacheSchemaVersion,
+				ETag:          fetched.ETag,
+				FetchedAt:     time.Now().UTC(),
+				Records:       fetched.Records,
+			}
+			needsSave = true
 		}
 	} else {
-		fresh = metadataCacheV1{
-			SchemaVersion: modelCacheSchemaVersion,
-			ETag:          fetched.ETag,
-			FetchedAt:     time.Now().UTC(),
-			Records:       fetched.Records,
+		// Inside the retry window: serve the cached snapshot without touching
+		// upstream. A non-nil failure keeps the caller on the stale path.
+		failure = lastFailure
+		if failure == modelErrorNone {
+			failure = modelErrorModelsDevTransport
 		}
-		needsSave = true
 	}
 
 	r.configCommitMu.RLock()
@@ -605,15 +642,29 @@ func (r *modelRuntime) metadataForAuth(callbackID string, slot *modelAuthSlot, k
 	r.metadataMu.Lock()
 	call.result = selected
 	call.committed = true
-	if selected.ok {
+	switch {
+	case selected.ok && selected.source == modelSourceFresh:
+		// A real upstream answer settles the runtime and clears any backoff.
 		settled := selected
 		cache := selected.cache
 		r.metadataResult = &settled
 		r.metadataCache = &cache
-	} else if cacheReadFailed {
+		r.metadataRetryAt = time.Time{}
+		r.metadataLastFailure = modelErrorNone
+	case selected.ok:
+		// Cached fallback after a failed refresh: settle so concurrent and
+		// near-term callers reuse it, but arm a retry so the failure cannot
+		// wedge the runtime until the process restarts.
+		settled := selected
+		cache := selected.cache
+		r.metadataResult = &settled
+		r.metadataCache = &cache
+		r.metadataRetryAt = time.Now().Add(metadataRetryBackoff)
+		r.metadataLastFailure = selected.errorCode
+	case cacheReadFailed:
 		failed := modelMetadataResult{source: modelSourceNone, errorCode: modelErrorCacheRead}
 		r.metadataResult = &failed
-	} else {
+	default:
 		r.metadataResult = nil
 	}
 	close(call.done)

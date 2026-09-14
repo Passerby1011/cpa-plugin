@@ -12,11 +12,13 @@ build:
 test:
 	$(GO) test -race -count=1 ./...
 
-# Lint everything (requires gofmt + go vet; staticcheck/gocritic/unparam optional).
+# Lint everything (requires gofmt + go vet; gocritic/unparam optional).
+# staticcheck is pinned: an old binary silently fails to parse the toolchain
+# version in go.mod and reports nothing, hiding real findings.
 lint:
 	@test -z "$$($(GO)fmt -l .)" || ($(GO)fmt -l . && exit 1)
 	$(GO) vet ./...
-	@if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; fi
+	$(GO) run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...
 	@if command -v gocritic >/dev/null 2>&1; then gocritic check ./...; fi
 	@if command -v unparam >/dev/null 2>&1; then unparam ./...; fi
 

@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	zeroWidthSpace           = "​"
+	zeroWidthSpace           = "\u200b"
 	oauthClientModeCLI       = "cli"
 	oauthClientModeWorkBuddy = "workbuddy"
 	// oauthClientModeWorkBuddyAI is the international (WorkBuddy AI) channel:

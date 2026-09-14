@@ -14,7 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const zeroWidthSpace = "​"
+const zeroWidthSpace = "\u200b"
 
 // defaultDesensitizeTerms mirrors the WorkBuddy plugin's built-in list: CLI
 // client fingerprints (Claude Code / Codex identities) plus security-violence

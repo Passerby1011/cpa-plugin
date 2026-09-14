@@ -137,6 +137,7 @@ func newCosySession(id cosyIdentity) (*cosySession, error) {
 	machineType := strings.ReplaceAll(uuid.NewString(), "-", "")[:18]
 	tempKey := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
 
+	//lint:ignore SA1019 Cosy decrypts this field with PKCS#1 v1.5; OAEP would break login.
 	cosyKeyBytes, err := rsa.EncryptPKCS1v15(rand.Reader, serverPubKey, []byte(tempKey))
 	if err != nil {
 		return nil, fmt.Errorf("rsa encrypt: %w", err)
