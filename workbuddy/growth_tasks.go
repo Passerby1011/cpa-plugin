@@ -378,7 +378,7 @@ func runAutoGrowthTasks() taskRunResult {
 }
 
 // handleManualGrowthTasks backs POST /growth-tasks.
-func handleManualGrowthTasks(req pluginapi.ManagementRequest) map[string]any {
+func handleManualGrowthTasks(_ pluginapi.ManagementRequest) map[string]any {
 	result := runAutoGrowthTasks()
 	return map[string]any{
 		"success":  result.Failed == 0,

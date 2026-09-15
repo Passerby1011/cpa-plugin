@@ -433,14 +433,6 @@ func (r *modelRuntime) authGenerationCurrentLocked(slot *modelAuthSlot, key mode
 	return slot.key == key && slot.nextAuth == authGeneration && r.configGeneration.Load() == key.Config
 }
 
-func (r *modelRuntime) authGenerationCurrent(slot *modelAuthSlot, key modelGenerationKey, authGeneration uint64) bool {
-	r.configCommitMu.RLock()
-	defer r.configCommitMu.RUnlock()
-	slot.mu.Lock()
-	defer slot.mu.Unlock()
-	return r.authGenerationCurrentLocked(slot, key, authGeneration)
-}
-
 func (r *modelRuntime) snapshotForAuthID(authID string) modelReadinessSnapshot {
 	slot := r.authSlot(authID)
 	for {

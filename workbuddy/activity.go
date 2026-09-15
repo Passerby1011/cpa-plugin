@@ -320,7 +320,7 @@ func runAutoTravel() travelRunResult {
 }
 
 // handleManualActivity backs POST /activity.
-func handleManualActivity(req pluginapi.ManagementRequest) map[string]any {
+func handleManualActivity(_ pluginapi.ManagementRequest) map[string]any {
 	result := runAutoActivity()
 	return map[string]any{
 		"success":  result.Failed == 0,
