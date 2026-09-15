@@ -1,6 +1,56 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
+
+### 新增
+
+- **活跃度上报**（`activity_auto`，默认关闭）：每日 10:00 上报对话事件，
+  推动成长系统的连续天数（streak）并满足 `first_buddy` 领养前置。仅 CN 个人账号；
+  企业版与 Global 跳过。单次上报条数由 `activity_report_count` 控制（默认 5，
+  范围 1-50），领养门槛需要 5 次对话。
+- **猫旅行循环**（`travel_auto`，默认关闭）：每日 09:00 与 21:00 执行领养 / 出发 /
+  领取三步。已完成行程的领取直接产出积分。仅 CN 个人账号。
+- **增长任务中心**（`growth_tasks_auto`，默认关闭）：每日 10:00 与 01:00 执行
+  任务接受与领取。只处理能靠对话事件完成的任务（五次对话、GLM 对话、夜猫子对话）；
+  需要桌面/网页指纹链或真实操作的任务有意不接受。其中的对话任务依赖 `first_buddy`
+  前置（已领养），所以对还没有猫的账号需要同时开启 `travel_auto`，否则接受会被上游
+  拒绝且不发事件。
+- **夜猫子任务时点**：增长任务中心在 01:00 额外触发一次，对应夜猫子时段
+  （23:00-08:00 CST）的事件上报，事件带 `mode: night`。
+- **请求头对齐官方客户端**：`billing` / `oauth` / `backend` 三条路径补齐
+  `X-CodeBuddy-Request: 1` 与按 realm 选择的 `Accept-Language`。
+- **`stream_options.include_usage` 注入**：请求体已包含 `stream_options` 时补上
+  `include_usage: true`，与官方 CLI 行为一致，确保上游在末尾 SSE 帧返回用量，
+  从而使积分统计准确。
+
+### 修复
+
+- **消息角色归一化**：`developer` 等角色拼写被上游判为
+  `11128 Illegal API invocation from an unapproved channel`。现在在请求体重写的
+  第一步归一化角色拼写（`developer` → `system`），同时关闭了把非 system 家族
+  角色降级为 system 的路径。
+- **首条消息必须是 system**：Global 域要求 system 出现在首位，否则返回
+  `first message is not system prompt`。现在在首位缺失 system 时注入一条最小
+  system 消息。
+- **上游限流码 `11134` 识别**：上游以 HTTP 500 + `extError.code=rate_limit_exceeded`
+  返回模型级限流，此前被归类为服务端错误并触发重试。现在按业务码匹配
+  （比文案匹配稳健，文案在响应体尾部可能被截断），归类为限流。
+- **模型前缀防御性剥离**：宿主重试路径可能把 `prefix/` 连同模型名一起发给上游
+  （如字面量 `wb/gpt-5.6-luna`），上游返回 `11102 model service info not found`。
+  现在插件用**自己的模型清单**自校验后剥离前缀：只有当剥掉首段的结果确实是本插件
+  注册过的模型时才接受。若完整 ID 本身就是本插件服务的模型，则绝不剥离——这保证
+  「剥」只可能把非服务的名字变成服务的名字，永远不会把一个模型静默路由到另一个。
+- **故障停用的凭据不再被积分流程自动恢复**：session 失效 / `11140` 封禁写入的
+  fault note 意味着「需要重新登录」，此前会被「积分充足」判定顺手重新启用。
+  现在 lifecycle 读取落盘的 note，只有本插件因积分耗尽做的停用才允许自动恢复。
+- **错误分类重构**：上游失败按 `classifyUpstreamError` 统一分类后再决定 lifecycle
+  动作，不再用「是不是 429 / 是不是积分」这类布尔判断。内容风控误报与畸形出站
+  请求体归为 `content_blocked` / `bad_params` 并在此处忽略（它们不反映凭据状态），
+  模型级限流（6004 / 11134）不再触发凭据生命周期动作。
+- **`workbuddy.cn` 签发的国内区凭据**：按 JWT issuer 判定 realm 的白名单此前漏了
+  `workbuddy.cn` / `www.workbuddy.cn`，导致国内区凭据被误判、模型目录报
+  `auth_invalid`（社区 PR #3）。
+- **模型目录不再因第三方元数据缺失而不可用**（见下「变更」）。
 
 ### 变更
 
