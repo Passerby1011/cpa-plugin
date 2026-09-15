@@ -255,6 +255,17 @@ func parseDisabledFromAuthJSON(raw []byte) bool {
 	return m.Disabled
 }
 
+// parseNoteFromAuthJSON reads the top-level note from physical auth JSON. The
+// note is the only persisted place a disable reason survives a process
+// restart, so lifecycle gates read it back instead of trusting in-memory state.
+func parseNoteFromAuthJSON(raw []byte) string {
+	var m struct {
+		Note string `json:"note"`
+	}
+	_ = json.Unmarshal(raw, &m)
+	return strings.TrimSpace(m.Note)
+}
+
 // isSafeWorkbuddyAuthPath rejects non-WorkBuddy filenames, empty paths, and
 // traversal attempts. It validates both the basename pattern AND that the path
 // does not escape via ".." segments. Callers that need to confine deletes to

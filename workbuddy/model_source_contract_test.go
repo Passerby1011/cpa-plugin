@@ -167,9 +167,9 @@ func TestModelFactsCreditsSurviveCacheRoundTrip(t *testing.T) {
 	}
 }
 
-// modelInfoFromSources is the only place that writes display_name, so pin its
+// modelInfoFromFacts is the only place that writes display_name, so pin its
 // composition and its no-rate fallback here.
-func TestModelInfoFromSourcesSetsDisplayNameFromCredits(t *testing.T) {
+func TestModelInfoFromFactsSetsDisplayNameFromCredits(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		facts    modelFacts
@@ -181,14 +181,14 @@ func TestModelInfoFromSourcesSetsDisplayNameFromCredits(t *testing.T) {
 		{"padded rate is trimmed", modelFacts{ID: "serve-alpha", Name: "Alpha", Credits: "  x0.79 credits  "}, "Alpha \u00b7 x0.79 credits"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := modelInfoFromSources(tc.facts, nil).DisplayName; got != tc.wantShow {
+			if got := modelInfoFromFacts(tc.facts).DisplayName; got != tc.wantShow {
 				t.Errorf("DisplayName = %q, want %q", got, tc.wantShow)
 			}
 		})
 	}
 	// An empty display_name must not override what the host shows instead: the
 	// Name stays intact either way.
-	info := modelInfoFromSources(modelFacts{ID: "serve-alpha", Name: "Alpha"}, nil)
+	info := modelInfoFromFacts(modelFacts{ID: "serve-alpha", Name: "Alpha"})
 	if info.Name != "Alpha" || info.DisplayName != "" {
 		t.Fatalf("no-rate model = %#v", info)
 	}

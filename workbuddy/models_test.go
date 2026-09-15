@@ -79,24 +79,12 @@ func TestModelForAuthReturnsResponseLocalReadyAndStaleModels(t *testing.T) {
 					Endpoint:       workBuddyEndpointV3Config,
 					Models:         []modelFacts{{ID: "serve-visible"}, {ID: "serve-hidden"}},
 				}
-				metadata := metadataCacheV1{
-					SchemaVersion: modelCacheSchemaVersion,
-					ETag:          `"handler-etag"`,
-					FetchedAt:     time.Date(2026, time.August, 29, 4, 5, 6, 0, time.UTC),
-					Records: map[string]modelFacts{
-						"synthetic/serve-visible": {ID: "synthetic/serve-visible", Name: "Visible"},
-						"synthetic/serve-hidden":  {ID: "synthetic/serve-hidden", Name: "Hidden"},
-					},
-				}
 				if err := store.saveModels(catalog); err != nil {
-					t.Fatal(err)
-				}
-				if err := store.saveMetadata(metadata); err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			workBuddyCalls, metadataCalls := 0, 0
+			workBuddyCalls := 0
 			runtime := newModelRuntime(store, func(req *http.Request, gotCallbackID string) (*hostHTTPResponse, error) {
 				if gotCallbackID != callbackID {
 					t.Fatalf("callback ID = %q, want %q", gotCallbackID, callbackID)
@@ -108,12 +96,6 @@ func TestModelForAuthReturnsResponseLocalReadyAndStaleModels(t *testing.T) {
 						return nil, errors.New("synthetic WorkBuddy outage")
 					}
 					return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-visible","serve-hidden"]}]}}`)}, nil
-				case "models.dev":
-					metadataCalls++
-					if tt.stale {
-						return nil, errors.New("synthetic metadata outage")
-					}
-					return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"synthetic/serve-visible":{"id":"serve-visible","name":"Visible"},"synthetic/serve-hidden":{"id":"serve-hidden","name":"Hidden"}}`)}, nil
 				default:
 					t.Fatalf("unexpected model request %s", req.URL)
 					return nil, nil
@@ -140,10 +122,10 @@ func TestModelForAuthReturnsResponseLocalReadyAndStaleModels(t *testing.T) {
 			if resp.Provider != providerName || len(resp.Models) != 1 || resp.Models[0].ID != "serve-visible" {
 				t.Fatalf("model response = %#v", resp)
 			}
-			if workBuddyCalls != 1 || metadataCalls != 1 {
-				t.Fatalf("source calls: WorkBuddy=%d models.dev=%d, want 1 each", workBuddyCalls, metadataCalls)
+			if workBuddyCalls != 1 {
+				t.Fatalf("source calls: WorkBuddy=%d, want 1", workBuddyCalls)
 			}
-			if got := resolveUpstreamModel("visible-alias", nil); got != "serve-visible" {
+			if got := resolveUpstreamModel("visible-alias", nil, ""); got != "serve-visible" {
 				t.Fatalf("cached alias resolved to %q", got)
 			}
 

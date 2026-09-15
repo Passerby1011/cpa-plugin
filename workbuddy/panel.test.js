@@ -218,6 +218,7 @@ test("model status banner hides ready and persists non-ready states", () => {
   const { context, elements } = loadPanel();
   const statuses = [
     { state: "stale", message: "模型目录刷新失败，正在使用上次有效缓存" },
+    { state: "stale", message: "模型目录可用（缺少附加元数据，不影响使用）" },
     { state: "failed", message: "模型目录不可用" },
     { state: "loading", message: "模型目录正在初始化" },
     { state: "not_started", message: "模型目录尚未初始化" },

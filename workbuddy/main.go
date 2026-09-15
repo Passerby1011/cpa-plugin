@@ -93,6 +93,12 @@ const (
 	originReferer       = "https://www.codebuddy.cn"
 	originRefererGlobal = "https://www.workbuddy.ai"
 
+	// The official client sends Accept-Language per realm, and always marks
+	// requests with X-CodeBuddy-Request: 1. Both are cheap to mirror and keep the
+	// outbound shape closer to the official one.
+	acceptLanguage       = "zh-CN"
+	acceptLanguageGlobal = "en-US"
+
 	// Plugin OAuth paths, gateway-relative: oauthProfileForMode picks the
 	// gateway per client mode (CN for cli/workbuddy, www.workbuddy.ai for
 	// workbuddy-ai), so only the CN forms below pin a base.
@@ -358,9 +364,13 @@ func wbRegistration() registration {
 				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 09:00 and 21:00 local time for CN accounts (default true)."},
 				{Name: "lifecycle_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Auto disable CN / delete Global when credits exhausted; re-enable CN after check-in restores credits (default true)."},
 				{Name: "token_keepalive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily access-token refresh at 22:00 local time to prevent Keycloak offline-session expiry (default true)."},
+				{Name: "activity_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable the daily growth activity report at 10:00 local time (default false). Reports conversation events for CN personal accounts so the streak advances and the first_buddy adoption gate is met; enterprise and Global accounts are skipped."},
+				{Name: "activity_report_count", Type: pluginapi.ConfigFieldTypeInteger, Description: "Conversation events reported per account per run (default 5, clamped to 1-50). The adoption gate needs five conversations."},
+				{Name: "travel_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable the cat-travel loop at 09:00 and 21:00 local time (default false). Adopts, departs and claims trips for CN personal accounts; claimed trips pay credits. Enterprise and Global accounts are skipped."},
+				{Name: "growth_tasks_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable the growth task centre at 10:00 and 01:00 local time (default false). Accepts and claims the tasks that complete through a conversation event (five conversations, GLM chat, night-owl chat); tasks needing a desktop/web fingerprint chain or a real-world action are deliberately left unaccepted. The conversation tasks require the first_buddy prerequisite (an adopted buddy), so pair this with travel_auto on accounts that have none yet — otherwise acceptance is refused and no events are sent. Enterprise and Global accounts are skipped."},
 				{Name: "desensitize", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Insert U+200B into configured blocked terms in system/developer prompt text and tool title/description fields (default false)."},
 				{Name: "desensitize_terms", Type: pluginapi.ConfigFieldTypeArray, Description: "Editable literal term list for desensitize; missing uses the built-in 85 terms and [] means an empty custom list."},
-				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model IDs, single-line strings only. A non-empty list is the complete catalog and bypasses WorkBuddy catalog HTTP and cache; models.dev metadata fetch and cache still apply. Missing, null, or [] keeps dynamic WorkBuddy discovery."},
+				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model IDs, single-line strings only. A non-empty list is the complete catalog: it is served as-is, with no network request and no cache access. Missing, null, or [] keeps dynamic WorkBuddy discovery."},
 				{Name: "oauth_client_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{oauthClientModeCLI, oauthClientModeWorkBuddy, oauthClientModeWorkBuddyAI}, Description: "OAuth login channel: cli (default), workbuddy (CN desktop, platform=workbuddy) or workbuddy-ai (international desktop, platform=workbuddy-ai on www.workbuddy.ai)."},
 				{Name: "enterprise_credits", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Probe strict CN enterprise credits before personal resource packages (default false; Global unchanged)."},
 				{Name: "management_key", Type: pluginapi.ConfigFieldTypeString, Description: "Optional Bearer key enforced by WorkBuddy for mutating management endpoints; also env WB_MANAGEMENT_KEY."},
@@ -521,6 +531,15 @@ func originRefererFor(sa *storedAuth) string {
 	return originReferer
 }
 
+// acceptLanguageFor returns the Accept-Language the official client would use
+// for this account's realm.
+func acceptLanguageFor(sa *storedAuth) string {
+	if sa != nil && isGlobalDomain(sa.Auth.Domain) {
+		return acceptLanguageGlobal
+	}
+	return acceptLanguage
+}
+
 // upstreamBaseFor returns the chat/auth API host for the account realm.
 // Global JWT iss is workbuddy.ai — those tokens only work on www.workbuddy.ai.
 // CN tokens work on copilot.tencent.com. Mixing them yields APISIX 401.
@@ -592,6 +611,8 @@ func backendHeaders(req *http.Request, sa *storedAuth) {
 	origin := originRefererFor(sa)
 	req.Header.Set("Origin", origin)
 	req.Header.Set("Referer", origin+"/")
+	req.Header.Set("X-CodeBuddy-Request", "1")
+	req.Header.Set("Accept-Language", acceptLanguageFor(sa))
 }
 
 // randomHex returns n random bytes hex-encoded. CodeBuddy conversation/request
@@ -787,7 +808,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	}
 	// Resolve oauth-model-alias ("client-alias" -> "upstream-model") before
 	// forwarding; the upstream rejects unknown alias IDs.
-	upstreamModel := resolveUpstreamModel(req.Model, req.AuthAttributes)
+	upstreamModel := resolveUpstreamModel(req.Model, req.AuthAttributes, req.AuthID)
 	started := time.Now()
 	authUID := ""
 	if sa.Account.UID != "" {
@@ -848,7 +869,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	upstreamModel := resolveUpstreamModel(req.Model, req.AuthAttributes)
+	upstreamModel := resolveUpstreamModel(req.Model, req.AuthAttributes, req.AuthID)
 	started := time.Now()
 	authUID := ""
 	if sa.Account.UID != "" {

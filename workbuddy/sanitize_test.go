@@ -18,11 +18,39 @@ func TestSanitizeBlockedTemplates_ClaudeCode(t *testing.T) {
 	}
 }
 
-func TestSanitizeBlockedTemplates_MainBranch(t *testing.T) {
-	in := "Main branch (you will usually use this for PRs)"
-	out := sanitizeBlockedTemplates(in)
-	if out == in {
-		t.Fatal("should replace Main branch")
+// The desktop / Agent SDK variant of the identity line carries no trailing
+// period, so an anchored match would miss it (upstream rejects both forms).
+func TestSanitizeBlockedTemplates_IdentityVariants(t *testing.T) {
+	cases := []string{
+		"You are Claude Code, Anthropic's official CLI for Claude.",
+		"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+	}
+	for _, in := range cases {
+		got := sanitizeBlockedTemplates(in)
+		if got == in {
+			t.Errorf("form must be rewritten: %q", in)
+			continue
+		}
+		if !strings.Contains(got, "official CLI tool for Claude") {
+			t.Errorf("got %q, want the rewritten 'CLI tool for Claude' identity", got)
+		}
+	}
+	// An already-rewritten line must stay put (idempotent).
+	done := "You are Claude Code, Anthropic's official CLI tool for Claude."
+	if got := sanitizeBlockedTemplates(done); got != done {
+		t.Errorf("rewritten form must be stable; got %q", got)
+	}
+}
+
+// Upstream blocks the Anthropic feedback sentence as a whole.
+func TestSanitizeBlockedTemplates_AnthropicFeedbackSentence(t *testing.T) {
+	in := "To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues"
+	got := sanitizeBlockedTemplates(in)
+	if got == in {
+		t.Fatal("feedback sentence must be rewritten")
+	}
+	if !strings.HasPrefix(got, "To provide feedback, users should") {
+		t.Fatalf("got %q, want the `provide` variant", got)
 	}
 }
 

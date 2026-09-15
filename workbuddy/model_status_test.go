@@ -33,17 +33,6 @@ func TestBuildModelStatusUsesFixedPriorityAndSafeAuthIndex(t *testing.T) {
 		snapshot.ErrorCode = update.errorCode
 		runtime.authSlot(update.authID).current.Store(&snapshot)
 	}
-	metadataFetchedAt := time.Date(2026, 8, 30, 1, 2, 3, 0, time.FixedZone("UTC-7", -7*60*60))
-	runtime.metadataMu.Lock()
-	runtime.metadataResult = &modelMetadataResult{
-		source: modelSourceCache,
-		cache: metadataCacheV1{
-			FetchedAt: metadataFetchedAt,
-		},
-		ok: true,
-	}
-	runtime.metadataMu.Unlock()
-
 	got := buildModelStatus([]pluginapi.HostAuthFileEntry{
 		{ID: "internal-ready", AuthIndex: "account-1"},
 		{ID: "internal-stale", AuthIndex: "account-2"},
@@ -59,7 +48,7 @@ func TestBuildModelStatusUsesFixedPriorityAndSafeAuthIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"state":"failed","message":"模型目录不可用","metadata_source":"cache","metadata_fetched_at":"2026-08-30T08:02:03Z","auths":[{"auth_index":"account-1","state":"ready","model_source":"fresh","models_fetched_at":"2026-08-29T04:34:56Z","error_code":""},{"auth_index":"account-2","state":"stale","model_source":"cache","models_fetched_at":"2026-08-29T04:34:56Z","error_code":""},{"auth_index":"account-3","state":"failed","model_source":"none","models_fetched_at":"","error_code":"workbuddy_http"}]}`
+	want := `{"state":"failed","message":"模型目录不可用","auths":[{"auth_index":"account-1","state":"ready","model_source":"fresh","models_fetched_at":"2026-08-29T04:34:56Z","error_code":""},{"auth_index":"account-2","state":"stale","model_source":"cache","models_fetched_at":"2026-08-29T04:34:56Z","error_code":""},{"auth_index":"account-3","state":"failed","model_source":"none","models_fetched_at":"","error_code":"workbuddy_http"}]}`
 	if string(raw) != want {
 		t.Fatalf("status JSON = %s, want %s", raw, want)
 	}
@@ -92,21 +81,12 @@ func TestBuildModelStatusSerializesConfiguredCatalogSource(t *testing.T) {
 	snapshot.ModelSource = modelSourceConfig
 	snapshot.ModelsFetchedAt = time.Time{}
 	runtime.authSlot("internal-configured").current.Store(&snapshot)
-	metadataFetchedAt := time.Date(2026, time.August, 30, 9, 10, 11, 0, time.UTC)
-	runtime.metadataMu.Lock()
-	runtime.metadataResult = &modelMetadataResult{
-		source: modelSourceFresh,
-		cache:  metadataCacheV1{FetchedAt: metadataFetchedAt},
-		ok:     true,
-	}
-	runtime.metadataMu.Unlock()
-
 	got := buildModelStatus([]pluginapi.HostAuthFileEntry{{ID: "internal-configured", AuthIndex: "account-configured"}})
 	raw, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"state":"ready","message":"模型目录已就绪","metadata_source":"fresh","metadata_fetched_at":"2026-08-30T09:10:11Z","auths":[{"auth_index":"account-configured","state":"ready","model_source":"config","models_fetched_at":"","error_code":""}]}`
+	want := `{"state":"ready","message":"模型目录已就绪","auths":[{"auth_index":"account-configured","state":"ready","model_source":"config","models_fetched_at":"","error_code":""}]}`
 	if string(raw) != want {
 		t.Fatalf("status JSON = %s, want %s", raw, want)
 	}
@@ -170,7 +150,7 @@ func TestBuildModelStatusZeroAuthHasExactShapeAndNonNilAuths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"state":"not_started","message":"模型目录尚未初始化","metadata_source":"none","metadata_fetched_at":"","auths":[]}`
+	want := `{"state":"not_started","message":"模型目录尚未初始化","auths":[]}`
 	if string(raw) != want {
 		t.Fatalf("status JSON = %s, want %s", raw, want)
 	}
@@ -188,7 +168,7 @@ func TestBuildModelStatusReadsSnapshotsWithoutInitializingRuntime(t *testing.T) 
 	if activeModelRuntime.Load() != nil {
 		t.Fatal("status projection initialized the model runtime")
 	}
-	if got.State != modelNotStarted || got.MetadataSource != modelSourceNone || len(got.Auths) != 1 || got.Auths[0].State != modelNotStarted || got.Auths[0].ModelSource != modelSourceNone {
+	if got.State != modelNotStarted || len(got.Auths) != 1 || got.Auths[0].State != modelNotStarted || got.Auths[0].ModelSource != modelSourceNone {
 		t.Fatalf("status = %#v", got)
 	}
 }

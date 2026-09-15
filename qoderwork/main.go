@@ -81,7 +81,6 @@ const (
 	authFileName  = "qoderwork.json"
 	pluginLogoURL = "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/QoderWork.png"
 	// QoderWork CN: OpenAPI for auth/billing, gateway for COSY-signed inference.
-	// See /root/qoderwork/KNOWLEDGE.md §1-§5.
 	upstreamBaseCN = "https://openapi.qoder.com.cn"
 	gatewayBaseCN  = "https://gateway.qoder.com.cn"
 	clientUA       = "Go-http-client/2.0"
@@ -663,7 +662,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	}
 	// Build the QoderWork agent_chat_generation body from the OpenAI request,
 	// then QoderEncoding-encode it. The template embeds a 10657-token system
-	// prompt that the server requires for normal behaviour (KNOWLEDGE §5.2).
+	// prompt that the server requires for normal behaviour.
 	qwReq := &openAIRequest{}
 	if err := json.Unmarshal(req.Payload, qwReq); err != nil && len(req.Payload) > 0 {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "payload parse: "+err.Error())

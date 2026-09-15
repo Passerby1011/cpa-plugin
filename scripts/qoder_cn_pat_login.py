@@ -3,10 +3,9 @@
 Qoder CN (qoder.com.cn) 手机号验证码登录 → 创建 PAT (pt-)
 
 用法:
-  python3 qoder_cn_pat_login.py                      # 交互式: 发码后终端输入验证码
-  python3 qoder_cn_pat_login.py --phone 18278724616
-  python3 qoder_cn_pat_login.py --code-file /tmp/qw_web/sms_code.txt   # 文件模式(配合后台运行)
-  python3 qoder_cn_pat_login.py --name my-pat --days 3650              # PAT 名称/有效期(天)
+  python3 qoder_cn_pat_login.py --phone <你的手机号>        # 交互式: 发码后终端输入验证码
+  python3 qoder_cn_pat_login.py --phone <你的手机号> --code-file /tmp/qw_web/sms_code.txt   # 文件模式(配合后台运行)
+  python3 qoder_cn_pat_login.py --phone <你的手机号> --name my-pat --days 3650              # PAT 名称/有效期(天)
 
 流程:
   qoder.com.cn/users/sign-in → 使用阿里云登录 → passport.aliyun.com SSO (SMS iframe)
@@ -182,12 +181,12 @@ async def fetch_me(page) -> dict:
 
 async def main() -> int:
     ap = argparse.ArgumentParser(description="Qoder CN 手机验证码登录 → 创建 PAT")
-    ap.add_argument("--phone", default="18278724616")
+    ap.add_argument("--phone", required=True, help="手机号（必填，不设默认值以免误用他人号码）")
     ap.add_argument("--name", default="cpa-auto", help="PAT 名称")
     ap.add_argument("--days", type=int, default=36500, help="PAT 有效期(天)，默认 100 年")
     ap.add_argument("--code-file", default=None, help="从文件读验证码(后台模式); 默认终端交互输入")
     ap.add_argument("--reuse-state", default=None, help="复用已登录 storage_state JSON，跳过短信登录直接造 PAT")
-    ap.add_argument("--out", default="/root/qoderwork_pat.json", help="结果输出 JSON 路径")
+    ap.add_argument("--out", default="./qoderwork_pat.json", help="结果输出 JSON 路径")
     ap.add_argument("--workdir", default="/tmp/qw_web", help="截图/中间产物目录")
     args = ap.parse_args()
 

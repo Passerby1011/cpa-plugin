@@ -81,11 +81,11 @@ func TestNextCheckinTime(t *testing.T) {
 	if got.Hour() != 21 {
 		t.Fatalf("want 21, got %v", got.Hour())
 	}
-	// 22:00 → next day 09:00
+	// 22:00 → next day 01:00, the growth task centre's night-owl slot.
 	late := time.Date(2026, 7, 24, 22, 0, 0, 0, time.UTC)
 	got = nextCheckinTime(late)
-	if got.Hour() != 9 {
-		t.Fatalf("want 9, got %v", got.Hour())
+	if got.Hour() != 1 {
+		t.Fatalf("want 1, got %v", got.Hour())
 	}
 	if got.Day() != 25 {
 		t.Fatalf("want next day, got %v", got.Day())

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -84,38 +83,22 @@ func TestModelAuthIdentityHashIsLowercaseSHA256Filename(t *testing.T) {
 func TestModelStoreSchemaV1RoundTripsAtExactPaths(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "catalog")
 	store := newModelStore(root)
-	metadata := modelStoreTestMetadata("first")
 	hash := strings.Repeat("a", 64)
 	models := modelStoreTestCatalog(hash, "first")
 
-	if err := store.saveMetadata(metadata); err != nil {
-		t.Fatal(err)
-	}
 	if err := store.saveModels(models); err != nil {
 		t.Fatal(err)
 	}
 
-	metadataPath := filepath.Join(root, "metadata.json")
 	modelsPath := filepath.Join(root, "models", hash+".json")
-	var metadataJSON metadataCacheV1
-	if err := json.Unmarshal(modelStoreReadFile(t, metadataPath), &metadataJSON); err != nil {
-		t.Fatal(err)
-	}
 	var modelsJSON modelCatalogCacheV1
 	if err := json.Unmarshal(modelStoreReadFile(t, modelsPath), &modelsJSON); err != nil {
 		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(metadataJSON, metadata) {
-		t.Fatalf("metadata round trip = %#v, want %#v", metadataJSON, metadata)
 	}
 	if !reflect.DeepEqual(modelsJSON, models) {
 		t.Fatalf("models round trip = %#v, want %#v", modelsJSON, models)
 	}
 
-	loadedMetadata, found, err := store.loadMetadata()
-	if err != nil || !found || !reflect.DeepEqual(loadedMetadata, metadata) {
-		t.Fatalf("loadMetadata() = %#v, %t, %v", loadedMetadata, found, err)
-	}
 	loadedModels, found, err := store.loadModels(hash, workBuddyRealmCN)
 	if err != nil || !found || !reflect.DeepEqual(loadedModels, models) {
 		t.Fatalf("loadModels() = %#v, %t, %v", loadedModels, found, err)
@@ -126,14 +109,10 @@ func TestModelStoreFirstSaveCreatesPrimaryFiles(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "catalog")
 	store := newModelStore(root)
 	hash := strings.Repeat("b", 64)
-	if err := store.saveMetadata(modelStoreTestMetadata("first")); err != nil {
-		t.Fatal(err)
-	}
 	if err := store.saveModels(modelStoreTestCatalog(hash, "first")); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{
-		filepath.Join(root, "metadata.json"),
 		filepath.Join(root, "models", hash+".json"),
 	} {
 		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
@@ -145,24 +124,29 @@ func TestModelStoreFirstSaveCreatesPrimaryFiles(t *testing.T) {
 	}
 }
 
+// The catalogue keeps the same last-good promise as any other cache on disk:
+// a successful save moves the previously validated file to .bak, so a corrupt
+// primary still resolves to a readable entry.
 func TestModelStoreSecondSaveMovesValidatedPrimaryToBackup(t *testing.T) {
 	root := t.TempDir()
 	store := newModelStore(root)
-	first := modelStoreTestMetadata("first")
-	second := modelStoreTestMetadata("second")
-	if err := store.saveMetadata(first); err != nil {
+	hash := strings.Repeat("f", 64)
+	first := modelStoreTestCatalog(hash, "first")
+	second := modelStoreTestCatalog(hash, "second")
+	modelsPath := filepath.Join(root, "models", hash+".json")
+	if err := store.saveModels(first); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.saveMetadata(second); err != nil {
+	if err := store.saveModels(second); err != nil {
 		t.Fatal(err)
 	}
 
-	var primary metadataCacheV1
-	if err := json.Unmarshal(modelStoreReadFile(t, filepath.Join(root, "metadata.json")), &primary); err != nil {
+	var primary modelCatalogCacheV1
+	if err := json.Unmarshal(modelStoreReadFile(t, modelsPath), &primary); err != nil {
 		t.Fatal(err)
 	}
-	var backup metadataCacheV1
-	if err := json.Unmarshal(modelStoreReadFile(t, filepath.Join(root, "metadata.json.bak")), &backup); err != nil {
+	var backup modelCatalogCacheV1
+	if err := json.Unmarshal(modelStoreReadFile(t, modelsPath+".bak"), &backup); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(primary, second) || !reflect.DeepEqual(backup, first) {
@@ -173,137 +157,74 @@ func TestModelStoreSecondSaveMovesValidatedPrimaryToBackup(t *testing.T) {
 func TestModelStoreLoadsValidBackupWhenPrimaryIsCorrupt(t *testing.T) {
 	root := t.TempDir()
 	store := newModelStore(root)
-	first := modelStoreTestMetadata("first")
-	if err := store.saveMetadata(first); err != nil {
+	hash := strings.Repeat("f", 64)
+	first := modelStoreTestCatalog(hash, "first")
+	modelsPath := filepath.Join(root, "models", hash+".json")
+	if err := store.saveModels(first); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.saveMetadata(modelStoreTestMetadata("second")); err != nil {
+	if err := store.saveModels(modelStoreTestCatalog(hash, "second")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "metadata.json"), []byte(`{"broken":`), 0o600); err != nil {
+	if err := os.WriteFile(modelsPath, []byte(`{"broken":`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	got, found, err := store.loadMetadata()
+	got, found, err := store.loadModels(hash, workBuddyRealmCN)
 	if err != nil || !found || !reflect.DeepEqual(got, first) {
-		t.Fatalf("loadMetadata() = %#v, %t, %v; want backup %#v", got, found, err, first)
+		t.Fatalf("loadModels() = %#v, %t, %v; want backup %#v", got, found, err, first)
 	}
 }
 
 func TestModelStoreCorruptPrimaryDoesNotOverwriteValidBackup(t *testing.T) {
 	root := t.TempDir()
 	store := newModelStore(root)
-	first := modelStoreTestMetadata("first")
-	if err := store.saveMetadata(first); err != nil {
+	hash := strings.Repeat("f", 64)
+	first := modelStoreTestCatalog(hash, "first")
+	modelsPath := filepath.Join(root, "models", hash+".json")
+	if err := store.saveModels(first); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.saveMetadata(modelStoreTestMetadata("second")); err != nil {
+	if err := store.saveModels(modelStoreTestCatalog(hash, "second")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "metadata.json"), []byte(`not-json`), 0o600); err != nil {
+	if err := os.WriteFile(modelsPath, []byte(`not-json`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	third := modelStoreTestMetadata("third")
-	if err := store.saveMetadata(third); err != nil {
+	third := modelStoreTestCatalog(hash, "third")
+	if err := store.saveModels(third); err != nil {
 		t.Fatal(err)
 	}
 
-	var backup metadataCacheV1
-	if err := json.Unmarshal(modelStoreReadFile(t, filepath.Join(root, "metadata.json.bak")), &backup); err != nil {
+	var backup modelCatalogCacheV1
+	if err := json.Unmarshal(modelStoreReadFile(t, modelsPath+".bak"), &backup); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(backup, first) {
 		t.Fatalf("backup = %#v, want original last-good %#v", backup, first)
 	}
-	got, found, err := store.loadMetadata()
+	got, found, err := store.loadModels(hash, workBuddyRealmCN)
 	if err != nil || !found || !reflect.DeepEqual(got, third) {
-		t.Fatalf("loadMetadata() = %#v, %t, %v", got, found, err)
+		t.Fatalf("loadModels() = %#v, %t, %v", got, found, err)
 	}
 }
 
 func TestModelStoreCorruptPrimaryAndBackupReturnReadError(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "metadata.json"), []byte(`not-json`), 0o600); err != nil {
+	hash := strings.Repeat("f", 64)
+	modelsPath := filepath.Join(root, "models", hash+".json")
+	if err := os.MkdirAll(filepath.Dir(modelsPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "metadata.json.bak"), []byte(`also-not-json`), 0o600); err != nil {
+	if err := os.WriteFile(modelsPath, []byte(`not-json`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, found, err := newModelStore(root).loadMetadata()
+	if err := os.WriteFile(modelsPath+".bak", []byte(`also-not-json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := newModelStore(root).loadModels(hash, workBuddyRealmCN)
 	if err == nil || found {
-		t.Fatalf("loadMetadata() = %#v, %t, %v; want no cache and read error", got, found, err)
-	}
-}
-
-func TestModelStoreMetadataCanonicalValidationMatchesFreshParser(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*modelFacts)
-	}{
-		{
-			name: "empty input modality",
-			mutate: func(facts *modelFacts) {
-				facts.SupportedInputModalities = []string{""}
-			},
-		},
-		{
-			name: "duplicate output modality",
-			mutate: func(facts *modelFacts) {
-				facts.SupportedOutputModalities = []string{"text", "text"}
-			},
-		},
-		{
-			name: "untrimmed input modality",
-			mutate: func(facts *modelFacts) {
-				facts.SupportedInputModalities = []string{" text "}
-			},
-		},
-		{
-			name: "untrimmed canonical name",
-			mutate: func(facts *modelFacts) {
-				facts.Name = " Model A "
-			},
-		},
-		{
-			name: "unsupported canonical description",
-			mutate: func(facts *modelFacts) {
-				facts.Description = "cache-only description"
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name+" primary falls through to backup", func(t *testing.T) {
-			root := t.TempDir()
-			validBackup := modelStoreTestMetadata("valid-backup")
-			invalidPrimary := modelStoreTestMetadata("invalid-primary")
-			facts := invalidPrimary.Records["vendor/model-a"]
-			tt.mutate(&facts)
-			invalidPrimary.Records["vendor/model-a"] = facts
-			modelStoreWriteJSON(t, filepath.Join(root, "metadata.json"), invalidPrimary)
-			modelStoreWriteJSON(t, filepath.Join(root, "metadata.json.bak"), validBackup)
-
-			got, found, err := newModelStore(root).loadMetadata()
-			if err != nil || !found || !reflect.DeepEqual(got, validBackup) {
-				t.Fatalf("loadMetadata() = %#v, %t, %v; want valid backup %#v", got, found, err, validBackup)
-			}
-		})
-
-		t.Run(tt.name+" invalid primary and backup", func(t *testing.T) {
-			root := t.TempDir()
-			for index, name := range []string{"metadata.json", "metadata.json.bak"} {
-				invalid := modelStoreTestMetadata(fmt.Sprintf("invalid-%d", index))
-				facts := invalid.Records["vendor/model-a"]
-				tt.mutate(&facts)
-				invalid.Records["vendor/model-a"] = facts
-				modelStoreWriteJSON(t, filepath.Join(root, name), invalid)
-			}
-
-			got, found, err := newModelStore(root).loadMetadata()
-			if err == nil || found {
-				t.Fatalf("loadMetadata() = %#v, %t, %v; want no valid canonical cache", got, found, err)
-			}
-		})
+		t.Fatalf("loadModels() = %#v, %t, %v; want no cache and read error", got, found, err)
 	}
 }
 
@@ -374,19 +295,26 @@ func TestModelStoreRealmMismatchPrimaryFallsThroughToMatchingBackup(t *testing.T
 }
 
 func TestModelStoreFutureSchemaReturnsSentinelAndBlocksSave(t *testing.T) {
+	hash := strings.Repeat("f", 64)
+	futureCatalog := func() []byte {
+		return []byte(`{"schema_version":2,"identity_sha256":"` + hash + `","realm":"cn","fetched_at":"2026-08-29T00:00:00Z","endpoint":"v3_config","models":[{"id":"model-a"}]}`)
+	}
 	t.Run("primary", func(t *testing.T) {
 		root := t.TempDir()
-		path := filepath.Join(root, "metadata.json")
-		future := []byte(`{"schema_version":2,"fetched_at":"2026-08-29T00:00:00Z","records":{"vendor/model-a":{"id":"vendor/model-a"}}}`)
+		path := filepath.Join(root, "models", hash+".json")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		future := futureCatalog()
 		if err := os.WriteFile(path, future, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		store := newModelStore(root)
-		if _, found, err := store.loadMetadata(); found || !errors.Is(err, errFutureModelCacheSchema) {
-			t.Fatalf("loadMetadata() found=%t err=%v", found, err)
+		if _, found, err := store.loadModels(hash, workBuddyRealmCN); found || !errors.Is(err, errFutureModelCacheSchema) {
+			t.Fatalf("loadModels() found=%t err=%v", found, err)
 		}
-		if err := store.saveMetadata(modelStoreTestMetadata("replacement")); !errors.Is(err, errFutureModelCacheSchema) {
-			t.Fatalf("saveMetadata() err=%v", err)
+		if err := store.saveModels(modelStoreTestCatalog(hash, "replacement")); !errors.Is(err, errFutureModelCacheSchema) {
+			t.Fatalf("saveModels() err=%v", err)
 		}
 		if got := modelStoreReadFile(t, path); !bytes.Equal(got, future) {
 			t.Fatalf("future primary was overwritten: %s", got)
@@ -396,22 +324,22 @@ func TestModelStoreFutureSchemaReturnsSentinelAndBlocksSave(t *testing.T) {
 	t.Run("backup", func(t *testing.T) {
 		root := t.TempDir()
 		store := newModelStore(root)
-		if err := store.saveMetadata(modelStoreTestMetadata("primary")); err != nil {
+		path := filepath.Join(root, "models", hash+".json")
+		if err := store.saveModels(modelStoreTestCatalog(hash, "primary")); err != nil {
 			t.Fatal(err)
 		}
-		primaryPath := filepath.Join(root, "metadata.json")
-		primary := modelStoreReadFile(t, primaryPath)
-		futureBackup := []byte(`{"schema_version":2}`)
-		if err := os.WriteFile(primaryPath+".bak", futureBackup, 0o600); err != nil {
+		primary := modelStoreReadFile(t, path)
+		futureBackup := futureCatalog()
+		if err := os.WriteFile(path+".bak", futureBackup, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.saveMetadata(modelStoreTestMetadata("replacement")); !errors.Is(err, errFutureModelCacheSchema) {
-			t.Fatalf("saveMetadata() err=%v", err)
+		if err := store.saveModels(modelStoreTestCatalog(hash, "replacement")); !errors.Is(err, errFutureModelCacheSchema) {
+			t.Fatalf("saveModels() err=%v", err)
 		}
-		if got := modelStoreReadFile(t, primaryPath); !bytes.Equal(got, primary) {
+		if got := modelStoreReadFile(t, path); !bytes.Equal(got, primary) {
 			t.Fatalf("primary changed despite future backup: %s", got)
 		}
-		if got := modelStoreReadFile(t, primaryPath+".bak"); !bytes.Equal(got, futureBackup) {
+		if got := modelStoreReadFile(t, path+".bak"); !bytes.Equal(got, futureBackup) {
 			t.Fatalf("future backup was overwritten: %s", got)
 		}
 	})
@@ -453,9 +381,6 @@ func TestModelStoreUsesPrivateDirectoryAndFileModes(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "catalog")
 	store := newModelStore(root)
 	hash := strings.Repeat("e", 64)
-	if err := store.saveMetadata(modelStoreTestMetadata("private")); err != nil {
-		t.Fatal(err)
-	}
 	if err := store.saveModels(modelStoreTestCatalog(hash, "private")); err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +393,7 @@ func TestModelStoreUsesPrivateDirectoryAndFileModes(t *testing.T) {
 			t.Fatalf("directory %q mode=%v, want 0700", path, info.Mode().Perm())
 		}
 	}
-	for _, path := range []string{filepath.Join(root, "metadata.json"), filepath.Join(root, "models", hash+".json")} {
+	for _, path := range []string{filepath.Join(root, "models", hash+".json")} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)
@@ -481,7 +406,7 @@ func TestModelStoreUsesPrivateDirectoryAndFileModes(t *testing.T) {
 
 func TestWriteModelCacheAtomicCleansTempsAfterRenameFailure(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "metadata.json")
+	path := filepath.Join(root, "models.json")
 	if err := os.WriteFile(path, []byte(`{"old":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -536,21 +461,10 @@ func TestWriteModelCacheAtomicReadOnlyDirectoryFailureLeavesNoTemps(t *testing.T
 	if !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("write probe failed with %v, want permission denied", err)
 	}
-	if err := writeModelCacheAtomic(filepath.Join(root, "metadata.json"), []byte(`{"new":true}`), func([]byte) error { return nil }); err == nil {
+	if err := writeModelCacheAtomic(filepath.Join(root, "models.json"), []byte(`{"new":true}`), func([]byte) error { return nil }); err == nil {
 		t.Fatal("writeModelCacheAtomic() succeeded in read-only directory")
 	}
 	modelStoreAssertNoTemps(t, root)
-}
-
-func modelStoreTestMetadata(label string) metadataCacheV1 {
-	return metadataCacheV1{
-		SchemaVersion: 1,
-		ETag:          fmt.Sprintf(`W/"%s"`, label),
-		FetchedAt:     time.Date(2026, time.August, 29, 1, 2, 3, 0, time.UTC),
-		Records: map[string]modelFacts{
-			"vendor/model-a": {ID: "vendor/model-a", Name: "Model A"},
-		},
-	}
 }
 
 func modelStoreTestCatalog(hash, description string) modelCatalogCacheV1 {

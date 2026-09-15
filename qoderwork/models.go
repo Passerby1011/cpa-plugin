@@ -15,9 +15,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-// wbModels is the static fallback model list for QoderWork CN. Keys mirror
-// /root/qoderwork/models_list.json (KNOWLEDGE §6.2). Aliases use the qoder/
-// prefix in AuthAttributes; bare IDs work too. Dynamic refresh via
+// wbModels is the static fallback model list for QoderWork CN. Aliases use the
+// qoder/ prefix in AuthAttributes; bare IDs work too. Dynamic refresh via
 // /algo/api/v2/model/list replaces this at runtime when an account is present.
 func wbModels() []pluginapi.ModelInfo {
 	return []pluginapi.ModelInfo{

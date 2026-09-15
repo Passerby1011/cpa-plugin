@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 )
@@ -24,13 +23,6 @@ type modelAuthIdentity struct {
 	UID          string         `json:"uid,omitempty"`
 	EnterpriseID string         `json:"enterprise_id,omitempty"`
 	AuthID       string         `json:"auth_id,omitempty"`
-}
-
-type metadataCacheV1 struct {
-	SchemaVersion int                   `json:"schema_version"`
-	ETag          string                `json:"etag,omitempty"`
-	FetchedAt     time.Time             `json:"fetched_at"`
-	Records       map[string]modelFacts `json:"records"`
 }
 
 type modelCatalogCacheV1 struct {
@@ -96,24 +88,6 @@ func newModelStore(root string) *modelStore {
 	return &modelStore{root: root}
 }
 
-func (s *modelStore) loadMetadata() (metadataCacheV1, bool, error) {
-	return loadModelCache(filepath.Join(s.root, "metadata.json"), decodeMetadataCache)
-}
-
-func (s *modelStore) saveMetadata(cache metadataCacheV1) error {
-	if err := validateMetadataCache(cache); err != nil {
-		return err
-	}
-	raw, err := json.Marshal(cache)
-	if err != nil {
-		return err
-	}
-	return writeModelCacheAtomic(filepath.Join(s.root, "metadata.json"), raw, func(current []byte) error {
-		_, err := decodeMetadataCache(current)
-		return err
-	})
-}
-
 func (s *modelStore) loadModels(identitySHA256 string, expectedRealm workBuddyRealm) (modelCatalogCacheV1, bool, error) {
 	if !validModelIdentitySHA256(identitySHA256) {
 		return modelCatalogCacheV1{}, false, fmt.Errorf("model cache identity hash is invalid")
@@ -166,41 +140,6 @@ func loadModelCache[T any](path string, decode func([]byte) (T, error)) (T, bool
 		return zero, false, nil
 	}
 	return zero, false, errors.Join(readErrors...)
-}
-
-func decodeMetadataCache(raw []byte) (metadataCacheV1, error) {
-	var cache metadataCacheV1
-	if err := json.Unmarshal(raw, &cache); err != nil {
-		return metadataCacheV1{}, fmt.Errorf("decode metadata cache: %w", err)
-	}
-	if err := validateMetadataCache(cache); err != nil {
-		return metadataCacheV1{}, err
-	}
-	return cache, nil
-}
-
-func validateMetadataCache(cache metadataCacheV1) error {
-	if err := validateModelCacheSchema(cache.SchemaVersion); err != nil {
-		return err
-	}
-	if cache.FetchedAt.IsZero() {
-		return fmt.Errorf("metadata cache fetched_at is missing")
-	}
-	if len(cache.Records) == 0 {
-		return fmt.Errorf("metadata cache records are empty")
-	}
-	for canonicalID, facts := range cache.Records {
-		validated, err := validateModelsDevCanonicalRecord(canonicalID, facts)
-		if err != nil {
-			return fmt.Errorf("metadata cache record is invalid: %w", err)
-		}
-		if validated.Name != facts.Name ||
-			!slices.Equal(validated.SupportedInputModalities, facts.SupportedInputModalities) ||
-			!slices.Equal(validated.SupportedOutputModalities, facts.SupportedOutputModalities) {
-			return fmt.Errorf("metadata cache record is not normalized")
-		}
-	}
-	return nil
 }
 
 func decodeModelCatalogCache(raw []byte, identitySHA256 string, expectedRealm workBuddyRealm) (modelCatalogCacheV1, error) {

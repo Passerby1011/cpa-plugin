@@ -31,25 +31,39 @@ func prepareUpstreamBody(payload, original []byte, sa *storedAuth, upstreamModel
 		return src
 	}
 
-	// 1. forceStream: CodeBuddy rejects non-stream requests.
+	// 1. normalizeRoles: canonicalize message role spelling before any other
+	// transform. Upstream matches the role value exactly, so `developer`,
+	// `System` and `"system "` all misbehave; every later step must see the
+	// canonical form (see normalizeRolesInPlace).
+	normalizeRolesInPlace(obj)
+
+	// 2. forceStream: CodeBuddy rejects non-stream requests.
 	obj["stream"] = true
 
-	// 2. normalizeTools: tool_choice object form → string; "none" suppresses tools.
+	// 3. streamOptions: ask upstream to report usage on the final frame. The
+	// official CLI always sends this; without it the upstream may omit the
+	// usage block, and our SSE aggregation then publishes an empty usage
+	// detail. A caller-supplied value always wins.
+	ensureStreamOptionsInPlace(obj)
+
+	// 4. normalizeTools: tool_choice object form → string; "none" suppresses tools.
 	normalizeToolsInPlace(obj)
 
-	// 3. rewriteModel: swap client model name to upstream model id.
+	// 5. rewriteModel: swap client model name to upstream model id.
 	rewriteModelInPlace(obj, upstreamModel)
 
-	// 4. system sanitization: strip blocked Claude Code template phrases.
+	// 6. system sanitization: strip blocked Claude Code template phrases.
 	rewriteSystemInPlace(obj)
 
-	// 5. desensitize the configured prompt and tool metadata fields.
+	// 7. desensitize the configured prompt and tool metadata fields.
 	applyDesensitizeInPlace(obj, currentFeatureRuntime())
 
-	// 6. ensureSystemMessage: inject minimal system msg for Global only.
+	// 8. ensureSystemMessage: inject a minimal system message when the first
+	// message is not one. Global rejects a body whose first message is not an
+	// exact `system`; CN tolerates anything, so this stays Global-only.
 	ensureSystemMessageInPlace(obj, sa)
 
-	// 7. alignThinkingFields: mirror the official CLI's configureThinkingSettings,
+	// 9. alignThinkingFields: mirror the official CLI's configureThinkingSettings,
 	// which is NOT part of the compatibility pipeline it skips for internal
 	// domains, so these fields are what the real client sends to this gateway.
 	alignThinkingFieldsInPlace(obj)
@@ -190,11 +204,85 @@ func rewriteSystemInPlace(obj map[string]any) bool {
 	return changed
 }
 
-// ensureSystemMessageInPlace injects a minimal system message if none is present.
-// Global (www.workbuddy.ai) rejects user-only requests with code 11101
-// "Parse message failed: 11101:invalid request". CN (copilot.tencent.com)
-// does not require a system message but tolerates one. Inserting a
-// harmless system message unifies both paths. Returns true when modified.
+// ensureStreamOptionsInPlace asks the upstream to include a usage block on the
+// final SSE frame. The official CLI always sends stream_options.include_usage;
+// without it the upstream may omit usage entirely, and the aggregation in
+// stream.go then reports an empty usage detail.
+//
+// A caller-supplied object is never overwritten. A non-object value is replaced
+// instead of forwarded: upstream types this field as an object, so passing a
+// malformed value through would only turn a working request into a 400.
+// Returns true when the field was added or repaired.
+func ensureStreamOptionsInPlace(obj map[string]any) bool {
+	if v, present := obj["stream_options"]; present {
+		if _, isObject := v.(map[string]any); isObject {
+			return false
+		}
+	}
+	obj["stream_options"] = map[string]any{"include_usage": true}
+	return true
+}
+
+// normalizeRolesInPlace canonicalizes message role spelling in place.
+//
+// Upstream validates `messages[].role` by exact value, and only accepts the
+// canonical lowercase forms:
+//
+//	`developer` (exact)                     -> HTTP 400 code=11128
+//	                                           "Illegal API invocation from an
+//	                                           unapproved channel"
+//	`System` / `SYSTEM` as the first message -> Global: HTTP 400 "first message
+//	                                           is not system prompt"
+//	`System` / `"system "` anywhere           -> HTTP 200 but silently DEMOTED
+//	                                           to an ordinary message, losing
+//	                                           system-level authority
+//
+// `developer` is OpenAI's newer alias for `system` (Codex / Cursor send it), so
+// folding it into `system` preserves meaning. Case and surrounding whitespace
+// are pure spelling noise; both are normalized so the demotion path is closed
+// too, not just the hard 400.
+//
+// Values outside the system family (user / assistant / tool / function / any
+// unknown string) are left byte-identical: this only repairs system-class
+// spelling, it never merges, reorders or drops messages. Returns true when a
+// role was rewritten.
+func normalizeRolesInPlace(obj map[string]any) bool {
+	messages, ok := obj["messages"].([]any)
+	if !ok {
+		return false
+	}
+	changed := false
+	for _, m := range messages {
+		msg, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, ok := msg["role"].(string)
+		if !ok {
+			continue
+		}
+		normalized := strings.ToLower(strings.TrimSpace(role))
+		switch normalized {
+		case "system", "developer":
+			if role != "system" {
+				msg["role"] = "system"
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+// ensureSystemMessageInPlace injects a minimal system message when the FIRST
+// message is not one. Global (www.workbuddy.ai) rejects a request whose first
+// message is not an exact lowercase `system` with code 11128 "first message is
+// not system prompt"; CN (copilot.tencent.com) accepts anything, so this stays
+// Global-only. Returns true when a message was prepended.
+//
+// The check is deliberately an exact match, not strings.EqualFold: upstream
+// itself treats `System` as "not a system prompt", and normalizeRolesInPlace
+// has already canonicalized every system-class spelling by the time this runs.
+// Loosening it here would suppress the injection for a body upstream rejects.
 func ensureSystemMessageInPlace(obj map[string]any, sa *storedAuth) bool {
 	if sa == nil || !isGlobalDomain(sa.Auth.Domain) {
 		return false
@@ -203,12 +291,9 @@ func ensureSystemMessageInPlace(obj map[string]any, sa *storedAuth) bool {
 	if !ok || len(messages) == 0 {
 		return false
 	}
-	for _, m := range messages {
-		msg, ok := m.(map[string]any)
-		if !ok {
-			continue
-		}
-		if role, _ := msg["role"].(string); strings.EqualFold(role, "system") {
+	first, ok := messages[0].(map[string]any)
+	if ok {
+		if role, _ := first["role"].(string); role == "system" {
 			return false
 		}
 	}
@@ -367,6 +452,9 @@ func rewriteSystemForUpstream(payload []byte) []byte {
 		if rewriteContentField(msg) {
 			changed = true
 		}
+		if rewriteToolCallArguments(msg) {
+			changed = true
+		}
 	}
 	if !changed {
 		return payload
@@ -376,6 +464,39 @@ func rewriteSystemForUpstream(payload []byte) []byte {
 		return payload
 	}
 	return out
+}
+
+// rewriteToolCallArguments sanitizes assistant tool-call arguments.
+//
+// tool_calls[].function.arguments is a JSON document serialized into a string,
+// so the content walk above never sees it. A blocked phrase that a tool wrote
+// into its arguments would otherwise reach upstream verbatim and trip the same
+// filter the content path is dodging.
+func rewriteToolCallArguments(msg map[string]any) bool {
+	calls, ok := msg["tool_calls"].([]any)
+	if !ok {
+		return false
+	}
+	modified := false
+	for _, rawCall := range calls {
+		call, ok := rawCall.(map[string]any)
+		if !ok {
+			continue
+		}
+		fn, ok := call["function"].(map[string]any)
+		if !ok {
+			continue
+		}
+		args, ok := fn["arguments"].(string)
+		if !ok {
+			continue
+		}
+		if rewritten := sanitizeBlockedTemplates(args); rewritten != args {
+			fn["arguments"] = rewritten
+			modified = true
+		}
+	}
+	return modified
 }
 
 // rewriteContentField sanitizes blocked templates in one message's content,
@@ -411,9 +532,13 @@ var sanitizeFeatures = []string{
 	"x-anthropic-billing-header",
 	"You are Claude Code",
 	"Main branch (",
+	// Upstream blocks the Anthropic feedback sentence as a whole (verified
+	// directly: a request carrying it returns 400 code=11128). The marker is
+	// the repo path inside it, so the rewrite below is reachable.
+	"anthropics/claude-code/issues",
 }
 
-var sanitizeBillingHeaderRE = regexp.MustCompile(`(?i)x-anthropic-billing-header:[^;\n]*;?\s*`)
+var sanitizeBillingHeaderRE = regexp.MustCompile(`(?i)x-anthropic-billing-header(?::[^;\n]*;?\s*)?`)
 var sanitizeCCEntrypointRE = regexp.MustCompile(`(?i)\bcc_entrypoint=`)
 var sanitizeCCKeyValueRE = regexp.MustCompile(`(?i)\bcc_[a-z0-9_]+=[^;\n]*;?\s*`)
 
@@ -423,11 +548,14 @@ func sanitizeBlockedTemplates(s string) string {
 	}
 	original := s
 	s = strings.ReplaceAll(s,
-		"You are Claude Code, Anthropic's official CLI for Claude.",
-		"You are Claude Code, Anthropic's official CLI tool for Claude.")
+		"You are Claude Code, Anthropic's official CLI for Claude",
+		"You are Claude Code, Anthropic's official CLI tool for Claude")
 	s = strings.ReplaceAll(s,
 		"Main branch (you will usually use this for PRs)",
 		"Default branch (you will usually use this for PRs)")
+	s = strings.ReplaceAll(s,
+		"To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
+		"To provide feedback, users should report the issue at https://github.com/anthropics/claude-code/issues")
 	s = sanitizeBillingHeaderRE.ReplaceAllString(s, "")
 	s = sanitizeCCKeyValueRE.ReplaceAllString(s, "")
 	if s == original {

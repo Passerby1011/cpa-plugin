@@ -55,7 +55,25 @@ func cacheModelAliases(host pluginapi.HostConfigSummary) {
 
 // resolveUpstreamModel maps an aliased requested model back to the real
 // upstream model ID. Returns the input unchanged when nothing matches.
-func resolveUpstreamModel(model string, attributes map[string]string) string {
+//
+// Two independent defences, in order:
+//
+//  1. Alias tables (host oauth-model-alias + per-auth attribute override).
+//     This is the configured path and it normally suffices.
+//  2. Prefix fallback: strip a known auth-file `prefix` segment when the
+//     remainder is a model the plugin actually serves.
+//
+// The fallback exists because the host occasionally hands through the
+// prefixed form. Measured on the live gateway: within ONE request, the first
+// attempt reached the upstream as `gpt-5.6-luna` while the retry went as
+// `wb/gpt-5.6-luna` and the upstream answered 11102 "service info not found".
+// The plugin cannot read the auth file's prefix on this path (the host does
+// not forward Auth.Prefix, only AuthAttributes), so it derives the segment
+// from its own model roster instead: the plugin knows every ID it publishes,
+// and stripping a leading segment is only accepted when what remains is one of
+// them. That makes the strip self-validating — a model name that legitimately
+// contains a slash (vendor/model) is left alone unless the tail is a served ID.
+func resolveUpstreamModel(model string, attributes map[string]string, authID string) string {
 	m := strings.TrimSpace(model)
 	if m == "" {
 		return model
@@ -70,7 +88,69 @@ func resolveUpstreamModel(model string, attributes map[string]string) string {
 	if ok {
 		return name
 	}
+	if bare, ok := stripKnownModelPrefix(m, authID); ok {
+		return bare
+	}
 	return m
+}
+
+// stripKnownModelPrefix removes one leading "<segment>/" from a model ID when
+// the remainder names a model this plugin serves for that credential.
+//
+// The guard that makes this safe is the FIRST check: when the ID as given is
+// itself a served model, it is returned untouched. Without it, an upstream
+// model whose own name contains a slash would be corrupted whenever its tail
+// happens to name a different served model — e.g. a catalogue holding both
+// "vendor/model-x" and "model-x" would silently answer the former request with
+// the latter model. With the guard, a strip can only ever turn a NOT-served
+// name into a served one, which is precisely the leaked-prefix shape, and never
+// one served model into another.
+func stripKnownModelPrefix(model, authID string) (string, bool) {
+	if servesModelID(model, authID) {
+		return "", false
+	}
+	slash := strings.IndexByte(model, '/')
+	if slash <= 0 || slash == len(model)-1 {
+		return "", false
+	}
+	bare := model[slash+1:]
+	if !servesModelID(bare, authID) {
+		return "", false
+	}
+	return bare, true
+}
+
+// servesModelID reports whether the plugin's registered roster for this
+// credential contains the ID (case-insensitive). The roster is what the host
+// registered, so anything in it is by definition addressable upstream.
+//
+// Reading the roster needs no upstream call and no host RPC: snapshotForAuthID
+// is the same in-memory lookup guardExecutorReadiness already performs on this
+// path, so the fallback stays free of I/O.
+func servesModelID(id, authID string) bool {
+	want := strings.ToLower(strings.TrimSpace(id))
+	if want == "" {
+		return false
+	}
+	runtime := currentModelRuntime()
+	if runtime == nil {
+		return false
+	}
+	for _, info := range runtime.snapshotForAuthID(authID).Models {
+		if strings.ToLower(strings.TrimSpace(info.ID)) == want {
+			return true
+		}
+	}
+	// A configured model list is realm-independent and applies to every
+	// credential, so consult it too when the per-auth roster is empty.
+	if features := currentFeatureRuntime(); features != nil {
+		for _, candidate := range features.configuredModels {
+			if strings.ToLower(strings.TrimSpace(candidate)) == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // parseModelAliasAttribute decodes a per-auth alias override from auth

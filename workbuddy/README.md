@@ -20,9 +20,10 @@ built-in management dashboard.
   realms side by side.
 - **Model catalog**: by default the plugin discovers and caches each
   authenticated account's model entitlements. An optional authoritative YAML
-  list can replace WorkBuddy discovery. Both modes enrich missing metadata from
-  models.dev. Host-side `oauth-model-alias` / `oauth-excluded-models` config
-  still applies.
+  list can replace WorkBuddy discovery. Every model field comes from the
+  WorkBuddy catalogue (`/v3/config`), and the plugin never talks to a
+  third-party site. Host-side `oauth-model-alias` / `oauth-excluded-models`
+  config still applies.
 - **Executor** — OpenAI-compatible chat completions, both streaming (real SSE
   via `host.stream.emit`) and non-streaming (SSE folded into a single
   completion). `tool_choice` normalization, Claude Code template sanitization,
@@ -110,9 +111,8 @@ plugins:
       enabled: true
 
       # Optional authoritative model ID list. Entries must be single-line YAML strings.
-      # A non-empty list is the complete catalog: WorkBuddy catalog HTTP and
-      # catalog cache reads/writes are bypassed, while models.dev metadata
-      # fetch, ETag, and last-good cache behavior remains active.
+      # A non-empty list is the complete catalog: it is served as-is with no
+      # network request and no cache read or write.
       # Missing, null, or [] keeps dynamic WorkBuddy discovery.
       models: []
 
@@ -178,33 +178,29 @@ network request.
 
 When `models` is a non-empty YAML sequence of single-line strings, it is the complete model
 list in the configured order. `model.for_auth` validates the account as usual,
-but does not request WorkBuddy catalog HTTP, read or write the per-auth WorkBuddy
-catalog cache, or delete an existing cache. models.dev metadata still uses the
-same online fetch, ETag, persistence, and last-good fallback. Fresh metadata
-publishes `ready`; a valid cached metadata fallback publishes `stale`; no valid
-metadata publishes `failed` with an empty model response. Missing `models`,
-`models: null`, and `models: []` restore dynamic discovery and can reuse the
-existing WorkBuddy catalog cache.
+but makes no network request at all and does not read or write any catalog
+cache, or delete an existing cache. A configured catalog is published `ready`
+with `model_source: config` and an empty `models_fetched_at`; only an unusable
+cache root (e.g. `os.UserConfigDir()` failing) still fails closed. Missing
+`models`, `models: null`, and `models: []` restore dynamic discovery and can
+reuse the existing WorkBuddy catalog cache.
 
 In dynamic mode, the first `model.for_auth` call for an account is the
 authenticated bootstrap boundary:
 
 1. WorkBuddy `GET /v3/config` supplies the account's entitled model IDs and
-   serving fields. Only an HTTP 404 or 405 falls back to the legacy
-   `GET /console/enterprises/personal/models` endpoint; other failures do not.
-2. [models.dev `/models.json`](https://models.dev/models.json) supplies
-   canonical metadata for fields that WorkBuddy omitted. It never determines
-   account entitlement or overrides WorkBuddy serving fields.
-3. Source responses are validated before they replace the persistent cache and
-   an immutable per-account catalog is published.
+   every serving field: limits, credit rate, and the `supportsImages` flag that
+   becomes the model's input modality. Only an HTTP 404 or 405 falls back to
+   the legacy `GET /console/enterprises/personal/models` endpoint; other
+   failures do not.
+2. The response is validated before it replaces the persistent cache, and an
+   immutable per-account catalog is published.
 
 The cache root comes from `os.UserConfigDir()` rather than a hard-coded
 platform path:
 
 ```plaintext
 <user-config-dir>/CLIProxyAPI/workbuddy/model-catalog/
-  metadata.json
-  metadata.json.bak
   models/
     <identity-sha256>.json
     <identity-sha256>.json.bak
@@ -213,21 +209,20 @@ platform path:
 For example, the default path for Linux root is
 `/root/.config/CLIProxyAPI/workbuddy/model-catalog/`.
 
-A first bootstrap with no valid cache is fail-closed: both sources must fetch,
-validate, and persist successfully before the account becomes `ready`.
-`model.for_auth` returns an empty successful model response if bootstrap fails.
-On later process starts, the first call still attempts both refreshes. If a
-refresh fails but that source has a valid last-good cache, the account starts
-`stale` and uses that cache. A source without either a fresh result or valid
-last-good cache leaves the account `failed`.
+A first bootstrap with no valid cache is fail-closed: the WorkBuddy catalogue
+must fetch, validate, and persist successfully before the account becomes
+`ready`. `model.for_auth` returns an empty successful model response if
+bootstrap fails. On later process starts, the first call still attempts the
+refresh. If the refresh fails but a valid last-good cache exists, the account
+starts `stale` and uses that cache. A refresh with neither a fresh result nor a
+valid last-good cache leaves the account `failed`.
 
 Only `ready` and `stale` are executable states. `not_started`, `loading`, and
 `failed` are blocked at all executor entry points with a fixed, redacted
 `not_ready` response and HTTP 503; the scheduler also excludes them. The panel
-keeps loading and exposes `model_status` with per-account source and timestamp
-fields. Its fixed error categories are `auth_invalid`,
-`workbuddy_transport`, `workbuddy_http`, `workbuddy_schema`,
-`models_dev_transport`, `models_dev_http`, `models_dev_schema`, `cache_read`,
+keeps loading and exposes `model_status` with per-account state, source, and
+timestamp fields. Its fixed error categories are `auth_invalid`,
+`workbuddy_transport`, `workbuddy_http`, `workbuddy_schema`, `cache_read`,
 and `cache_write`; raw upstream errors, response bodies, credentials, and cache
 paths are not exposed.
 

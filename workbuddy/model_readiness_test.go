@@ -21,8 +21,6 @@ import (
 const (
 	modelRuntimeRawWorkBuddyTransport = "raw-workbuddy-transport-secret"
 	modelRuntimeRawWorkBuddyBody      = "raw-workbuddy-response-body-secret"
-	modelRuntimeRawMetadataTransport  = "raw-metadata-transport-secret"
-	modelRuntimeRawMetadataBody       = "raw-metadata-response-body-secret"
 )
 
 func installModelStatesForTest(t *testing.T, states map[string]modelReadinessState) *modelRuntime {
@@ -37,7 +35,6 @@ func installModelStatesForTest(t *testing.T, states map[string]modelReadinessSta
 		snapshot := modelReadinessSnapshot{
 			State:            state,
 			ModelSource:      modelSourceFresh,
-			MetadataSource:   modelSourceFresh,
 			Models:           []pluginapi.ModelInfo{},
 			configGeneration: generation,
 		}
@@ -56,9 +53,7 @@ func TestModelRuntimeFreshBootstrapReady(t *testing.T) {
 		}
 		switch {
 		case req.URL.Host == "copilot.tencent.com" && req.URL.Path == "/v3/config":
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
-		case req.URL.Host == "models.dev" && req.URL.Path == "/models.json":
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: http.Header{"ETag": []string{`"fresh-etag"`}}, Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha","name":"Alpha","limit":{"context":32768,"output":4096}}}`)}, nil
+			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}],"models":[{"id":"serve-alpha","name":"serve-alpha","maxInputTokens":32768}]}}`)}, nil
 		default:
 			t.Fatalf("unexpected model request %s", req.URL)
 			return nil, nil
@@ -73,7 +68,7 @@ func TestModelRuntimeFreshBootstrapReady(t *testing.T) {
 		},
 		HostCallbackID: "callback-fresh",
 	})
-	if got.State != modelReady || got.ModelSource != modelSourceFresh || got.MetadataSource != modelSourceFresh {
+	if got.State != modelReady || got.ModelSource != modelSourceFresh {
 		t.Fatalf("snapshot = %#v", got)
 	}
 	if len(got.Models) != 1 || got.Models[0].ID != "serve-alpha" || got.Models[0].ContextLength != 32768 {
@@ -85,9 +80,6 @@ func TestModelRuntimeFreshBootstrapReady(t *testing.T) {
 	}
 	if _, found, err := store.loadModels(identity.sha256(), workBuddyRealmCN); err != nil || !found {
 		t.Fatalf("model cache found=%v err=%v", found, err)
-	}
-	if _, found, err := store.loadMetadata(); err != nil || !found {
-		t.Fatalf("metadata cache found=%v err=%v", found, err)
 	}
 }
 
@@ -104,10 +96,6 @@ func TestModelRuntimeFreshBootstrapFailuresFailClosed(t *testing.T) {
 		{name: "WorkBuddy HTTP", fault: modelRuntimeFaultWorkBuddyHTTP, wantCode: modelErrorWorkBuddyHTTP, do: modelRuntimeFreshFaultDo},
 		{name: "WorkBuddy schema", fault: modelRuntimeFaultWorkBuddySchema, wantCode: modelErrorWorkBuddySchema, do: modelRuntimeFreshFaultDo},
 		{name: "WorkBuddy save", fault: modelRuntimeFaultWorkBuddySave, wantCode: modelErrorCacheWrite, do: modelRuntimeFreshFaultDo},
-		{name: "models.dev transport", fault: modelRuntimeFaultMetadataTransport, wantCode: modelErrorModelsDevTransport, do: modelRuntimeFreshFaultDo},
-		{name: "models.dev HTTP", fault: modelRuntimeFaultMetadataHTTP, wantCode: modelErrorModelsDevHTTP, do: modelRuntimeFreshFaultDo},
-		{name: "models.dev schema", fault: modelRuntimeFaultMetadataSchema, wantCode: modelErrorModelsDevSchema, do: modelRuntimeFreshFaultDo},
-		{name: "metadata save", fault: modelRuntimeFaultMetadataSave, wantCode: modelErrorCacheWrite, do: modelRuntimeFreshFaultDo},
 	}
 
 	for _, tt := range tests {
@@ -148,9 +136,6 @@ func TestModelRuntimeFreshBootstrapRetainsValidModelCache(t *testing.T) {
 	}
 	cached := modelStoreTestCatalog(identity.sha256(), "cached")
 	if err := store.saveModels(cached); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.saveMetadata(modelStoreTestMetadata("cached")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -210,41 +195,6 @@ func TestModelRuntimeFreshBootstrapModelFutureSchemaIsCacheRead(t *testing.T) {
 	}
 }
 
-func TestModelRuntimeFreshBootstrapMetadataFutureSchemaIsCacheRead(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "metadata.json")
-	future := []byte(`{"schema_version":2}`)
-	if err := os.WriteFile(path, future, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	calls := 0
-	do := modelRuntimeFreshFaultDo(t, root, "")
-	runtime := newModelRuntime(newModelStore(root), func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		if req.URL.Host == "models.dev" {
-			calls++
-		}
-		return do(req, callbackID)
-	})
-
-	sa := syntheticStoredAuth(t, workBuddyRealmCN)
-	got := runtime.ensureForAuth(authModelRequestWire{
-		AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-future-metadata", StorageJSON: mustJSON(sa)},
-		HostCallbackID:   "callback-failure",
-	})
-	if calls != 1 {
-		t.Fatalf("models.dev refresh calls = %d, want 1", calls)
-	}
-	if got.State != modelFailed || got.ErrorCode != modelErrorCacheRead {
-		t.Fatalf("snapshot = %#v", got)
-	}
-	if got.MetadataSource != modelSourceNone {
-		t.Fatalf("future metadata cache source = %q, want none", got.MetadataSource)
-	}
-	if gotFile := modelStoreReadFile(t, path); string(gotFile) != string(future) {
-		t.Fatalf("future metadata cache was overwritten: %s", gotFile)
-	}
-}
-
 func TestModelRuntimeSnapshotImmutable(t *testing.T) {
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
 		if callbackID != "callback-copy" {
@@ -253,8 +203,6 @@ func TestModelRuntimeSnapshotImmutable(t *testing.T) {
 		switch req.URL.Host {
 		case "copilot.tencent.com":
 			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
-		case "models.dev":
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha","modalities":{"input":["text"],"output":["text"]}}}`)}, nil
 		default:
 			t.Fatalf("unexpected request %s", req.URL)
 			return nil, nil
@@ -273,13 +221,13 @@ func TestModelRuntimeSnapshotImmutable(t *testing.T) {
 	first.Models[0].ID = "changed"
 	first.Models[0].SupportedGenerationMethods[0] = "changed"
 	first.Models[0].SupportedParameters = []string{"changed"}
-	first.Models[0].SupportedInputModalities[0] = "changed"
-	first.Models[0].SupportedOutputModalities[0] = "changed"
+	first.Models[0].SupportedInputModalities = []string{"changed"}
+	first.Models[0].SupportedOutputModalities = []string{"changed"}
 	first.Models[0].Thinking = &pluginapi.ThinkingSupport{Levels: []string{"changed"}}
 
 	second := runtime.snapshotForAuthID("auth-copy")
 	model := second.Models[0]
-	if model.ID != "serve-alpha" || model.SupportedGenerationMethods[0] != "chat" || model.SupportedParameters != nil || model.SupportedInputModalities[0] != "text" || model.SupportedOutputModalities[0] != "text" || model.Thinking != nil {
+	if model.ID != "serve-alpha" || model.SupportedGenerationMethods[0] != "chat" || model.SupportedParameters != nil || model.SupportedInputModalities != nil || model.SupportedOutputModalities != nil || model.Thinking != nil {
 		t.Fatalf("published snapshot was mutated: %#v", second)
 	}
 
@@ -321,8 +269,6 @@ func TestModelRuntimeSnapshotImmutable(t *testing.T) {
 			switch req.URL.Host {
 			case "copilot.tencent.com":
 				return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
-			case "models.dev":
-				return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha"}}`)}, nil
 			default:
 				t.Fatalf("unexpected request %s", req.URL)
 				return nil, nil
@@ -368,7 +314,6 @@ func TestModelRuntimeSnapshotImmutable(t *testing.T) {
 
 func TestModelRuntimeSameAuthSingleflight(t *testing.T) {
 	var workBuddyCalls atomic.Int32
-	var metadataCalls atomic.Int32
 	started := make(chan struct{})
 	release := make(chan struct{})
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
@@ -379,9 +324,6 @@ func TestModelRuntimeSameAuthSingleflight(t *testing.T) {
 			}
 			<-release
 			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
-		case "models.dev":
-			metadataCalls.Add(1)
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha"}}`)}, nil
 		default:
 			t.Fatalf("unexpected request %s", req.URL)
 			return nil, nil
@@ -407,8 +349,8 @@ func TestModelRuntimeSameAuthSingleflight(t *testing.T) {
 			t.Fatalf("result = %#v", result)
 		}
 	}
-	if workBuddyCalls.Load() != 1 || metadataCalls.Load() != 1 {
-		t.Fatalf("calls: WorkBuddy=%d metadata=%d", workBuddyCalls.Load(), metadataCalls.Load())
+	if workBuddyCalls.Load() != 1 {
+		t.Fatalf("calls: WorkBuddy=%d, want 1", workBuddyCalls.Load())
 	}
 }
 
@@ -433,8 +375,6 @@ func TestModelRuntimeDifferentAuthIsolation(t *testing.T) {
 			}
 			<-globalRelease
 			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["global-model"]}]}}`)}, nil
-		case "models.dev":
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/cn-model":{"id":"cn-model"},"vendor/global-model":{"id":"global-model"}}`)}, nil
 		default:
 			t.Fatalf("unexpected request %s", req.URL)
 			return nil, nil
@@ -487,94 +427,6 @@ func TestModelRuntimeDifferentAuthIsolation(t *testing.T) {
 	}
 }
 
-func TestModelRuntimeMetadataSingleflight(t *testing.T) {
-	var workBuddyCalls atomic.Int32
-	var metadataCalls atomic.Int32
-	workBuddyStarted := make(chan struct{})
-	releaseWorkBuddy := make(chan struct{})
-	metadataStarted := make(chan struct{})
-	secondMetadataStarted := make(chan struct{})
-	releaseMetadata := make(chan struct{})
-	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		switch req.URL.Host {
-		case "copilot.tencent.com":
-			if workBuddyCalls.Add(1) == 2 {
-				close(workBuddyStarted)
-			}
-			<-releaseWorkBuddy
-			id := "model-one"
-			if req.Header.Get("X-User-Id") == "uid-two" {
-				id = "model-two"
-			}
-			body := fmt.Appendf(nil, `{"code":0,"data":{"agents":[{"name":"cli","models":[%q]}]}}`, id)
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: body}, nil
-		case "models.dev":
-			call := metadataCalls.Add(1)
-			switch call {
-			case 1:
-				close(metadataStarted)
-			case 2:
-				close(secondMetadataStarted)
-			}
-			<-releaseMetadata
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/model-one":{"id":"model-one"},"vendor/model-two":{"id":"model-two"}}`)}, nil
-		default:
-			t.Fatalf("unexpected request %s", req.URL)
-			return nil, nil
-		}
-	}
-
-	runtime := newModelRuntime(newModelStore(t.TempDir()), do)
-	firstAuth := syntheticStoredAuth(t, workBuddyRealmCN)
-	firstAuth.Account.UID = "uid-one"
-	firstAuth.Account.EnterpriseID = "enterprise-one"
-	secondAuth := syntheticStoredAuth(t, workBuddyRealmCN)
-	secondAuth.Account.UID = "uid-two"
-	secondAuth.Account.EnterpriseID = "enterprise-two"
-	start := make(chan struct{})
-	results := make(chan modelReadinessSnapshot, 2)
-	var wg sync.WaitGroup
-	for _, req := range []authModelRequestWire{
-		{AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-one", StorageJSON: mustJSON(firstAuth)}},
-		{AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-two", StorageJSON: mustJSON(secondAuth)}},
-	} {
-		req := req
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			results <- runtime.ensureForAuth(req)
-		}()
-	}
-	close(start)
-	concurrentAuths := true
-	select {
-	case <-workBuddyStarted:
-	case <-time.After(2 * time.Second):
-		concurrentAuths = false
-	}
-	close(releaseWorkBuddy)
-	<-metadataStarted
-	select {
-	case <-secondMetadataStarted:
-	case <-time.After(200 * time.Millisecond):
-	}
-	close(releaseMetadata)
-	wg.Wait()
-	close(results)
-	if !concurrentAuths {
-		t.Fatal("auth bootstraps were serialized before metadata refresh")
-	}
-	for result := range results {
-		if result.State != modelReady {
-			t.Fatalf("result = %#v", result)
-		}
-	}
-	if metadataCalls.Load() != 1 {
-		t.Fatalf("models.dev calls = %d, want 1", metadataCalls.Load())
-	}
-}
-
 func TestModelRuntimeConcurrentReaders(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -584,8 +436,6 @@ func TestModelRuntimeConcurrentReaders(t *testing.T) {
 			close(started)
 			<-release
 			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
-		case "models.dev":
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha"}}`)}, nil
 		default:
 			t.Fatalf("unexpected request %s", req.URL)
 			return nil, nil
@@ -656,9 +506,6 @@ func TestModelRuntimeOldGenerationCannotCommit(t *testing.T) {
 	oldStarted := make(chan struct{})
 	releaseOld := make(chan struct{})
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		if req.URL.Host == "models.dev" {
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha"},"vendor/serve-beta":{"id":"serve-beta"}}`)}, nil
-		}
 		token := req.Header.Get("Authorization")
 		if strings.HasSuffix(token, "signature-a") {
 			close(oldStarted)
@@ -716,9 +563,6 @@ func TestModelRuntimeOldGenerationCannotCommit(t *testing.T) {
 		oldStarted := make(chan struct{})
 		releaseOld := make(chan struct{})
 		do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-			if req.URL.Host == "models.dev" {
-				return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/serve-beta":{"id":"serve-beta"}}`)}, nil
-			}
 			if strings.HasSuffix(req.Header.Get("Authorization"), "signature-a") {
 				close(oldStarted)
 				<-releaseOld
@@ -749,9 +593,6 @@ func TestModelRuntimeSharedIdentityRejectsLateOlderCatalogCommit(t *testing.T) {
 	oldStarted := make(chan struct{})
 	releaseOld := make(chan struct{})
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		if req.URL.Host == "models.dev" {
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha"},"vendor/serve-beta":{"id":"serve-beta"}}`)}, nil
-		}
 		if strings.HasSuffix(req.Header.Get("Authorization"), "signature-a") {
 			close(oldStarted)
 			<-releaseOld
@@ -831,8 +672,6 @@ func TestModelRuntimeConcurrentSharedIdentityBootstrapsRemainExecutable(t *testi
 			started <- struct{}{}
 			<-release
 			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
-		case "models.dev":
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha"}}`)}, nil
 		default:
 			t.Fatalf("unexpected request %s", req.URL)
 			return nil, nil
@@ -867,9 +706,6 @@ func TestModelRuntimeSharedIdentityFailureDoesNotDiscardConcurrentSuccess(t *tes
 	failureReturned := make(chan struct{})
 	releaseSuccess := make(chan struct{})
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		if req.URL.Host == "models.dev" {
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha"}}`)}, nil
-		}
 		if strings.HasSuffix(req.Header.Get("Authorization"), "signature-good") {
 			close(successStarted)
 			<-releaseSuccess
@@ -939,8 +775,6 @@ func TestModelRuntimeConfigGenerationInvalidatesSnapshot(t *testing.T) {
 					return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
 				}
 				return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-beta"]}]}}`)}, nil
-			case "models.dev":
-				return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha"},"vendor/serve-beta":{"id":"serve-beta"}}`)}, nil
 			default:
 				t.Fatalf("unexpected request %s", req.URL)
 				return nil, nil
@@ -979,72 +813,6 @@ func TestModelRuntimeConfigGenerationInvalidatesSnapshot(t *testing.T) {
 		}
 	})
 
-	t.Run("in-flight metadata save", func(t *testing.T) {
-		root := t.TempDir()
-		store := newModelStore(root)
-		backup := modelStoreTestMetadata("before-config-backup")
-		primary := modelStoreTestMetadata("before-config-primary")
-		primary.FetchedAt = backup.FetchedAt.Add(time.Minute)
-		if err := store.saveMetadata(backup); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.saveMetadata(primary); err != nil {
-			t.Fatal(err)
-		}
-		metadataPath := filepath.Join(root, "metadata.json")
-		primaryBefore := modelStoreReadFile(t, metadataPath)
-		backupBefore := modelStoreReadFile(t, metadataPath+".bak")
-
-		var workBuddyCalls atomic.Int32
-		var metadataCalls atomic.Int32
-		metadataStarted := make(chan struct{})
-		releaseMetadata := make(chan struct{})
-		do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-			switch req.URL.Host {
-			case "copilot.tencent.com":
-				workBuddyCalls.Add(1)
-				return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
-			case "models.dev":
-				if metadataCalls.Add(1) == 1 {
-					close(metadataStarted)
-					<-releaseMetadata
-				}
-				return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha"}}`)}, nil
-			default:
-				t.Fatalf("unexpected request %s", req.URL)
-				return nil, nil
-			}
-		}
-		runtime := newModelRuntime(store, do)
-		sa := syntheticStoredAuth(t, workBuddyRealmCN)
-		req := authModelRequestWire{AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-config-metadata", StorageJSON: mustJSON(sa)}}
-		oldDone := make(chan modelReadinessSnapshot, 1)
-		go func() { oldDone <- runtime.ensureForAuth(req) }()
-		<-metadataStarted
-		if got := runtime.advanceConfigGeneration(); got != 1 {
-			t.Fatalf("config generation = %d, want 1", got)
-		}
-		invalidated := runtime.snapshotForAuthID("auth-config-metadata")
-		if invalidated.State != modelNotStarted || invalidated.executable() || invalidated.Models == nil || len(invalidated.Models) != 0 {
-			t.Errorf("invalidated snapshot = %#v", invalidated)
-		}
-		close(releaseMetadata)
-		<-oldDone
-		if got := modelStoreReadFile(t, metadataPath); string(got) != string(primaryBefore) {
-			t.Fatalf("stale generation replaced metadata primary: before=%s after=%s", primaryBefore, got)
-		}
-		if got := modelStoreReadFile(t, metadataPath+".bak"); string(got) != string(backupBefore) {
-			t.Fatalf("stale generation replaced metadata backup: before=%s after=%s", backupBefore, got)
-		}
-		if runtime.metadataResult != nil {
-			t.Fatalf("stale generation settled metadata = %#v", runtime.metadataResult)
-		}
-
-		newResult := runtime.ensureForAuth(req)
-		if workBuddyCalls.Load() != 2 || metadataCalls.Load() != 2 || newResult.State != modelReady || len(newResult.Models) != 1 || newResult.Models[0].ID != "serve-alpha" {
-			t.Fatalf("WorkBuddy=%d metadata=%d new result=%#v", workBuddyCalls.Load(), metadataCalls.Load(), newResult)
-		}
-	})
 }
 
 func TestModelRuntimeFailedConfigureKeepsGeneration(t *testing.T) {
@@ -1096,25 +864,6 @@ func TestModelRuntimeFailedConfigureKeepsGeneration(t *testing.T) {
 	}
 }
 
-func TestModelRuntimeFreshBootstrapPreloadsMetadataWithoutSettlingRefresh(t *testing.T) {
-	store := newModelStore(t.TempDir())
-	cached := modelStoreTestMetadata("cached")
-	if err := store.saveMetadata(cached); err != nil {
-		t.Fatal(err)
-	}
-	runtime := newModelRuntime(store, func(*http.Request, string) (*hostHTTPResponse, error) {
-		t.Fatal("metadata preload made an HTTP request")
-		return nil, nil
-	})
-	status := runtime.metadataStatus()
-	if status.Source != modelSourceCache || !status.FetchedAt.Equal(cached.FetchedAt) || status.ErrorCode != modelErrorNone {
-		t.Fatalf("metadata status = %#v", status)
-	}
-	if runtime.metadataResult != nil {
-		t.Fatalf("metadata preload settled refresh: %#v", runtime.metadataResult)
-	}
-}
-
 func TestModelRuntimeFreshBootstrapCurrentRuntimeIsLazySingleton(t *testing.T) {
 	previous := activeModelRuntime.Swap(nil)
 	t.Cleanup(func() { activeModelRuntime.Swap(previous) })
@@ -1130,79 +879,39 @@ func TestModelRuntimeFreshBootstrapCurrentRuntimeIsLazySingleton(t *testing.T) {
 	}
 }
 
+// The stale matrix has one dimension left: whether the catalogue refresh
+// succeeded. models.dev used to be a second dimension, which is why a host
+// without egress to it saw a failed provider for a data point that changes no
+// routing decision.
 func TestModelRuntimeStaleMatrix(t *testing.T) {
 	tests := []struct {
-		name                   string
-		workBuddyFails         bool
-		metadataFails          bool
-		metadataNotModified    bool
-		wantState              modelReadinessState
-		wantModelSource        modelSnapshotSource
-		wantMetadataSource     modelSnapshotSource
-		wantID                 string
-		wantName               string
-		wantContext            int64
-		wantCode               modelErrorCode
-		wantCachedModelTime    bool
-		wantCachedMetadataTime bool
+		name                string
+		workBuddyFails      bool
+		wantState           modelReadinessState
+		wantModelSource     modelSnapshotSource
+		wantID              string
+		wantName            string
+		wantContext         int64
+		wantCode            modelErrorCode
+		wantCachedModelTime bool
 	}{
 		{
-			name:               "fresh models and fresh metadata",
-			wantState:          modelReady,
-			wantModelSource:    modelSourceFresh,
-			wantMetadataSource: modelSourceFresh,
-			wantID:             "fresh-model",
-			wantName:           "Fresh metadata for fresh",
-			wantContext:        2222,
+			name:            "fresh catalogue",
+			wantState:       modelReady,
+			wantModelSource: modelSourceFresh,
+			wantID:          "fresh-model",
+			wantName:        "fresh-model",
+			wantContext:     2222,
 		},
 		{
-			name:                "cached models and fresh metadata",
+			name:                "cached catalogue after a failed refresh",
 			workBuddyFails:      true,
 			wantState:           modelStale,
 			wantModelSource:     modelSourceCache,
-			wantMetadataSource:  modelSourceFresh,
 			wantID:              "cached-model",
-			wantName:            "Fresh metadata for cached",
-			wantContext:         2222,
+			wantName:            "cached-model",
 			wantCode:            modelErrorWorkBuddyTransport,
 			wantCachedModelTime: true,
-		},
-		{
-			name:                   "fresh models and cached metadata",
-			metadataFails:          true,
-			wantState:              modelStale,
-			wantModelSource:        modelSourceFresh,
-			wantMetadataSource:     modelSourceCache,
-			wantID:                 "fresh-model",
-			wantName:               "Cached metadata for fresh",
-			wantContext:            1111,
-			wantCode:               modelErrorModelsDevTransport,
-			wantCachedMetadataTime: true,
-		},
-		{
-			name:                   "cached models and cached metadata",
-			workBuddyFails:         true,
-			metadataFails:          true,
-			wantState:              modelStale,
-			wantModelSource:        modelSourceCache,
-			wantMetadataSource:     modelSourceCache,
-			wantID:                 "cached-model",
-			wantName:               "Cached metadata for cached",
-			wantContext:            1111,
-			wantCode:               modelErrorWorkBuddyTransport,
-			wantCachedModelTime:    true,
-			wantCachedMetadataTime: true,
-		},
-		{
-			name:                   "fresh models and not modified metadata",
-			metadataNotModified:    true,
-			wantState:              modelReady,
-			wantModelSource:        modelSourceFresh,
-			wantMetadataSource:     modelSourceFresh,
-			wantID:                 "fresh-model",
-			wantName:               "Cached metadata for fresh",
-			wantContext:            1111,
-			wantCachedMetadataTime: true,
 		},
 	}
 
@@ -1212,7 +921,6 @@ func TestModelRuntimeStaleMatrix(t *testing.T) {
 			sa := syntheticStoredAuth(t, workBuddyRealmCN)
 			lastGood := modelRuntimeSeedLastGood(t, root, "auth-stale", sa)
 			workBuddyCalls := 0
-			metadataCalls := 0
 			do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
 				if callbackID != "callback-stale" {
 					t.Fatalf("callback ID = %q", callbackID)
@@ -1224,18 +932,6 @@ func TestModelRuntimeStaleMatrix(t *testing.T) {
 						return nil, errors.New(modelRuntimeRawWorkBuddyTransport)
 					}
 					return modelRuntimeFreshWorkBuddyResponse(), nil
-				case req.URL.Host == "models.dev" && req.URL.Path == "/models.json":
-					metadataCalls++
-					if got := req.Header.Get("If-None-Match"); got != lastGood.metadata.ETag {
-						t.Fatalf("If-None-Match = %q, want %q", got, lastGood.metadata.ETag)
-					}
-					if tt.metadataFails {
-						return nil, errors.New(modelRuntimeRawMetadataTransport)
-					}
-					if tt.metadataNotModified {
-						return &hostHTTPResponse{StatusCode: http.StatusNotModified, Headers: http.Header{"ETag": []string{`"ignored-etag"`}}}, nil
-					}
-					return modelRuntimeFreshMetadataResponse(), nil
 				default:
 					t.Fatalf("unexpected model request %s", req.URL)
 					return nil, nil
@@ -1247,10 +943,10 @@ func TestModelRuntimeStaleMatrix(t *testing.T) {
 				AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-stale", StorageJSON: mustJSON(sa)},
 				HostCallbackID:   "callback-stale",
 			})
-			if workBuddyCalls != 1 || metadataCalls != 1 {
-				t.Fatalf("refresh calls: WorkBuddy=%d metadata=%d, want 1 each", workBuddyCalls, metadataCalls)
+			if workBuddyCalls != 1 {
+				t.Fatalf("refresh calls: WorkBuddy=%d, want 1", workBuddyCalls)
 			}
-			if got.State != tt.wantState || got.ModelSource != tt.wantModelSource || got.MetadataSource != tt.wantMetadataSource {
+			if got.State != tt.wantState || got.ModelSource != tt.wantModelSource {
 				t.Fatalf("snapshot = %#v", got)
 			}
 			if !got.executable() {
@@ -1265,134 +961,68 @@ func TestModelRuntimeStaleMatrix(t *testing.T) {
 			if got.ModelsFetchedAt.Equal(lastGood.catalog.FetchedAt) != tt.wantCachedModelTime {
 				t.Fatalf("models fetched_at = %s, cached = %s", got.ModelsFetchedAt, lastGood.catalog.FetchedAt)
 			}
-			if got.MetadataFetchedAt.Equal(lastGood.metadata.FetchedAt) != tt.wantCachedMetadataTime {
-				t.Fatalf("metadata fetched_at = %s, cached = %s", got.MetadataFetchedAt, lastGood.metadata.FetchedAt)
-			}
 		})
 	}
 }
 
+// A failed cache write must keep the previous primary and backup intact and
+// still serve the last good catalogue rather than the un-persisted refresh.
 func TestModelRuntimeStalePersistenceFailuresRetainOldPrimary(t *testing.T) {
-	tests := []struct {
-		name               string
-		blockedSource      string
-		wantModelSource    modelSnapshotSource
-		wantMetadataSource modelSnapshotSource
-		wantID             string
-		wantName           string
-		wantContext        int64
-	}{
-		{
-			name:               "model catalog save",
-			blockedSource:      "models",
-			wantModelSource:    modelSourceCache,
-			wantMetadataSource: modelSourceFresh,
-			wantID:             "cached-model",
-			wantName:           "Fresh metadata for cached",
-			wantContext:        2222,
-		},
-		{
-			name:               "metadata save",
-			blockedSource:      "metadata",
-			wantModelSource:    modelSourceFresh,
-			wantMetadataSource: modelSourceCache,
-			wantID:             "fresh-model",
-			wantName:           "Cached metadata for fresh",
-			wantContext:        1111,
-		},
+	root := t.TempDir()
+	sa := syntheticStoredAuth(t, workBuddyRealmCN)
+	lastGood := modelRuntimeSeedLastGood(t, root, "auth-save", sa)
+	blockedPath := lastGood.modelPath
+	futureBackup := []byte(`{"schema_version":2}`)
+	if err := os.WriteFile(blockedPath+".bak", futureBackup, 0o600); err != nil {
+		t.Fatal(err)
 	}
+	// The catalogue stays readable but its directory cannot be written to, so
+	// the refresh succeeds and only the persist fails.
+	modelRuntimeMakeModelsDirectoryReadOnly(t, root)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			sa := syntheticStoredAuth(t, workBuddyRealmCN)
-			lastGood := modelRuntimeSeedLastGood(t, root, "auth-save", sa)
-			blockedPath := lastGood.modelPath
-			if tt.blockedSource == "metadata" {
-				blockedPath = lastGood.metadataPath
-			}
-			before := modelStoreReadFile(t, blockedPath)
-			futureBackup := []byte(`{"schema_version":2}`)
-			if err := os.WriteFile(blockedPath+".bak", futureBackup, 0o600); err != nil {
-				t.Fatal(err)
-			}
-
-			runtime := newModelRuntime(newModelStore(root), modelRuntimeSuccessfulRefreshDo(t, "callback-save"))
-			got := runtime.ensureForAuth(authModelRequestWire{
-				AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-save", StorageJSON: mustJSON(sa)},
-				HostCallbackID:   "callback-save",
-			})
-			if got.State != modelStale || !got.executable() || got.ModelSource != tt.wantModelSource || got.MetadataSource != tt.wantMetadataSource || got.ErrorCode != modelErrorCacheWrite {
-				t.Fatalf("snapshot = %#v", got)
-			}
-			if len(got.Models) != 1 || got.Models[0].ID != tt.wantID || got.Models[0].Name != tt.wantName || got.Models[0].ContextLength != tt.wantContext {
-				t.Fatalf("models = %#v", got.Models)
-			}
-			if after := modelStoreReadFile(t, blockedPath); string(after) != string(before) {
-				t.Fatalf("old primary was replaced after failed save: before=%s after=%s", before, after)
-			}
-			if after := modelStoreReadFile(t, blockedPath+".bak"); string(after) != string(futureBackup) {
-				t.Fatalf("future backup was replaced after failed save: %s", after)
-			}
-		})
+	runtime := newModelRuntime(newModelStore(root), modelRuntimeSuccessfulRefreshDo(t, "callback-save"))
+	got := runtime.ensureForAuth(authModelRequestWire{
+		AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-save", StorageJSON: mustJSON(sa)},
+		HostCallbackID:   "callback-save",
+	})
+	if got.State != modelStale || !got.executable() || got.ErrorCode != modelErrorCacheWrite {
+		t.Fatalf("snapshot = %#v", got)
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "cached-model" || got.Models[0].Name != "cached-model" {
+		t.Fatalf("models = %#v", got.Models)
+	}
+	if after := modelStoreReadFile(t, blockedPath+".bak"); string(after) != string(futureBackup) {
+		t.Fatalf("backup was replaced after failed save: %s", after)
 	}
 }
 
+// A refresh that parses only partly must not replace the last good catalogue:
+// serving half a model list is worse than serving a stale one.
 func TestModelRuntimeStaleRejectsPartialAndCorruptRefreshes(t *testing.T) {
 	tests := []struct {
-		name               string
-		failedSource       string
-		body               string
-		wantModelSource    modelSnapshotSource
-		wantMetadataSource modelSnapshotSource
-		wantID             string
-		wantName           string
-		wantContext        int64
-		wantCode           modelErrorCode
+		name            string
+		body            string
+		wantModelSource modelSnapshotSource
+		wantID          string
+		wantName        string
+		wantContext     int64
+		wantCode        modelErrorCode
 	}{
 		{
-			name:               "partial WorkBuddy body",
-			failedSource:       "models",
-			body:               `{"code":0,"data":{"agents":[{"name":"cli","models":["fresh-model",""]}]}}`,
-			wantModelSource:    modelSourceCache,
-			wantMetadataSource: modelSourceFresh,
-			wantID:             "cached-model",
-			wantName:           "Fresh metadata for cached",
-			wantContext:        2222,
-			wantCode:           modelErrorWorkBuddySchema,
+			name:            "partial WorkBuddy body",
+			body:            `{"code":0,"data":{"agents":[{"name":"cli","models":["fresh-model",""]}]}}`,
+			wantModelSource: modelSourceCache,
+			wantID:          "cached-model",
+			wantName:        "cached-model",
+			wantCode:        modelErrorWorkBuddySchema,
 		},
 		{
-			name:               "corrupt WorkBuddy body",
-			failedSource:       "models",
-			body:               `{"code":`,
-			wantModelSource:    modelSourceCache,
-			wantMetadataSource: modelSourceFresh,
-			wantID:             "cached-model",
-			wantName:           "Fresh metadata for cached",
-			wantContext:        2222,
-			wantCode:           modelErrorWorkBuddySchema,
-		},
-		{
-			name:               "partial metadata body",
-			failedSource:       "metadata",
-			body:               `{"fresh-provider/fresh-model":{"id":"fresh-model","name":"Fresh metadata for fresh","limit":{"context":2222}},"fresh-provider/broken":{"id":""}}`,
-			wantModelSource:    modelSourceFresh,
-			wantMetadataSource: modelSourceCache,
-			wantID:             "fresh-model",
-			wantName:           "Cached metadata for fresh",
-			wantContext:        1111,
-			wantCode:           modelErrorModelsDevSchema,
-		},
-		{
-			name:               "corrupt metadata body",
-			failedSource:       "metadata",
-			body:               `{"fresh-provider/fresh-model":`,
-			wantModelSource:    modelSourceFresh,
-			wantMetadataSource: modelSourceCache,
-			wantID:             "fresh-model",
-			wantName:           "Cached metadata for fresh",
-			wantContext:        1111,
-			wantCode:           modelErrorModelsDevSchema,
+			name:            "corrupt WorkBuddy body",
+			body:            `{"code":`,
+			wantModelSource: modelSourceCache,
+			wantID:          "cached-model",
+			wantName:        "cached-model",
+			wantCode:        modelErrorWorkBuddySchema,
 		},
 	}
 
@@ -1402,29 +1032,15 @@ func TestModelRuntimeStaleRejectsPartialAndCorruptRefreshes(t *testing.T) {
 			sa := syntheticStoredAuth(t, workBuddyRealmCN)
 			lastGood := modelRuntimeSeedLastGood(t, root, "auth-invalid-refresh", sa)
 			failedPath := lastGood.modelPath
-			if tt.failedSource == "metadata" {
-				failedPath = lastGood.metadataPath
-			}
 			before := modelStoreReadFile(t, failedPath)
 			do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
 				if callbackID != "callback-invalid-refresh" {
 					t.Fatalf("callback ID = %q", callbackID)
 				}
-				switch req.URL.Host {
-				case "copilot.tencent.com":
-					if tt.failedSource == "models" {
-						return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(tt.body)}, nil
-					}
-					return modelRuntimeFreshWorkBuddyResponse(), nil
-				case "models.dev":
-					if tt.failedSource == "metadata" {
-						return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(tt.body)}, nil
-					}
-					return modelRuntimeFreshMetadataResponse(), nil
-				default:
+				if req.URL.Host != "copilot.tencent.com" {
 					t.Fatalf("unexpected model request %s", req.URL)
-					return nil, nil
 				}
+				return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(tt.body)}, nil
 			}
 
 			runtime := newModelRuntime(newModelStore(root), do)
@@ -1432,7 +1048,7 @@ func TestModelRuntimeStaleRejectsPartialAndCorruptRefreshes(t *testing.T) {
 				AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-invalid-refresh", StorageJSON: mustJSON(sa)},
 				HostCallbackID:   "callback-invalid-refresh",
 			})
-			if got.State != modelStale || !got.executable() || got.ModelSource != tt.wantModelSource || got.MetadataSource != tt.wantMetadataSource || got.ErrorCode != tt.wantCode {
+			if got.State != modelStale || !got.executable() || got.ModelSource != tt.wantModelSource || got.ErrorCode != tt.wantCode {
 				t.Fatalf("snapshot = %#v", got)
 			}
 			if len(got.Models) != 1 || got.Models[0].ID != tt.wantID || got.Models[0].Name != tt.wantName || got.Models[0].ContextLength != tt.wantContext {
@@ -1445,168 +1061,20 @@ func TestModelRuntimeStaleRejectsPartialAndCorruptRefreshes(t *testing.T) {
 	}
 }
 
-func TestModelRuntimeNotModifiedKeepsMetadataCacheWithoutRewrite(t *testing.T) {
-	root := t.TempDir()
-	sa := syntheticStoredAuth(t, workBuddyRealmCN)
-	lastGood := modelRuntimeSeedLastGood(t, root, "auth-not-modified", sa)
-	before := modelStoreReadFile(t, lastGood.metadataPath)
-	metadataCalls := 0
-	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		if callbackID != "callback-not-modified" {
-			t.Fatalf("callback ID = %q", callbackID)
-		}
-		switch req.URL.Host {
-		case "copilot.tencent.com":
-			return modelRuntimeFreshWorkBuddyResponse(), nil
-		case "models.dev":
-			metadataCalls++
-			if got := req.Header.Get("If-None-Match"); got != lastGood.metadata.ETag {
-				t.Fatalf("If-None-Match = %q, want %q", got, lastGood.metadata.ETag)
-			}
-			return &hostHTTPResponse{StatusCode: http.StatusNotModified, Headers: http.Header{"ETag": []string{`"replacement-etag"`}}}, nil
-		default:
-			t.Fatalf("unexpected model request %s", req.URL)
-			return nil, nil
-		}
-	}
-
-	runtime := newModelRuntime(newModelStore(root), do)
-	got := runtime.ensureForAuth(authModelRequestWire{
-		AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-not-modified", StorageJSON: mustJSON(sa)},
-		HostCallbackID:   "callback-not-modified",
-	})
-	if metadataCalls != 1 {
-		t.Fatalf("metadata calls = %d, want 1", metadataCalls)
-	}
-	if got.State != modelReady || got.ModelSource != modelSourceFresh || got.MetadataSource != modelSourceFresh || got.ErrorCode != modelErrorNone {
-		t.Fatalf("snapshot = %#v", got)
-	}
-	if len(got.Models) != 1 || got.Models[0].ID != "fresh-model" || got.Models[0].Name != "Cached metadata for fresh" || got.Models[0].ContextLength != 1111 {
-		t.Fatalf("models = %#v", got.Models)
-	}
-	if !got.MetadataFetchedAt.Equal(lastGood.metadata.FetchedAt) {
-		t.Fatalf("metadata fetched_at = %s, want %s", got.MetadataFetchedAt, lastGood.metadata.FetchedAt)
-	}
-	if runtime.metadataResult == nil || runtime.metadataResult.cache.ETag != lastGood.metadata.ETag || !runtime.metadataResult.cache.FetchedAt.Equal(lastGood.metadata.FetchedAt) {
-		t.Fatalf("metadata result = %#v", runtime.metadataResult)
-	}
-	if after := modelStoreReadFile(t, lastGood.metadataPath); string(after) != string(before) {
-		t.Fatalf("metadata primary was rewritten: before=%s after=%s", before, after)
-	}
-	if _, err := os.Stat(lastGood.metadataPath + ".bak"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("metadata backup exists after 304: %v", err)
-	}
-}
-
-func TestModelRuntimeNotModifiedWithoutMetadataCacheFailsAndRetries(t *testing.T) {
-	metadataCalls := 0
-	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		if callbackID != "callback-not-modified-no-cache" {
-			t.Fatalf("callback ID = %q", callbackID)
-		}
-		switch req.URL.Host {
-		case "copilot.tencent.com":
-			return modelRuntimeFreshWorkBuddyResponse(), nil
-		case "models.dev":
-			metadataCalls++
-			if metadataCalls == 1 {
-				return &hostHTTPResponse{StatusCode: http.StatusNotModified, Headers: make(http.Header)}, nil
-			}
-			return modelRuntimeFreshMetadataResponse(), nil
-		default:
-			t.Fatalf("unexpected model request %s", req.URL)
-			return nil, nil
-		}
-	}
-
-	runtime := newModelRuntime(newModelStore(t.TempDir()), do)
-	sa := syntheticStoredAuth(t, workBuddyRealmCN)
-	first := runtime.ensureForAuth(authModelRequestWire{
-		AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-not-modified-first", StorageJSON: mustJSON(sa)},
-		HostCallbackID:   "callback-not-modified-no-cache",
-	})
-	if first.State != modelFailed || first.ModelSource != modelSourceFresh || first.MetadataSource != modelSourceNone || first.ErrorCode != modelErrorModelsDevSchema || first.executable() || first.Models == nil || len(first.Models) != 0 {
-		t.Fatalf("first snapshot = %#v", first)
-	}
-	if runtime.metadataResult != nil {
-		t.Fatalf("304 without cache settled the runtime: %#v", runtime.metadataResult)
-	}
-
-	second := runtime.ensureForAuth(authModelRequestWire{
-		AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-not-modified-second", StorageJSON: mustJSON(sa)},
-		HostCallbackID:   "callback-not-modified-no-cache",
-	})
-	if metadataCalls != 2 {
-		t.Fatalf("metadata calls = %d, want 2", metadataCalls)
-	}
-	if second.State != modelReady || second.ModelSource != modelSourceFresh || second.MetadataSource != modelSourceFresh || !second.executable() {
-		t.Fatalf("second snapshot = %#v", second)
-	}
-}
-
-func TestModelRuntimeRetriesMetadataWithoutCache(t *testing.T) {
-	metadataCalls := 0
-	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		if callbackID != "callback-retry" {
-			t.Fatalf("callback ID = %q", callbackID)
-		}
-		switch req.URL.Host {
-		case "copilot.tencent.com":
-			return modelRuntimeFreshWorkBuddyResponse(), nil
-		case "models.dev":
-			metadataCalls++
-			if metadataCalls == 1 {
-				return nil, errors.New(modelRuntimeRawMetadataTransport)
-			}
-			return modelRuntimeFreshMetadataResponse(), nil
-		default:
-			t.Fatalf("unexpected model request %s", req.URL)
-			return nil, nil
-		}
-	}
-
-	runtime := newModelRuntime(newModelStore(t.TempDir()), do)
-	sa := syntheticStoredAuth(t, workBuddyRealmCN)
-	first := runtime.ensureForAuth(authModelRequestWire{
-		AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-retry-first", StorageJSON: mustJSON(sa)},
-		HostCallbackID:   "callback-retry",
-	})
-	if first.State != modelFailed || first.MetadataSource != modelSourceNone || first.ErrorCode != modelErrorModelsDevTransport || first.executable() {
-		t.Fatalf("first snapshot = %#v", first)
-	}
-	if runtime.metadataResult != nil {
-		t.Fatalf("metadata failure without cache settled the runtime: %#v", runtime.metadataResult)
-	}
-
-	second := runtime.ensureForAuth(authModelRequestWire{
-		AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-retry-second", StorageJSON: mustJSON(sa)},
-		HostCallbackID:   "callback-retry",
-	})
-	if metadataCalls != 2 {
-		t.Fatalf("metadata calls = %d, want 2", metadataCalls)
-	}
-	if second.State != modelReady || second.ModelSource != modelSourceFresh || second.MetadataSource != modelSourceFresh || !second.executable() {
-		t.Fatalf("second snapshot = %#v", second)
-	}
-	if len(second.Models) != 1 || second.Models[0].ID != "fresh-model" || second.Models[0].ContextLength != 2222 {
-		t.Fatalf("second models = %#v", second.Models)
-	}
-}
-
 type modelRuntimeLastGood struct {
-	catalog      modelCatalogCacheV1
-	metadata     metadataCacheV1
-	modelPath    string
-	metadataPath string
+	catalog   modelCatalogCacheV1
+	modelPath string
 }
 
+// modelRuntimeSeedLastGood writes a valid on-disk catalogue cache, the state a
+// plugin install is in after one successful refresh. Only the catalogue is
+// cached: the plugin no longer keeps a models.dev record cache.
 func modelRuntimeSeedLastGood(t *testing.T, root, authID string, sa *storedAuth) modelRuntimeLastGood {
 	t.Helper()
 	identity, err := modelAuthIdentityFor(authID, sa)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cachedContext := int64(1111)
 	catalog := modelCatalogCacheV1{
 		SchemaVersion:  1,
 		IdentitySHA256: identity.sha256(),
@@ -1615,54 +1083,29 @@ func modelRuntimeSeedLastGood(t *testing.T, root, authID string, sa *storedAuth)
 		Endpoint:       workBuddyEndpointV3Config,
 		Models:         []modelFacts{{ID: "cached-model"}},
 	}
-	metadata := metadataCacheV1{
-		SchemaVersion: 1,
-		ETag:          `W/"cached-etag"`,
-		FetchedAt:     time.Date(2026, time.August, 28, 4, 5, 6, 0, time.UTC),
-		Records: map[string]modelFacts{
-			"cached-provider/cached-model": {
-				ID:            "cached-provider/cached-model",
-				Name:          "Cached metadata for cached",
-				ContextLength: &cachedContext,
-			},
-			"cached-provider/fresh-model": {
-				ID:            "cached-provider/fresh-model",
-				Name:          "Cached metadata for fresh",
-				ContextLength: &cachedContext,
-			},
-		},
-	}
 	store := newModelStore(root)
 	if err := store.saveModels(catalog); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.saveMetadata(metadata); err != nil {
-		t.Fatal(err)
-	}
 	return modelRuntimeLastGood{
-		catalog:      catalog,
-		metadata:     metadata,
-		modelPath:    filepath.Join(root, "models", identity.sha256()+".json"),
-		metadataPath: filepath.Join(root, "metadata.json"),
+		catalog:   catalog,
+		modelPath: filepath.Join(root, "models", identity.sha256()+".json"),
 	}
 }
 
+// The catalogue carries the limits itself; before the models.dev removal this
+// fixture only listed ids and leaned on the third-party record for context
+// length, which is exactly the dependency that was removed.
 func modelRuntimeFreshWorkBuddyResponse() *hostHTTPResponse {
 	return &hostHTTPResponse{
 		StatusCode: http.StatusOK,
 		Headers:    make(http.Header),
-		Body:       []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["fresh-model"]}]}}`),
+		Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["fresh-model"]}],` +
+			`"models":[{"id":"fresh-model","name":"fresh-model","maxInputTokens":2222,"maxOutputTokens":111}]}}`),
 	}
 }
 
-func modelRuntimeFreshMetadataResponse() *hostHTTPResponse {
-	return &hostHTTPResponse{
-		StatusCode: http.StatusOK,
-		Headers:    http.Header{"ETag": []string{`"fresh-etag"`}},
-		Body: []byte(`{"fresh-provider/cached-model":{"id":"cached-model","name":"Fresh metadata for cached","limit":{"context":2222}},` +
-			`"fresh-provider/fresh-model":{"id":"fresh-model","name":"Fresh metadata for fresh","limit":{"context":2222}}}`),
-	}
-}
+// The seeded cached catalogue likewise carries its own limits.
 
 func modelRuntimeSuccessfulRefreshDo(t *testing.T, callbackID string) modelHTTPDo {
 	t.Helper()
@@ -1673,8 +1116,6 @@ func modelRuntimeSuccessfulRefreshDo(t *testing.T, callbackID string) modelHTTPD
 		switch req.URL.Host {
 		case "copilot.tencent.com":
 			return modelRuntimeFreshWorkBuddyResponse(), nil
-		case "models.dev":
-			return modelRuntimeFreshMetadataResponse(), nil
 		default:
 			t.Fatalf("unexpected model request %s", req.URL)
 			return nil, nil
@@ -1689,10 +1130,6 @@ const (
 	modelRuntimeFaultWorkBuddyHTTP      modelRuntimeFreshFault = "workbuddy_http"
 	modelRuntimeFaultWorkBuddySchema    modelRuntimeFreshFault = "workbuddy_schema"
 	modelRuntimeFaultWorkBuddySave      modelRuntimeFreshFault = "workbuddy_save"
-	modelRuntimeFaultMetadataTransport  modelRuntimeFreshFault = "metadata_transport"
-	modelRuntimeFaultMetadataHTTP       modelRuntimeFreshFault = "metadata_http"
-	modelRuntimeFaultMetadataSchema     modelRuntimeFreshFault = "metadata_schema"
-	modelRuntimeFaultMetadataSave       modelRuntimeFreshFault = "metadata_save"
 )
 
 func modelRuntimeFreshFaultDo(t *testing.T, root string, fault modelRuntimeFreshFault) modelHTTPDo {
@@ -1714,18 +1151,6 @@ func modelRuntimeFreshFaultDo(t *testing.T, root string, fault modelRuntimeFresh
 				modelRuntimeMakeModelsDirectoryReadOnly(t, root)
 			}
 			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
-		case req.URL.Host == "models.dev" && req.URL.Path == "/models.json":
-			switch fault {
-			case modelRuntimeFaultMetadataTransport:
-				return nil, errors.New(modelRuntimeRawMetadataTransport)
-			case modelRuntimeFaultMetadataHTTP:
-				return &hostHTTPResponse{StatusCode: http.StatusBadGateway, Headers: make(http.Header), Body: []byte(modelRuntimeRawMetadataBody)}, nil
-			case modelRuntimeFaultMetadataSchema:
-				return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(modelRuntimeRawMetadataBody)}, nil
-			case modelRuntimeFaultMetadataSave:
-				modelRuntimeReplaceStoreRootWithFile(t, root)
-			}
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: http.Header{"ETag": []string{`"failure-etag"`}}, Body: []byte(`{"vendor/serve-alpha":{"id":"serve-alpha","name":"Alpha"}}`)}, nil
 		default:
 			t.Fatalf("unexpected model request %s", req.URL)
 			return nil, nil
@@ -1780,94 +1205,12 @@ func assertModelRuntimeSnapshotRedacted(t *testing.T, got modelReadinessSnapshot
 		accessToken,
 		modelRuntimeRawWorkBuddyTransport,
 		modelRuntimeRawWorkBuddyBody,
-		modelRuntimeRawMetadataTransport,
-		modelRuntimeRawMetadataBody,
 		"raw-invalid-auth-body-secret",
 		"https://",
 		"copilot.tencent.com",
-		"models.dev/models.json",
 	} {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("snapshot contains raw detail %q: %s", forbidden, rendered)
 		}
-	}
-}
-
-// TestModelRuntimeStaleMetadataRetriesAfterBackoff covers the production
-// failure mode: models.dev fails while a valid on-disk metadata cache exists.
-// The cached fallback must be served, but the failure must NOT settle
-// permanently — once the retry window elapses the next rebuild must call
-// upstream again and recover to ready.
-//
-// The test does not poke metadataRetryAt directly: it shortens the configured
-// backoff so the real expiry path (metadataSettledLocked) is exercised.
-func TestModelRuntimeStaleMetadataRetriesAfterBackoff(t *testing.T) {
-	previousBackoff := metadataRetryBackoff
-	metadataRetryBackoff = 500 * time.Millisecond
-	t.Cleanup(func() { metadataRetryBackoff = previousBackoff })
-
-	root := t.TempDir()
-	sa := syntheticStoredAuth(t, workBuddyRealmCN)
-	modelRuntimeSeedLastGood(t, root, "auth-stale-retry", sa)
-
-	metadataCalls := 0
-	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		switch req.URL.Host {
-		case "copilot.tencent.com":
-			return modelRuntimeFreshWorkBuddyResponse(), nil
-		case "models.dev":
-			metadataCalls++
-			if metadataCalls == 1 {
-				return nil, errors.New(modelRuntimeRawMetadataTransport)
-			}
-			return modelRuntimeFreshMetadataResponse(), nil
-		default:
-			t.Fatalf("unexpected model request %s", req.URL)
-			return nil, nil
-		}
-	}
-
-	runtime := newModelRuntime(newModelStore(root), do)
-	request := authModelRequestWire{
-		AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-stale-retry", StorageJSON: mustJSON(sa)},
-		HostCallbackID:   "callback-stale-retry",
-	}
-
-	first := runtime.ensureForAuth(request)
-	if first.State != modelStale || first.MetadataSource != modelSourceCache || first.ErrorCode != modelErrorModelsDevTransport {
-		t.Fatalf("first snapshot = %#v", first)
-	}
-	if metadataCalls != 1 {
-		t.Fatalf("metadata calls = %d, want 1", metadataCalls)
-	}
-
-	// Immediately after the failure the settled stale result is reused without
-	// upstream I/O (the dedup/backoff both rely on this).
-	runtime.advanceConfigGeneration()
-	second := runtime.ensureForAuth(request)
-	if metadataCalls != 1 {
-		t.Fatalf("metadata calls immediately after failure = %d, want 1", metadataCalls)
-	}
-	if second.State != modelStale || second.MetadataSource != modelSourceCache || second.ErrorCode != modelErrorModelsDevTransport {
-		t.Fatalf("second snapshot = %#v", second)
-	}
-
-	// Once the window elapses the runtime must retry and recover on its own.
-	time.Sleep(2 * metadataRetryBackoff)
-	runtime.advanceConfigGeneration()
-	third := runtime.ensureForAuth(request)
-	if metadataCalls != 2 {
-		t.Fatalf("metadata calls after window = %d, want 2 (failure was latched)", metadataCalls)
-	}
-	if third.State != modelReady || third.MetadataSource != modelSourceFresh || third.ErrorCode != modelErrorNone {
-		t.Fatalf("third snapshot = %#v", third)
-	}
-
-	// Recovery clears the backoff so a later rebuild settles immediately.
-	runtime.metadataMu.Lock()
-	retryAt := runtime.metadataRetryAt
-	runtime.metadataMu.Unlock()
-	if !retryAt.IsZero() {
-		t.Fatalf("metadataRetryAt = %s after recovery, want zero", retryAt)
 	}
 }

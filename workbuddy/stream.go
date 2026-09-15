@@ -30,6 +30,13 @@ type upstreamStatusError struct {
 
 func (e *upstreamStatusError) Error() string { return e.message }
 
+// StatusCode exposes the upstream HTTP status as an int. The host probes the
+// returned error for this method to map a failed executor call onto its own
+// status/retry handling; without it every upstream failure would surface as an
+// opaque error. Pure addition — callers that read .status or match on the
+// message keep working.
+func (e *upstreamStatusError) StatusCode() int { return e.status }
+
 // streamEmit pushes one chunk payload to the host stream. Returns an error if
 // the host rejected it (e.g. the client already disconnected and the stream
 // was closed), which the pump uses to stop reading a dead upstream.

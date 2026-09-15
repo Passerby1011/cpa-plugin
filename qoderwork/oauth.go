@@ -191,10 +191,9 @@ func uiUserType(ui *userInfoResponse) string {
 // -----------------------------------------------------------------------------
 // Device-authorization login (real OAuth — no PAT required)
 //
-// Reverse-engineered from the official QoderWork CN desktop client
-// (/tmp/qw_extract .../main.js) and proven live against the Global realm by
-// /root/qoder-register/qoder_device_oauth.py (2026-07-22, issued dt-/drt-
-// tokens). CN realm constants from the same main.js:
+// Reverse-engineered from the official QoderWork CN desktop client and proven
+// live against the Global realm (2026-07-22, issued dt-/drt- tokens). CN realm
+// constants from the same client bundle:
 //
 //	WEBSITE_DOMAIN  = qoder.com.cn        (auth pages)
 //	OPENAPI_DOMAIN  = openapi.qoder.com.cn (token endpoints)

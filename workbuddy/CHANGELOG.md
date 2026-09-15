@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+### 变更
+
+- **不再依赖 models.dev**：插件此前会在模型目录发现之外，额外从第三方网站
+  `models.dev` 拉取 `/models.json` 作为元数据补充。这条外部依赖现已彻底移除——
+  模型目录的每一个字段都来自 WorkBuddy 自己的 `/v3/config`。
+
+  背景：models.dev 实际只补充模态（`SupportedInputModalities` /
+  `SupportedOutputModalities`），而 WorkBuddy 目录本身就下发 `supportsImages`
+  字段（CN 域 30 个模型中 29 个有）。codebuddy 早期把上游的 `maxInputTokens` /
+  `maxOutputTokens` 错读成 `maxTokens` / `contextWindow`，导致限额恒为 nil，
+  才引入 models.dev 兜底；字段名修正后这条依赖没有跟着去掉。
+
+  用户可见的行为变化：
+
+  - **无外网环境不再导致模型列表为空**。此前 models.dev 拉不到会让整个模型目录
+    被判失败（`modelFailed`）、模型列表返回空——「装了插件但模型按钮点不出任何
+    模型」由此而来。现在只有 WorkBuddy 目录本身失败才算失败。
+  - 模态来自上游 `supportsImages`：`true` 声明 `text` + `image`；`false` 或字段
+    缺失时不声明模态（不替上游断言）。输出模态一律不声明。
+  - `models` 静态配置现在完全不发网络请求、不读写缓存，直接按配置的列表返回。
+
+### 移除
+
+- 删除 `model_source_modelsdev.go` 及其测试（models.dev `/models.json` 解析、
+  匹配与合并）。
+- 删除 `model_readiness.go` 中的 metadata 机制：`metadataForAuth`、
+  `selectMetadata`、`metadataCall`、`metadataCache`、`metadataResult`、
+  `metadataStatus`、`metadataRetryBackoff` 及相关类型。
+- 删除 `model_store.go` 中 `metadata.json` 缓存的读写与校验。**磁盘上遗留的
+  `metadata.json` / `metadata.json.bak` 不再被读取，也不会被删除。**
+- 删除错误码 `models_dev_transport` / `models_dev_http` / `models_dev_schema`。
+- `panel.go` 的模型状态响应去掉 `metadata_source` / `metadata_fetched_at` 字段；
+  `stale` 恢复单一含义（目录刷新失败，正在用缓存）。
+
 ## 0.9.8
 
 ### 新增

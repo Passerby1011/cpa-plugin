@@ -267,6 +267,27 @@ func creditsErrorsBlockLifecycle(errs []string) bool {
 	return false
 }
 
+// reenableBlockedByFaultNote reports whether a disabled auth carries a fault
+// note written by the executor-error path (session dead / 11140). The file name
+// (workbuddy-<uid>.json) is deliberately not part of the check: keepalive.go's
+// markSessionDead writes the same note wording on the daily refresh path, and
+// both mean "re-login required", so both must block the credit-driven re-enable.
+//
+// phys is the caller's already-fetched record. Tests stub only the bundle hook
+// (see enterprise_test), so a nil record is re-read through that same seam
+// rather than a second host RPC path.
+func reenableBlockedByFaultNote(phys *hostAuthPhysical, authIndex string) bool {
+	raw := physJSON(phys)
+	if len(raw) == 0 {
+		_, fresh, err := reconcileHostAuthGetBundle(authIndex)
+		if err != nil {
+			return false
+		}
+		raw = physJSON(fresh)
+	}
+	return reenableBlockedByNote(parseNoteFromAuthJSON(raw))
+}
+
 // reconcileOneAccount refreshes credits and applies lifecycle for one auth.
 // authIndex is used for host RPC (host.auth.get), authID (auth.ID) is used
 // for cache keys (accountCache/lifecycleState) so it matches the scheduler's
@@ -325,6 +346,14 @@ func reconcileOneAccountWithCallback(authIndex, authID string, force bool, callb
 		return lifecycleNone, nil
 	}
 	if region == "cn" && disabled {
+		// A fault disable (session dead / 11140 ban) must not be undone just
+		// because credits look healthy: upstream still rejects requests until
+		// the user logs in again. Credit-driven re-enable only applies to
+		// disables this plugin made for exhaustion.
+		if reenableBlockedByFaultNote(phys, authIndex) {
+			_ = syncAuthNote(authIndex, authID, sa, cr, true)
+			return lifecycleNone, nil
+		}
 		if shouldReenableCN(true, cr) {
 			if err := reenableAuth(authIndex, authID, sa, cr); err != nil {
 				return lifecycleReenable, err
@@ -380,26 +409,137 @@ func reconcileAllAccountsWithCallback(force bool, callbackID string) []map[strin
 	return out
 }
 
-// reconcileAfterExecutorError triggers lifecycle when upstream reports hard credit failure.
-// AuthID from the executor may be the credential ID (UID) rather than runtime auth_index;
-// we resolve via host.auth.list when direct get fails.
+// reconcileAfterExecutorError applies the lifecycle effect of one upstream
+// failure. AuthID from the executor may be the credential ID (UID) rather than
+// runtime auth_index; we resolve via host.auth.list when direct get fails.
+//
+// The dispatch is driven by classifyUpstreamError, not by "is it 429 / is it
+// credit" boolean tests: content-firewall false positives and malformed
+// outbound bodies score as content_blocked / bad_params and are ignored here
+// (they say nothing about the credential), model-level 6004 throttling is
+// logged as model-scoped instead of being read as account exhaustion, and only
+// hard credit plus account-level faults reach a reconcile. Both wrappers stay
+// no-ops when lifecycle_auto is off.
 func reconcileAfterExecutorError(authID string, status int, body string) {
 	if !lifecycleEnabled() || strings.TrimSpace(authID) == "" {
 		return
 	}
-	if isSoftRateLimit(status, body) && !isHardCreditError(status, body) {
+	applyExecutorErrorEffect(authID, classifyUpstreamError(status, body), status, body)
+}
+
+// applyExecutorErrorEffect is the single dispatch point for classified upstream
+// failures. Split out from reconcileAfterExecutorError so tests can drive each
+// class directly — the classification is pure, the effect is what must not
+// regress.
+func applyExecutorErrorEffect(authID string, kind upstreamErrKind, status int, body string) {
+	effect := executorErrorEffectFor(kind)
+	if effect == executorEffectIgnore {
+		// Logged (not silent) so the panel-side story for "why is this account
+		// still in rotation after an error" is answerable without a debugger.
+		hostLogf("debug", fmt.Sprintf("workbuddy upstream %d classified as %s (account untouched, auth=%s)",
+			status, kind.String(), shortUID(authID)))
 		return
 	}
-	if !isHardCreditError(status, body) {
+	if upstreamErrKindIsCredits(kind) {
+		// Credit-driven path keeps the original semantics exactly: no log
+		// line here, so an upstream 402 storm cannot turn into a log storm,
+		// and reconcileOneAccount re-fetches credits itself (force=true).
+		go executorErrorDispatchHooks.reconcile(authID)
 		return
 	}
-	go func() {
-		idx, id := resolveAuthIndexAndID(authID)
-		if idx == "" {
+	go executorErrorDispatchHooks.fault(authID, kind, status, body)
+}
+
+// upstreamErrKindIsCredits reports whether a kind is handled by the unchanged
+// credit-driven reconcile path.
+func upstreamErrKindIsCredits(kind upstreamErrKind) bool {
+	return kind == upstreamErrHardCredit
+}
+
+// reconcileAfterExecutorErrorAsync resolves an executor AuthID to host indices
+// and re-applies credit lifecycle.
+func reconcileAfterExecutorErrorAsync(authID string) {
+	idx, id := resolveAuthIndexAndID(authID)
+	if idx == "" {
+		return
+	}
+	_, _ = reconcileOneAccount(idx, id, true)
+}
+
+// applyFaultLifecycleEffect implements the non-credit effects:
+//   - session dead / 11140: disable the credential so the host stops routing to
+//     it. Neither self-heals (the offline session is revoked; a 11140 ban is an
+//     authorization verdict), so leaving them enabled only burns requests. The
+//     disabled note carries a re-login hint, which reenableBlockedByNote reads
+//     back to stop the credits-driven re-enable from flapping the account.
+//   - 14017: soft cooldown. Deliberately NO disable — completing the
+//     registration can still activate the account, and a disable would leave it
+//     unusable after the user fixed it.
+//   - 6004: model-level throttle. The account is healthy, so this only records
+//     which model was throttled and until when, for the log.
+func applyFaultLifecycleEffect(authID string, kind upstreamErrKind, status int, body string) {
+	idx, id := resolveAuthIndexAndID(authID)
+	if idx == "" {
+		return
+	}
+	switch kind {
+	case upstreamErrSessionDead, upstreamErrAccountBanned:
+		sa, phys, err := reconcileHostAuthGetBundle(idx)
+		if err != nil || sa == nil {
 			return
 		}
-		_, _ = reconcileOneAccount(idx, id, true)
-	}()
+		if phys != nil && phys.Disabled {
+			return
+		}
+		// Credits are intentionally NOT fetched: this is a fault disable, and
+		// passing nil keeps the note free of credit wording that would read as
+		// an exhaustion disable on the panel.
+		//
+		// Known gap: the reconcile tick's note refresh (syncAuthNote) rewrites
+		// this note from credits state while the account stays disabled, which
+		// drops the re-login hint and lets the credit-driven re-enable take it
+		// back once credits look fine. Closing that needs a persisted fault
+		// marker in the auth file, which is not part of this change.
+		reason := upstreamFaultNote(kind)
+		if err := disableAuth(idx, id, sa, nil, reason); err != nil {
+			hostLogf("warn", fmt.Sprintf("workbuddy %s on %s: disable failed: %v", kind.String(), shortUID(authID), err))
+			return
+		}
+		hostLogf("warn", fmt.Sprintf("workbuddy %s on auth=%s (http %d): disabled until re-login", kind.String(), shortUID(authID), status))
+	case upstreamErrAccountNotActivated:
+		hostLogf("debug", fmt.Sprintf("workbuddy 14017 trial not activated on auth=%s (http %d): soft cooldown, account left enabled",
+			shortUID(authID), status))
+	case upstreamErrModelRateLimit:
+		message := fmt.Sprintf("workbuddy 6004 model rate limit on auth=%s (http %d): account healthy, model throttled",
+			shortUID(authID), status)
+		if resetAt, ok := parseSoftRateReset(body); ok {
+			message += ", resets at " + resetAt.Format(softRateTimeLayout) + " UTC+8"
+		}
+		hostLogf("debug", message)
+	}
+}
+
+// reconcileByUID finds WorkBuddy auth by account UID and applies executor-error lifecycle.
+func reconcileByUID(uid string, status int, body string) {
+	uid = strings.TrimSpace(uid)
+	if uid == "" || !lifecycleEnabled() {
+		return
+	}
+	// Same dispatch as the sync executor path: the streaming path sees the same
+	// upstream bodies and must classify them identically.
+	applyExecutorErrorEffect(uid, classifyUpstreamError(status, body), status, body)
+}
+
+// executorErrorDispatchHooks are indirections for the two goroutine bodies in
+// applyExecutorErrorEffect. Tests swap them to observe which effect a class
+// produced, since neither the credit reconcile nor the fault disable can run
+// without a live host (host.auth.* needs the cgo function table).
+var executorErrorDispatchHooks = struct {
+	reconcile func(authID string)
+	fault     func(authID string, kind upstreamErrKind, status int, body string)
+}{
+	reconcile: reconcileAfterExecutorErrorAsync,
+	fault:     applyFaultLifecycleEffect,
 }
 
 // resolveAuthIndexAndID maps executor AuthID (index, file id, or account UID)
@@ -447,22 +587,6 @@ func resolveAuthIndexAndID(authID string) (string, string) {
 		}
 	}
 	return "", ""
-}
-
-// reconcileByUID finds WorkBuddy auth by account UID and applies executor-error lifecycle.
-func reconcileByUID(uid string, status int, body string) {
-	uid = strings.TrimSpace(uid)
-	if uid == "" || !lifecycleEnabled() {
-		return
-	}
-	if !isHardCreditError(status, body) {
-		return
-	}
-	idx, id := resolveAuthIndexAndID(uid)
-	if idx == "" {
-		return
-	}
-	_, _ = reconcileOneAccount(idx, id, true)
 }
 
 // invalidateAccountCredits drops cached credits so the next panel/reconcile

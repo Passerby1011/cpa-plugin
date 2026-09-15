@@ -46,34 +46,23 @@ const (
 	modelErrorWorkBuddyTransport modelErrorCode = "workbuddy_transport"
 	modelErrorWorkBuddyHTTP      modelErrorCode = "workbuddy_http"
 	modelErrorWorkBuddySchema    modelErrorCode = "workbuddy_schema"
-	modelErrorModelsDevTransport modelErrorCode = "models_dev_transport"
-	modelErrorModelsDevHTTP      modelErrorCode = "models_dev_http"
-	modelErrorModelsDevSchema    modelErrorCode = "models_dev_schema"
 	modelErrorCacheRead          modelErrorCode = "cache_read"
 	modelErrorCacheWrite         modelErrorCode = "cache_write"
 )
 
 type modelReadinessSnapshot struct {
-	State             modelReadinessState
-	ModelSource       modelSnapshotSource
-	MetadataSource    modelSnapshotSource
-	ModelsFetchedAt   time.Time
-	MetadataFetchedAt time.Time
-	ErrorCode         modelErrorCode
-	Models            []pluginapi.ModelInfo
-	configGeneration  uint64
-	authGeneration    uint64
-	identitySHA256    string
+	State            modelReadinessState
+	ModelSource      modelSnapshotSource
+	ModelsFetchedAt  time.Time
+	ErrorCode        modelErrorCode
+	Models           []pluginapi.ModelInfo
+	configGeneration uint64
+	authGeneration   uint64
+	identitySHA256   string
 }
 
 func (s modelReadinessSnapshot) executable() bool {
 	return s.State.executable()
-}
-
-type modelMetadataStatus struct {
-	Source    modelSnapshotSource
-	FetchedAt time.Time
-	ErrorCode modelErrorCode
 }
 
 type modelCatalogSelection struct {
@@ -98,31 +87,6 @@ func selectModelCatalog(
 	}
 	return modelCatalogSelection{source: modelSourceNone, errorCode: failure}
 }
-
-type metadataSelection struct {
-	cache     metadataCacheV1
-	source    modelSnapshotSource
-	errorCode modelErrorCode
-	ok        bool
-}
-
-func selectMetadata(
-	fresh metadataCacheV1,
-	freshOK bool,
-	cached metadataCacheV1,
-	cacheOK bool,
-	failure modelErrorCode,
-) metadataSelection {
-	if freshOK {
-		return metadataSelection{cache: fresh, source: modelSourceFresh, ok: true}
-	}
-	if cacheOK {
-		return metadataSelection{cache: cached, source: modelSourceCache, errorCode: failure, ok: true}
-	}
-	return metadataSelection{source: modelSourceNone, errorCode: failure}
-}
-
-type modelMetadataResult = metadataSelection
 
 type modelGenerationKey struct {
 	Config         uint64
@@ -155,18 +119,6 @@ type modelIdentitySlot struct {
 	active            map[*modelIdentityCall]struct{}
 }
 
-type metadataCall struct {
-	done      chan struct{}
-	result    modelMetadataResult
-	committed bool
-}
-
-// metadataRetryBackoff bounds how long a failed upstream refresh keeps serving
-// the cached fallback before the next caller retries. Without it a single
-// transient failure would either wedge the settled result for the lifetime of
-// the process or hammer models.dev on every snapshot rebuild.
-var metadataRetryBackoff = 5 * time.Minute
-
 type modelRuntime struct {
 	store            *modelStore
 	do               modelHTTPDo
@@ -175,18 +127,6 @@ type modelRuntime struct {
 	configGeneration atomic.Uint64
 	authSlots        sync.Map
 	identitySlots    sync.Map
-	metadataMu       sync.Mutex
-	metadataCall     *metadataCall
-	metadataCache    *metadataCacheV1
-	metadataResult   *modelMetadataResult
-	// metadataRetryAt marks when a cached fallback may be retried upstream.
-	// Zero means "retry on the next rebuild"; set only while serving a stale
-	// result after a failed refresh.
-	metadataRetryAt time.Time
-	// metadataLastFailure keeps the code the next in-window caller reports, so
-	// suppressing the upstream call does not turn a real failure into a
-	// different-looking one.
-	metadataLastFailure modelErrorCode
 }
 
 var activeModelRuntime atomic.Pointer[modelRuntime]
@@ -195,13 +135,6 @@ func newModelRuntime(store *modelStore, do modelHTTPDo) *modelRuntime {
 	runtime := &modelRuntime{store: store, do: do}
 	if store == nil {
 		runtime.storeError = modelErrorCacheRead
-		return runtime
-	}
-	cache, found, err := store.loadMetadata()
-	if err != nil {
-		runtime.metadataResult = &modelMetadataResult{source: modelSourceNone, errorCode: modelErrorCacheRead}
-	} else if found {
-		runtime.metadataCache = &cache
 	}
 	return runtime
 }
@@ -266,7 +199,6 @@ func (r *modelRuntime) ensureForAuth(req authModelRequestWire) modelReadinessSna
 		result := storeModelReadinessSnapshot(slot, modelReadinessSnapshot{
 			State:            modelFailed,
 			ModelSource:      modelSourceNone,
-			MetadataSource:   modelSourceNone,
 			ErrorCode:        modelErrorAuthInvalid,
 			Models:           []pluginapi.ModelInfo{},
 			configGeneration: configGeneration,
@@ -312,7 +244,6 @@ func (r *modelRuntime) ensureForAuth(req authModelRequestWire) modelReadinessSna
 	snapshot := modelReadinessSnapshot{
 		State:            modelLoading,
 		ModelSource:      modelSourceNone,
-		MetadataSource:   modelSourceNone,
 		Models:           []pluginapi.ModelInfo{},
 		configGeneration: configGeneration,
 		authGeneration:   authGeneration,
@@ -332,30 +263,16 @@ func (r *modelRuntime) ensureForAuth(req authModelRequestWire) modelReadinessSna
 	}
 
 	if len(configuredModels) > 0 {
+		// Operator-pinned catalogue: the list is the complete answer, so there
+		// is nothing to fetch and nothing that can fail here.
 		snapshot.ModelSource = modelSourceConfig
-		metadata := r.metadataForAuth(req.HostCallbackID, slot, key, authGeneration)
-		snapshot.MetadataSource = metadata.source
-		if metadata.ok {
-			snapshot.MetadataFetchedAt = metadata.cache.FetchedAt
-		}
-		snapshot.ErrorCode = metadata.errorCode
-		if !metadata.ok {
-			snapshot.State = modelFailed
-			return r.finishAuthCall(slot, key, authGeneration, call, snapshot)
-		}
-
 		models := make([]pluginapi.ModelInfo, len(configuredModels))
 		for i, id := range configuredModels {
-			serving := modelFacts{ID: id}
-			models[i] = modelInfoFromSources(serving, matchModelsDevRecord(id, metadata.cache.Records))
+			models[i] = modelInfoFromFacts(modelFacts{ID: id})
 		}
 		snapshot.Models = models
-		if metadata.source == modelSourceFresh {
-			snapshot.State = modelReady
-			snapshot.ErrorCode = modelErrorNone
-		} else {
-			snapshot.State = modelStale
-		}
+		snapshot.State = modelReady
+		snapshot.ErrorCode = modelErrorNone
 		return r.finishAuthCall(slot, key, authGeneration, call, snapshot)
 	}
 
@@ -411,31 +328,23 @@ func (r *modelRuntime) ensureForAuth(req authModelRequestWire) modelReadinessSna
 		}
 	}
 	modelSelection := selectModelCatalog(freshModels, freshModelsOK, cachedModels, cachedModelsOK, modelFailure)
-	metadata := r.metadataForAuth(req.HostCallbackID, slot, key, authGeneration)
 
 	snapshot.ModelSource = modelSelection.source
 	if modelSelection.ok {
 		snapshot.ModelsFetchedAt = modelSelection.cache.FetchedAt
 	}
-	snapshot.MetadataSource = metadata.source
-	if metadata.ok {
-		snapshot.MetadataFetchedAt = metadata.cache.FetchedAt
-	}
 	snapshot.ErrorCode = modelSelection.errorCode
-	if snapshot.ErrorCode == modelErrorNone {
-		snapshot.ErrorCode = metadata.errorCode
-	}
-	if !modelSelection.ok || !metadata.ok {
+	if !modelSelection.ok {
 		snapshot.State = modelFailed
 		return r.finishAuthCall(slot, key, authGeneration, call, snapshot)
 	}
 
 	models := make([]pluginapi.ModelInfo, len(modelSelection.cache.Models))
 	for i, model := range modelSelection.cache.Models {
-		models[i] = modelInfoFromSources(model, matchModelsDevRecord(model.ID, metadata.cache.Records))
+		models[i] = modelInfoFromFacts(model)
 	}
 	snapshot.Models = models
-	if modelSelection.source == modelSourceFresh && metadata.source == modelSourceFresh {
+	if modelSelection.source == modelSourceFresh {
 		snapshot.State = modelReady
 		snapshot.ErrorCode = modelErrorNone
 	} else {
@@ -532,151 +441,6 @@ func (r *modelRuntime) authGenerationCurrent(slot *modelAuthSlot, key modelGener
 	return r.authGenerationCurrentLocked(slot, key, authGeneration)
 }
 
-// metadataSettledLocked reports whether the settled metadata result may still be
-// reused. A stale result (cached fallback after a failed refresh) expires so the
-// next caller retries upstream instead of serving it forever.
-func (r *modelRuntime) metadataSettledLocked() bool {
-	if r.metadataRetryAt.IsZero() {
-		return true
-	}
-	return time.Now().Before(r.metadataRetryAt)
-}
-
-func (r *modelRuntime) metadataForAuth(callbackID string, slot *modelAuthSlot, key modelGenerationKey, authGeneration uint64) modelMetadataResult {
-	var call *metadataCall
-	var cached metadataCacheV1
-	var cachedOK bool
-	var cacheReadFailed bool
-	var retryNotBefore time.Time
-	var lastFailure modelErrorCode
-	for {
-		if !r.authGenerationCurrent(slot, key, authGeneration) {
-			return modelMetadataResult{}
-		}
-		r.metadataMu.Lock()
-		if r.metadataResult != nil && r.metadataResult.ok && r.metadataSettledLocked() {
-			result := *r.metadataResult
-			r.metadataMu.Unlock()
-			return result
-		}
-		if active := r.metadataCall; active != nil {
-			r.metadataMu.Unlock()
-			<-active.done
-			if active.committed {
-				return active.result
-			}
-			continue
-		}
-
-		call = &metadataCall{done: make(chan struct{})}
-		r.metadataCall = call
-		cachedOK = r.metadataCache != nil
-		if cachedOK {
-			cached = *r.metadataCache
-		}
-		cacheReadFailed = r.metadataResult != nil && r.metadataResult.errorCode == modelErrorCacheRead
-		retryNotBefore = r.metadataRetryAt
-		lastFailure = r.metadataLastFailure
-		r.metadataMu.Unlock()
-		break
-	}
-
-	var fresh metadataCacheV1
-	freshOK := false
-	needsSave := false
-	failure := modelErrorNone
-	if retryNotBefore.IsZero() || !time.Now().Before(retryNotBefore) {
-		fetched, err := fetchModelsDevMetadata(cached.ETag, callbackID, r.do)
-		if err != nil {
-			failure = modelsDevModelErrorCode(err)
-		} else if fetched.NotModified {
-			if cachedOK {
-				fresh = cached
-				freshOK = true
-			} else {
-				failure = modelErrorModelsDevSchema
-			}
-		} else {
-			fresh = metadataCacheV1{
-				SchemaVersion: modelCacheSchemaVersion,
-				ETag:          fetched.ETag,
-				FetchedAt:     time.Now().UTC(),
-				Records:       fetched.Records,
-			}
-			needsSave = true
-		}
-	} else {
-		// Inside the retry window: serve the cached snapshot without touching
-		// upstream. A non-nil failure keeps the caller on the stale path.
-		failure = lastFailure
-		if failure == modelErrorNone {
-			failure = modelErrorModelsDevTransport
-		}
-	}
-
-	r.configCommitMu.RLock()
-	slot.mu.Lock()
-	if !r.authGenerationCurrentLocked(slot, key, authGeneration) {
-		r.metadataMu.Lock()
-		close(call.done)
-		if r.metadataCall == call {
-			r.metadataCall = nil
-		}
-		r.metadataMu.Unlock()
-		slot.mu.Unlock()
-		r.configCommitMu.RUnlock()
-		return modelMetadataResult{}
-	}
-	if needsSave {
-		if err := r.store.saveMetadata(fresh); err != nil {
-			failure = modelErrorCacheWrite
-			if cacheReadFailed {
-				failure = modelErrorCacheRead
-			}
-		} else {
-			freshOK = true
-		}
-	}
-	selected := selectMetadata(fresh, freshOK, cached, cachedOK, failure)
-
-	r.metadataMu.Lock()
-	call.result = selected
-	call.committed = true
-	switch {
-	case selected.ok && selected.source == modelSourceFresh:
-		// A real upstream answer settles the runtime and clears any backoff.
-		settled := selected
-		cache := selected.cache
-		r.metadataResult = &settled
-		r.metadataCache = &cache
-		r.metadataRetryAt = time.Time{}
-		r.metadataLastFailure = modelErrorNone
-	case selected.ok:
-		// Cached fallback after a failed refresh: settle so concurrent and
-		// near-term callers reuse it, but arm a retry so the failure cannot
-		// wedge the runtime until the process restarts.
-		settled := selected
-		cache := selected.cache
-		r.metadataResult = &settled
-		r.metadataCache = &cache
-		r.metadataRetryAt = time.Now().Add(metadataRetryBackoff)
-		r.metadataLastFailure = selected.errorCode
-	case cacheReadFailed:
-		failed := modelMetadataResult{source: modelSourceNone, errorCode: modelErrorCacheRead}
-		r.metadataResult = &failed
-	default:
-		r.metadataResult = nil
-	}
-	close(call.done)
-	if r.metadataCall == call {
-		r.metadataCall = nil
-	}
-	r.metadataMu.Unlock()
-	slot.mu.Unlock()
-	r.configCommitMu.RUnlock()
-	return selected
-}
-
 func (r *modelRuntime) snapshotForAuthID(authID string) modelReadinessSnapshot {
 	slot := r.authSlot(authID)
 	for {
@@ -696,26 +460,9 @@ func notStartedModelReadinessSnapshot(configGeneration uint64) modelReadinessSna
 	return modelReadinessSnapshot{
 		State:            modelNotStarted,
 		ModelSource:      modelSourceNone,
-		MetadataSource:   modelSourceNone,
 		Models:           []pluginapi.ModelInfo{},
 		configGeneration: configGeneration,
 	}
-}
-
-func (r *modelRuntime) metadataStatus() modelMetadataStatus {
-	r.metadataMu.Lock()
-	defer r.metadataMu.Unlock()
-	if r.metadataResult != nil {
-		return modelMetadataStatus{
-			Source:    r.metadataResult.source,
-			FetchedAt: r.metadataResult.cache.FetchedAt,
-			ErrorCode: r.metadataResult.errorCode,
-		}
-	}
-	if r.metadataCache != nil {
-		return modelMetadataStatus{Source: modelSourceCache, FetchedAt: r.metadataCache.FetchedAt}
-	}
-	return modelMetadataStatus{Source: modelSourceNone, ErrorCode: r.storeError}
 }
 
 func (r *modelRuntime) commitFeatureRuntime(next *featureRuntimeConfig) uint64 {
@@ -749,7 +496,6 @@ func (r *modelRuntime) markAuthNotStarted(authID string) {
 	storeModelReadinessSnapshot(slot, modelReadinessSnapshot{
 		State:            modelNotStarted,
 		ModelSource:      modelSourceNone,
-		MetadataSource:   modelSourceNone,
 		Models:           []pluginapi.ModelInfo{},
 		configGeneration: configGeneration,
 		authGeneration:   slot.nextAuth,
@@ -795,10 +541,6 @@ func cloneModelReadinessSnapshot(snapshot modelReadinessSnapshot) modelReadiness
 
 func workBuddyModelErrorCode(err error) modelErrorCode {
 	return modelSourceErrorCode(err, modelErrorWorkBuddyTransport, modelErrorWorkBuddyHTTP, modelErrorWorkBuddySchema)
-}
-
-func modelsDevModelErrorCode(err error) modelErrorCode {
-	return modelSourceErrorCode(err, modelErrorModelsDevTransport, modelErrorModelsDevHTTP, modelErrorModelsDevSchema)
 }
 
 func modelSourceErrorCode(err error, transport, http, schema modelErrorCode) modelErrorCode {

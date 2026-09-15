@@ -93,6 +93,10 @@ func billingHeaders(req *http.Request, sa *storedAuth) {
 	if sa.Auth.Domain != "" {
 		req.Header.Set("X-Domain", sa.Auth.Domain)
 	}
+	// The official client sends these on every backend call, and billing does
+	// not go through commonHeaders, so they are set here as well.
+	req.Header.Set("X-CodeBuddy-Request", "1")
+	req.Header.Set("Accept-Language", acceptLanguageFor(sa))
 }
 
 func billingCall(sa *storedAuth, path string, body any) (json.RawMessage, error) {

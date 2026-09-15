@@ -89,7 +89,10 @@ func TestRegistrationDocumentsConfiguredModelsContract(t *testing.T) {
 		t.Fatalf("models config field type = %q, want array", models.Type)
 	}
 	description := strings.ToLower(models.Description)
-	for _, required := range []string{"strings only", "single-line", "non-empty", "complete", "bypasses workbuddy", "http", "cache", "models.dev", "metadata", "missing", "null", "[]"} {
+	// The pinned list is served without any network call or cache access. The
+	// wording no longer promises a models.dev metadata fetch, because that
+	// source was removed.
+	for _, required := range []string{"strings only", "single-line", "non-empty", "complete", "no network request", "no cache access", "missing", "null", "[]"} {
 		if !strings.Contains(description, required) {
 			t.Errorf("models description missing %q: %q", required, models.Description)
 		}

@@ -43,8 +43,12 @@ func scheduledInCurrentHour(now time.Time, hours []int) bool {
 	return false
 }
 
-func scheduledActionsFor(now time.Time) (runCheckin, runKeepalive bool) {
-	return scheduledInCurrentHour(now, checkinHours), scheduledInCurrentHour(now, keepaliveHours)
+func scheduledActionsFor(now time.Time) (runCheckin, runActivity, runTravel, runGrowthTasks, runKeepalive bool) {
+	return scheduledInCurrentHour(now, checkinHours),
+		scheduledInCurrentHour(now, activityHours),
+		scheduledInCurrentHour(now, travelHours),
+		scheduledInCurrentHour(now, growthTasksHours),
+		scheduledInCurrentHour(now, keepaliveHours)
 }
 
 func nextCheckinTime(now time.Time) time.Time {
@@ -53,6 +57,9 @@ func nextCheckinTime(now time.Time) time.Time {
 	// whichever fires first (e.g. 21:00 checkin vs 22:00 keepalive → 21:00 wins,
 	// then 22:00 keepalive fires on the next tick).
 	hours := append([]int{}, checkinHours...)
+	hours = append(hours, activityHours...)
+	hours = append(hours, travelHours...)
+	hours = append(hours, growthTasksHours...)
 	hours = append(hours, keepaliveHours...)
 	for _, h := range hours {
 		t := time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, now.Location())
@@ -75,9 +82,18 @@ func schedulerLoop(stop chan struct{}) {
 			timer.Stop()
 			return
 		case <-timer.C:
-			runCheckin, runKeepalive := scheduledActionsFor(time.Now())
+			runCheckin, runActivity, runTravel, runGrowthTasks, runKeepalive := scheduledActionsFor(time.Now())
 			if runCheckin {
 				runAutoCheckin()
+			}
+			if runActivity {
+				runAutoActivity()
+			}
+			if runTravel {
+				runAutoTravel()
+			}
+			if runGrowthTasks {
+				runAutoGrowthTasks()
 			}
 			if runKeepalive {
 				runTokenKeepalive()

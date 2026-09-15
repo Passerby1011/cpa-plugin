@@ -218,6 +218,10 @@ func buildTokenRefreshRequest(profile oauthRequestProfile, sa *storedAuth) (*htt
 		req.Header.Set("X-Enterprise-Id", sa.Account.EnterpriseID)
 	}
 	req.Header.Set("X-Auth-Refresh-Source", "plugin")
+	// The official client marks every backend call the same way; the refresh
+	// path builds its own request and never passes through commonHeaders.
+	req.Header.Set("X-CodeBuddy-Request", "1")
+	req.Header.Set("Accept-Language", acceptLanguageFor(sa))
 	return req, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,6 +20,14 @@ func TestProductionModelSourceHasNoFixedIDs(t *testing.T) {
 		"hy3", "hy3-x", "hy3-preview", "hy3-preview-agent",
 		"hy4-preview", "hy4-preview-x", "deepseek-v4-pro", "deepseek-v4-flash",
 		"forceMaxThinking",
+	}
+	// activity.go carries one model ID on purpose: it is the identifier inside
+	// the client's chat_request_send telemetry payload (the growth system keys
+	// its counters off it), not something this plugin routes to. Routing stays
+	// fully dynamic; see the note in activity.go. Only these exact literals are
+	// exempt, and only in that file — any other ID anywhere is a hard failure.
+	exempt := map[string][]string{
+		"activity.go": {"deepseek-v4-flash", "glm-5.2"},
 	}
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -34,9 +43,13 @@ func TestProductionModelSourceHasNoFixedIDs(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, value := range banned {
-			if bytes.Contains(raw, []byte(value)) {
-				t.Errorf("production file %s contains banned model contract %q", name, value)
+			if !bytes.Contains(raw, []byte(value)) {
+				continue
 			}
+			if slices.Contains(exempt[name], value) {
+				continue
+			}
+			t.Errorf("production file %s contains banned model contract %q", name, value)
 		}
 	}
 }
@@ -86,7 +99,7 @@ func TestProductionModelInfoLiteralsOnlyNameAuto(t *testing.T) {
 }
 
 func TestProductionMetadataHasOnlyDefaultTemplate(t *testing.T) {
-	got := modelInfoFromSources(modelFacts{ID: "serve-alpha"}, nil)
+	got := modelInfoFromFacts(modelFacts{ID: "serve-alpha"})
 	want := defaultModelInfo("serve-alpha", "")
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unmatched dynamic metadata = %#v, want %#v", got, want)

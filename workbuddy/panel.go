@@ -40,11 +40,9 @@ type wbAccount struct {
 }
 
 type modelStatus struct {
-	State             modelReadinessState `json:"state"`
-	Message           string              `json:"message"`
-	MetadataSource    modelSnapshotSource `json:"metadata_source"`
-	MetadataFetchedAt string              `json:"metadata_fetched_at"`
-	Auths             []modelAuthStatus   `json:"auths"`
+	State   modelReadinessState `json:"state"`
+	Message string              `json:"message"`
+	Auths   []modelAuthStatus   `json:"auths"`
 }
 
 type modelAuthStatus struct {
@@ -75,10 +73,6 @@ var panelHostAuthList = hostAuthList
 
 func buildModelStatus(files []pluginapi.HostAuthFileEntry) modelStatus {
 	runtime := activeModelRuntime.Load()
-	metadata := modelMetadataStatus{Source: modelSourceNone}
-	if runtime != nil {
-		metadata = runtime.metadataStatus()
-	}
 	state := modelReady
 	if len(files) == 0 {
 		state = modelNotStarted
@@ -101,11 +95,9 @@ func buildModelStatus(files []pluginapi.HostAuthFileEntry) modelStatus {
 		}
 	}
 	return modelStatus{
-		State:             state,
-		Message:           modelStatusMessages[state],
-		MetadataSource:    metadata.Source,
-		MetadataFetchedAt: modelStatusTime(metadata.FetchedAt),
-		Auths:             auths,
+		State:   state,
+		Message: modelStatusMessages[state],
+		Auths:   auths,
 	}
 }
 

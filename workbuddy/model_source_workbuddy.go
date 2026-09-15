@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
 const maxDiscoveredModelIDBytes = 512
@@ -26,6 +28,14 @@ type modelFacts struct {
 }
 
 type modelHTTPDo func(*http.Request, string) (*hostHTTPResponse, error)
+
+// Modality names reported in ModelInfo.SupportedInputModalities. The host
+// treats these as free-form labels and copies them through to the client-facing
+// model registry, so the values here are the ones a client will see.
+const (
+	modalityText  = "text"
+	modalityImage = "image"
+)
 
 type modelSourceFailureKind string
 
@@ -95,6 +105,12 @@ type workBuddyModelEntryWire struct {
 	Credits   string `json:"credits"`
 	MaxOutput *int64 `json:"maxOutputTokens"`
 	MaxInput  *int64 `json:"maxInputTokens"`
+	// SupportsImages declares whether the model accepts image input. A pointer
+	// because the upstream omits the key for some entries (image/video
+	// generators): absent means the upstream expressed nothing, which must stay
+	// distinguishable from an explicit false. Declaring a modality the model
+	// does not accept would invite clients to send payloads upstream rejects.
+	SupportsImages *bool `json:"supportsImages"`
 }
 
 // fact converts a catalog entry into modelFacts. The upstream sends the display
@@ -111,6 +127,17 @@ func (m workBuddyModelEntryWire) fact() modelFacts {
 		Credits:             strings.TrimSpace(m.Credits),
 		ContextLength:       m.MaxInput,
 		MaxCompletionTokens: m.MaxOutput,
+	}
+	// Modality comes from the catalogue itself. It used to be filled from
+	// models.dev, which is why this provider needed egress to a third-party
+	// site to describe models it already knew about; the upstream has published
+	// supportsImages all along.
+	//
+	// Only the positive case is declared. Output modalities are left unset:
+	// every catalogue model produces text, and the upstream says nothing more,
+	// so asserting more would be invention.
+	if m.SupportsImages != nil && *m.SupportsImages {
+		f.SupportedInputModalities = []string{modalityText, modalityImage}
 	}
 	return f
 }
@@ -256,6 +283,47 @@ func validateModelFacts(models []modelFacts) ([]modelFacts, error) {
 		validated[i] = model
 	}
 	return validated, nil
+}
+
+// modelDisplayName appends the upstream charge rate to the model name for the
+// host's display_name surfaces, so a picked model shows what it costs. Empty
+// when the catalog sent no rate, which leaves display_name at its prior value
+// (the host then falls back to the model ID).
+func modelDisplayName(name, credits string) string {
+	name = strings.TrimSpace(name)
+	credits = strings.TrimSpace(credits)
+	if credits == "" {
+		return ""
+	}
+	if name == "" {
+		return credits
+	}
+	return name + " \u00b7 " + credits
+}
+
+// modelInfoFromFacts converts one catalogue entry into the host's ModelInfo.
+//
+// Every field comes from the WorkBuddy catalogue. There is no second source:
+// an earlier revision merged in models.dev records to fill fields the upstream
+// supposedly lacked, but the upstream publishes all of them (id, name,
+// description, context window, output limit, charge rate, image support), so
+// the merge only added a third-party network dependency and a cache to keep
+// consistent. See model_source_workbuddy.go for the field mapping.
+func modelInfoFromFacts(facts modelFacts) pluginapi.ModelInfo {
+	info := defaultModelInfo(facts.ID, facts.Name)
+	info.Description = facts.Description
+	if display := modelDisplayName(facts.Name, facts.Credits); display != "" {
+		info.DisplayName = display
+	}
+	if facts.ContextLength != nil {
+		info.ContextLength = *facts.ContextLength
+	}
+	if facts.MaxCompletionTokens != nil {
+		info.MaxCompletionTokens = *facts.MaxCompletionTokens
+	}
+	info.SupportedInputModalities = append([]string(nil), facts.SupportedInputModalities...)
+	info.SupportedOutputModalities = append([]string(nil), facts.SupportedOutputModalities...)
+	return info
 }
 
 func fetchWorkBuddyCatalog(sa *storedAuth, callbackID string, do modelHTTPDo) (workBuddyCatalog, error) {

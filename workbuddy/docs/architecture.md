@@ -8,7 +8,7 @@ driven via the `pluginabi` RPC interface.
 
 | Capability | Implementation file | What it does |
 |---|---|---|
-| `ModelProvider` | `models.go`, `model_source_*.go`, `model_store.go`, `model_readiness.go` | Static `auto` fallback, configured authoritative catalog or authenticated per-account discovery, models.dev enrichment, persistent last-good cache, readiness gates, alias reverse-resolution, `oauth-excluded-models` filter |
+| `ModelProvider` | `models.go`, `model_source_*.go`, `model_store.go`, `model_readiness.go` | Static `auto` fallback, configured authoritative catalog or authenticated per-account discovery from the WorkBuddy catalogue only, persistent last-good cache, readiness gates, alias reverse-resolution, `oauth-excluded-models` filter |
 | `AuthProvider` | `oauth.go`, `auth_parse.go` (in `authfile.go` / `main.go`) | OAuth login flow (CN + Global), token refresh, auth file parse |
 | `Executor` | `executor.go`, `stream.go`, `payload.go` | Chat completions, streaming SSE pump, request body rewriting |
 | `Scheduler` | `scheduler.go`, `active_auth.go` | Optional panel-selected account routing (`scheduler_mode: credits`) |
@@ -34,9 +34,8 @@ payload.go        prepareUpstreamBody + InPlace mutators (forceStream/normalizeT
 models.go         static auto/default metadata + model.for_auth response + alias/
                   exclusion handling
 model_source_workbuddy.go WorkBuddy /v3/config + 404/405-only legacy fallback + validation
-model_source_modelsdev.go models.dev /models.json parser, matching, and additive enrichment
-model_store.go     separated metadata/per-auth JSON caches + identity hash + atomic .bak writes
-model_readiness.go per-auth bootstrap flights + global metadata flight + immutable readiness snapshots
+model_store.go     per-auth JSON catalog cache + identity hash + atomic .bak writes
+model_readiness.go per-auth bootstrap flights + immutable readiness snapshots
 
 oauth.go          handleStartLogin/PollLogin/RefreshAuth + newLoginClient + doJSONRequest
 auth_parse.go     (in authfile.go / main.go) handleParseAuth + parseStored + toAuthData
@@ -111,60 +110,53 @@ model.for_auth
   -> enter the per-auth flight
   -> non-empty configured `models`
       -> use ID-only serving facts in YAML order
-      -> skip WorkBuddy HTTP, catalog cache reads/writes, and identity catalog flights
+      -> no network request and no catalog cache reads/writes
+      -> publish an immutable ready snapshot and return
   -> otherwise use the WorkBuddy source
       -> GET /v3/config
       -> only HTTP 404/405: GET /console/enterprises/personal/models
       -> validate the complete entitlement/serving snapshot
-      -> persist the modelCatalogCacheV1 source snapshot
-  -> enter or join the process-global models.dev flight
-      -> GET https://models.dev/models.json, with cached ETag when available
-      -> validate the canonical metadata source snapshot
-      -> persist the metadataCacheV1 source snapshot
-  -> match serving IDs to canonical records and enrich missing serving fields
-  -> check config generation + token SHA-256 + identity SHA-256
-  -> atomically publish an immutable ready or stale snapshot
+      -> persist the validated modelCatalogCacheV1 snapshot
+      -> check config generation + token SHA-256 + identity SHA-256
+      -> atomically publish an immutable ready or stale snapshot
 ```
 
-The dynamic data path is `source -> validate -> persist source snapshots ->
-enrich -> publish`. Fresh data is never enriched or published if validation or
-persistence fails. A non-empty configured `models` list replaces only the
-WorkBuddy source snapshot: it is never persisted as a catalog, existing
-WorkBuddy cache files remain untouched, and models.dev retains the same online,
-ETag, persistence, cold-start fail-closed, and warm last-good behavior. Its
-`model_source` is `config` with an empty `models_fetched_at`; fresh metadata is
-`ready`, cached metadata fallback is `stale`, and no valid metadata is `failed`.
+The dynamic data path is `fetch -> validate -> persist -> publish`; WorkBuddy is
+the only model source, so no field is ever merged in from elsewhere. Fresh data
+is never published if validation or persistence fails. A
+non-empty configured `models` list replaces the WorkBuddy source entirely: it is
+never persisted as a catalog, existing WorkBuddy cache files remain untouched,
+and no request is sent. Its `model_source` is `config` with an empty
+`models_fetched_at` and it publishes `ready` (only an unconstructable cache root
+still fails closed); only the dynamic path can publish `stale` (warm last-good
+cache) or `failed` (no fresh result and no valid cache).
 Source requests use the callback-aware host bridge, but the inherited callback
 wire does not guarantee an overall request timeout.
 
-The stores are separated under the root derived from `os.UserConfigDir()`:
+The store lives under the root derived from `os.UserConfigDir()`:
 
 ```plaintext
 CLIProxyAPI/workbuddy/model-catalog/
-  metadata.json                    global canonical metadata
-  metadata.json.bak                previous valid metadata primary
-  models/<identity-sha256>.json    one WorkBuddy catalog per auth identity
+  models/<identity-sha256>.json     one WorkBuddy catalog per auth identity
   models/<identity-sha256>.json.bak
 ```
 
-`metadataCacheV1` contains `schema_version`, opaque `etag`, `fetched_at`, and
-canonical `records`; it has no realm or identity. It validates its own schema,
-timestamp, and canonical-record content. `modelCatalogCacheV1` contains
-`schema_version`, `identity_sha256`, `realm`, `fetched_at`, `endpoint`, and the
-validated WorkBuddy `models`. Identity and realm validation applies only to
-this per-auth model cache.
+`modelCatalogCacheV1` contains `schema_version`, `identity_sha256`, `realm`,
+`fetched_at`, `endpoint`, and the validated WorkBuddy `models`. It validates its
+own schema, identity, realm, timestamp, endpoint, and model content. Identity and
+realm validation applies to this per-auth model cache.
 
 Each successful replacement first preserves the previous valid primary as
-`.bak`. With no valid cache, either source failing leaves the auth `failed`;
-with a valid last-good for every failed source, the auth is published `stale`.
+`.bak`. With no valid cache, a failing WorkBuddy source leaves the auth
+`failed`; with a valid last-good cache the auth is published `stale`.
 
 The per-auth flight serializes WorkBuddy refreshes for one auth while allowing
-different auths to initialize concurrently. Configured catalogs do not enter
-the shared-identity WorkBuddy catalog flight. The global flight shares one
-models.dev refresh. Reconfigure publishes the immutable feature snapshot and
-increments the model config generation under the same commit lock. The
-generation gate prevents a late request for an old config, token, or identity
-from saving or publishing over current state.
+different auths to initialize concurrently, and the shared-identity slot
+deduplicates catalogue fetches between auths that resolve to one identity.
+Configured catalogs do not enter that flight at all. Reconfigure publishes the
+immutable feature snapshot and increments the model config generation under the
+same commit lock. The generation gate prevents a late request for an old config,
+token, or identity from saving or publishing over current state.
 
 Panel, executor, and scheduler only read immutable snapshots. They do not wait
 on flights or perform network or disk work. Executor accepts `ready` and

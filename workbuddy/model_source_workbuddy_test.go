@@ -63,6 +63,76 @@ func TestParseWorkBuddyLegacyModelsUsesUpstreamLimitKeys(t *testing.T) {
 	}
 }
 
+// The modality a client sees must come from the WorkBuddy catalogue itself.
+// It used to be filled from models.dev, which made a third-party site a
+// requirement for describing models the upstream already describes.
+//
+// Conservative rule: only an explicit supportsImages=true declares image
+// input. A missing key stays undeclared, because asserting a modality the
+// model does not accept would invite payloads the upstream rejects.
+func TestParseWorkBuddyCatalogModalitiesFromUpstream(t *testing.T) {
+	raw := []byte(`{"code":0,"data":{"models":[` +
+		`{"id":"vision-model","supportsImages":true,"supportsToolCall":true},` +
+		`{"id":"text-model","supportsImages":false},` +
+		`{"id":"silent-model"},` +
+		`{"id":"image-generator"}]}}`)
+	got, err := parseWorkBuddyLegacyModels(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]modelFacts, len(got))
+	for _, m := range got {
+		byID[m.ID] = m
+	}
+
+	if mods := byID["vision-model"].SupportedInputModalities; len(mods) != 2 || mods[0] != modalityText || mods[1] != modalityImage {
+		t.Fatalf("vision model modalities = %#v, want [text image]", mods)
+	}
+	// An explicit false means the upstream told us text-only; it must not be
+	// upgraded to text+image, and it must not invent a modality list either.
+	if mods := byID["text-model"].SupportedInputModalities; mods != nil {
+		t.Fatalf("explicit-false model modalities = %#v, want nil (undeclared)", mods)
+	}
+	// Absent key: nothing claimed.
+	if mods := byID["silent-model"].SupportedInputModalities; mods != nil {
+		t.Fatalf("silent model modalities = %#v, want nil", mods)
+	}
+	if mods := byID["image-generator"].SupportedInputModalities; mods != nil {
+		t.Fatalf("image generator modalities = %#v, want nil", mods)
+	}
+
+	// Output modalities are never asserted: every catalogue model produces
+	// text and the upstream says nothing further.
+	for _, m := range got {
+		if m.SupportedOutputModalities != nil {
+			t.Fatalf("%s output modalities = %#v, want nil", m.ID, m.SupportedOutputModalities)
+		}
+	}
+}
+
+// The /v3/config path joins an ordered roster with a detail map; the modality
+// must survive that join, which is the path the plugin actually uses.
+func TestParseWorkBuddyV3ConfigKeepsModalityThroughRosterJoin(t *testing.T) {
+	raw := []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["vision-model","plain-model"]}],` +
+		`"models":[` +
+		`{"id":"vision-model","name":"Vision","supportsImages":true,"maxInputTokens":1000,"maxOutputTokens":10},` +
+		`{"id":"plain-model","name":"Plain","supportsImages":false,"maxInputTokens":2000,"maxOutputTokens":20}` +
+		`]}}`)
+	got, err := parseWorkBuddyV3Config(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("models = %#v", got)
+	}
+	if got[0].ID != "vision-model" || len(got[0].SupportedInputModalities) != 2 {
+		t.Fatalf("vision entry = %#v", got[0])
+	}
+	if got[1].ID != "plain-model" || got[1].SupportedInputModalities != nil {
+		t.Fatalf("plain entry = %#v", got[1])
+	}
+}
+
 // A description may arrive as description / descriptionEn / descriptionZh
 // depending on catalog shape; the parser must not depend on the flat field.
 func TestParseWorkBuddyModelEntryDescriptionFallbacks(t *testing.T) {

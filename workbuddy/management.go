@@ -178,6 +178,9 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodPost, Path: base + "/select", Description: "Select the active account card used for chat routing (body: {auth_index})."},
 			{Method: http.MethodPost, Path: base + "/keepalive", Description: "Manually refresh access tokens for all accounts (or one with auth_index)."},
 			{Method: http.MethodGet, Path: base + "/keepalive/status", Description: "Last keepalive run summary + config."},
+			{Method: http.MethodPost, Path: base + "/activity", Description: "Manually report conversation activity for all eligible CN personal accounts (growth streak + first_buddy gate)."},
+			{Method: http.MethodPost, Path: base + "/travel", Description: "Advance the cat-travel loop for all eligible CN personal accounts (adopt / depart / claim). Claimed trips pay credits."},
+			{Method: http.MethodPost, Path: base + "/growth-tasks", Description: "Run the growth task centre for all eligible CN personal accounts (list / accept / report / claim). Claimed tasks pay credits."},
 		},
 		Resources: []resourceRoute{
 			{Path: "/panel", Menu: "WorkBuddy", Description: "WorkBuddy dashboard: credits, check-in, plan, import."},
@@ -252,6 +255,12 @@ func handleManagement(raw []byte) ([]byte, error) {
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleKeepaliveNowWithCallback(req.ManagementRequest, req.HostCallbackID)))
 	case req.Method == http.MethodGet && path == base+"/keepalive/status":
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleKeepaliveStatus()))
+	case req.Method == http.MethodPost && path == base+"/activity":
+		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleManualActivity(req.ManagementRequest)))
+	case req.Method == http.MethodPost && path == base+"/travel":
+		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleManualTravel()))
+	case req.Method == http.MethodPost && path == base+"/growth-tasks":
+		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleManualGrowthTasks(req.ManagementRequest)))
 	}
 	return okEnvelope(mgmtJSONResponse(http.StatusNotFound, map[string]any{"error": "not found: " + path}))
 }

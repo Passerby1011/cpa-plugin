@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,19 @@ import (
 
 // check-in schedule: 09:00 and 21:00 local time.
 var checkinHours = []int{9, 21}
+
+// growth activity-report schedule: 10:00 local time, after the morning
+// check-in so a freshly refilled account reports the same day.
+var activityHours = []int{10}
+
+// cat-travel schedule: 09:00 and 21:00 local time, so a trip can be
+// departed in the morning and collected the same evening.
+var travelHours = []int{9, 21}
+
+// growth task-centre schedule: 10:00 local time for the ordinary tasks, plus
+// 01:00 for the night-owl task, which only counts inside its 23:00-08:00 CST
+// window.
+var growthTasksHours = []int{10, 1}
 
 // plugin-level config decoded from plugin.register/reconfigure config_yaml.
 var (
@@ -49,6 +63,23 @@ var (
 	managementAPIKeyMu sync.RWMutex
 )
 
+// Growth-system scheduling. Both default to off/1: the activity report drives
+// the streak and the first_buddy adoption gate on CN personal accounts, and it
+// is only useful together with the cat-travel task, so the operator opts in
+// once the scope rules are understood (enterprise and Global accounts are
+// skipped, see activity.go).
+var (
+	activityAuto        = false
+	activityReportCount = 5
+	activityAutoMu      sync.RWMutex
+
+	travelAuto   = false
+	travelAutoMu sync.RWMutex
+
+	growthTasksAuto   = false
+	growthTasksAutoMu sync.RWMutex
+)
+
 // Default URL tries localhost first (works for both bare-metal and Docker
 // host-network), falls back to Docker compose service name. The probe runs
 // once at configure() time; a reachable endpoint wins.
@@ -66,6 +97,10 @@ func configure(raw []byte) error {
 	nextLifecycleAuto := true
 	nextSchedulerMode := schedulerModeOff // reset to default on reconfigure
 	nextKeepaliveAuto := true
+	nextActivityAuto := false
+	nextActivityCount := 5
+	nextTravelAuto := false
+	nextGrowthTasksAuto := false
 	nextMgmtKey := ""
 	nextProxyURL := ""
 
@@ -102,6 +137,30 @@ func configure(raw []byte) error {
 	if value, ok := configScalars["token_keepalive"]; ok {
 		nextKeepaliveAuto = enabledConfigValue(value)
 	}
+	if value, ok := configScalars["activity_auto"]; ok {
+		nextActivityAuto = enabledConfigValue(value)
+	}
+	if value, ok := configScalars["travel_auto"]; ok {
+		nextTravelAuto = enabledConfigValue(value)
+	}
+	if value, ok := configScalars["growth_tasks_auto"]; ok {
+		nextGrowthTasksAuto = enabledConfigValue(value)
+	}
+	if value, ok := configScalars["activity_report_count"]; ok {
+		if n, err := strconv.Atoi(value); err == nil {
+			if n < 1 {
+				n = 1
+			}
+			if n > 50 {
+				// A runaway event count is both useless (the gate needs five
+				// conversations) and a rate-limit risk for the whole account.
+				n = 50
+			}
+			nextActivityCount = n
+		} else {
+			return errors.New("activity_report_count must be an integer")
+		}
+	}
 
 	nextProxyURL, err = parseProxyURLConfig(configYAML)
 	if err != nil {
@@ -132,6 +191,19 @@ func configure(raw []byte) error {
 	keepaliveAutoMu.Lock()
 	keepaliveAuto = nextKeepaliveAuto
 	keepaliveAutoMu.Unlock()
+
+	activityAutoMu.Lock()
+	activityAuto = nextActivityAuto
+	activityReportCount = nextActivityCount
+	activityAutoMu.Unlock()
+
+	travelAutoMu.Lock()
+	travelAuto = nextTravelAuto
+	travelAutoMu.Unlock()
+
+	growthTasksAutoMu.Lock()
+	growthTasksAuto = nextGrowthTasksAuto
+	growthTasksAutoMu.Unlock()
 
 	// management key: config_yaml > env > keep existing. Empty stays empty
 	// (plugin-layer auth disabled, host middleware still guards).
@@ -234,10 +306,12 @@ func parseTopLevelConfigScalars(raw []byte) (map[string]string, error) {
 
 		expected := ""
 		switch key.Value {
-		case "checkin_auto", "lifecycle_auto", "token_keepalive":
+		case "checkin_auto", "lifecycle_auto", "token_keepalive", "activity_auto", "travel_auto", "growth_tasks_auto":
 			expected = "boolean"
 		case "scheduler_mode", "usage_report_url", "usage_report_key", "management_key":
 			expected = "string"
+		case "activity_report_count":
+			expected = "integer"
 		default:
 			continue
 		}
@@ -247,12 +321,19 @@ func parseTopLevelConfigScalars(raw []byte) (map[string]string, error) {
 		if value.Kind != yaml.ScalarNode {
 			return nil, errors.New(key.Value + " must be a scalar " + expected)
 		}
-		if expected == "boolean" {
+		switch expected {
+		case "boolean":
 			if value.Tag != "!!bool" && value.Tag != "!!int" && value.Tag != "!!str" {
 				return nil, errors.New(key.Value + " must be a boolean")
 			}
-		} else if value.Tag != "!!str" {
-			return nil, errors.New(key.Value + " must be a string")
+		case "integer":
+			if value.Tag != "!!int" {
+				return nil, errors.New(key.Value + " must be an integer")
+			}
+		default:
+			if value.Tag != "!!str" {
+				return nil, errors.New(key.Value + " must be a string")
+			}
 		}
 		values[key.Value] = strings.TrimSpace(value.Value)
 	}

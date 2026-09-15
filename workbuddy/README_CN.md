@@ -15,8 +15,9 @@
   走 `www.workbuddy.ai`）。该配置只影响登录流程，登录拿到的 token 由 domain
   字段决定后续路由，所以两个区域可以同时用，不需要额外配置。
 - **模型目录**：默认按已认证账号发现并缓存可用模型，也可以用 YAML 中的完整
-  列表替代 WorkBuddy discovery。两种模式都会用 models.dev 补充缺失的 metadata。
-  宿主侧 `oauth-model-alias` / `oauth-excluded-models` 配置仍然生效。
+  列表替代 WorkBuddy discovery。全部模型字段都来自 WorkBuddy 自己的模型目录
+  （`/v3/config`），插件不访问任何第三方网站。宿主侧 `oauth-model-alias` /
+  `oauth-excluded-models` 配置仍然生效。
 - **执行器** — OpenAI 兼容 chat completions，流式（真 SSE，走 `host.stream.emit`）
   和非流式（SSE 折叠成单个 completion）都支持。内置 `tool_choice` 归一、
   Claude Code 模板清洗、按区域注入 system message。
@@ -95,8 +96,7 @@ plugins:
       enabled: true
 
       # 可选的完整 model ID 列表，每项必须是单行 YAML string。
-      # 非空列表就是全部模型：跳过 WorkBuddy catalog HTTP 和 catalog cache
-      # 读写，但 models.dev metadata 的 fetch、ETag 和 last-good cache 规则不变。
+      # 非空列表就是全部模型：原样返回，不发任何网络请求，也不读写 cache。
       # 未设置、null 或 [] 时继续动态发现 WorkBuddy catalog。
       models: []
 
@@ -153,29 +153,24 @@ CPA request-log 中。浏览器打开的 OAuth URL 不由插件请求，浏览�
 `auto`，不读账号 cache，也不发网络请求。
 
 `models` 是非空单行 YAML string sequence 时，它按 YAML 顺序定义完整模型列表。
-`model.for_auth` 仍会校验账号，但不会请求 WorkBuddy catalog HTTP，不会读写账号的
-WorkBuddy catalog cache，也不会删除已有 cache。models.dev metadata 仍执行原有的
-在线 fetch、ETag、持久化和 last-good fallback。metadata fresh 时账号进入 `ready`；
-刷新失败但有有效 metadata cache 时进入 `stale`；没有有效 metadata 时进入 `failed`
-并返回空模型列表。未设置 `models`、`models: null` 和 `models: []` 都会恢复动态发现，
-并可继续使用已有 WorkBuddy catalog cache。
+`model.for_auth` 仍会校验账号，但完全不发网络请求，也不读写任何 catalog cache，
+更不会删除已有 cache。配置目录直接发布为 `ready`，`model_source` 为 `config`，
+`models_fetched_at` 为空（只有 cache 根目录本身无法创建，例如
+`os.UserConfigDir()` 失败时才 fail closed）。未设置 `models`、`models: null` 和
+`models: []` 都会恢复动态发现，并可继续使用已有 WorkBuddy catalog cache。
 
 动态模式下，每个账号第一次调用 `model.for_auth` 时执行 authenticated bootstrap：
 
-1. WorkBuddy `GET /v3/config` 提供该账号有权使用的 model ID 和 serving 字段。
+1. WorkBuddy `GET /v3/config` 提供该账号有权使用的 model ID 和全部 serving 字段：
+   上下文/输出上限、消耗倍率，以及映射为输入模态的 `supportsImages` 标记。
    只有该端点明确返回 HTTP 404 或 405 时，才 fallback 到旧端点
    `GET /console/enterprises/personal/models`；其他错误不会触发 fallback。
-2. [models.dev `/models.json`](https://models.dev/models.json) 只补充 WorkBuddy
-   缺失的 canonical metadata，不决定账号 entitlement，也不覆盖 WorkBuddy
-   提供的 serving 字段。
-3. 每项来源都先校验，再替换 persistent cache，最后发布 immutable 的账号模型目录。
+2. 响应先校验，再替换 persistent cache，最后发布 immutable 的账号模型目录。
 
 Cache 根目录由 `os.UserConfigDir()` 计算，不硬编码平台路径：
 
 ```plaintext
 <user-config-dir>/CLIProxyAPI/workbuddy/model-catalog/
-  metadata.json
-  metadata.json.bak
   models/
     <identity-sha256>.json
     <identity-sha256>.json.bak
@@ -184,19 +179,17 @@ Cache 根目录由 `os.UserConfigDir()` 计算，不硬编码平台路径：
 Linux root 的默认路径是
 `/root/.config/CLIProxyAPI/workbuddy/model-catalog/`。
 
-首次 bootstrap 没有有效 cache 时 fail closed：两个来源必须都成功完成获取、
+首次 bootstrap 没有有效 cache 时 fail closed：WorkBuddy 模型目录必须成功完成获取、
 校验和持久化，账号才能进入 `ready`。Bootstrap 失败时，`model.for_auth`
-返回成功 envelope 和空模型列表。之后每次启动进程时，第一次调用仍会尝试刷新
-两个来源。如果某项刷新失败，但该来源有有效 last-good cache，账号以 `stale`
-启动并使用该 cache。某项来源既没有 fresh 结果，也没有有效 last-good cache 时，
-账号进入 `failed`。
+返回成功 envelope 和空模型列表。之后每次启动进程时，第一次调用仍会尝试刷新。
+如果刷新失败，但已有有效 last-good cache，账号以 `stale` 启动并使用该 cache。
+既没有 fresh 结果、也没有有效 last-good cache 时，账号进入 `failed`。
 
 只有 `ready` 和 `stale` 可以执行。`not_started`、`loading`、`failed` 会在所有
 executor 入口返回固定、脱敏的 `not_ready` 和 HTTP 503，scheduler 也会排除这些
-账号。Panel 保持可访问，并通过 `model_status` 返回账号级来源和时间戳。固定错误
-分类是 `auth_invalid`、`workbuddy_transport`、`workbuddy_http`、
-`workbuddy_schema`、`models_dev_transport`、`models_dev_http`、
-`models_dev_schema`、`cache_read`、`cache_write`；不会暴露上游原始错误、response
+账号。Panel 保持可访问，并通过 `model_status` 返回账号级状态、来源和时间戳。固定
+错误分类是 `auth_invalid`、`workbuddy_transport`、`workbuddy_http`、
+`workbuddy_schema`、`cache_read`、`cache_write`；不会暴露上游原始错误、response
 body、凭证或 cache 路径。
 
 当前没有 background 或 request-time refresh、panel retry endpoint、Enterprise

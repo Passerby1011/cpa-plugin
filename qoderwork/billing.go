@@ -16,7 +16,7 @@ import (
 func billingHeaders(req *http.Request, sa *storedAuth) {
 	// QoderWork billing endpoints authenticate with the active token as a
 	// plain Bearer — jobToken (jt-) or device token (dt-), both accepted
-	// upstream (verified live 2026-07-27). No COSY signing (KNOWLEDGE §2).
+	// upstream (verified live 2026-07-27). No COSY signing on this endpoint.
 	req.Header.Set("Authorization", "Bearer "+sa.Auth.AccessToken)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")

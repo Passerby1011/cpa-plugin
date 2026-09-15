@@ -335,7 +335,10 @@ func TestModelRuntimeCommitsFeatureSnapshotWithConfigGeneration(t *testing.T) {
 	}
 }
 
-func TestConfiguredModelsBypassCatalogCacheAndUseModelsDevMetadata(t *testing.T) {
+// An operator-pinned list is the complete answer: it must serve exactly those
+// models, in the configured order, without touching the network and without
+// disturbing the discovered catalogue a previous run left on disk.
+func TestConfiguredModelsBypassCatalogCacheAndFetchNothing(t *testing.T) {
 	root := t.TempDir()
 	store := newModelStore(root)
 	sa := syntheticStoredAuth(t, workBuddyRealmCN)
@@ -363,27 +366,11 @@ func TestConfiguredModelsBypassCatalogCacheAndUseModelsDevMetadata(t *testing.T)
 	primaryBefore := modelStoreReadFile(t, modelPath)
 	backupBefore := modelStoreReadFile(t, modelPath+".bak")
 
-	workBuddyCalls, metadataCalls := 0, 0
+	// No host may be contacted in configured mode. The callback used to serve
+	// models.dev here; the plugin no longer talks to it at all.
 	runtime := newModelRuntime(store, func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		switch req.URL.Host {
-		case "copilot.tencent.com":
-			workBuddyCalls++
-			return nil, errors.New("configured mode requested WorkBuddy")
-		case "models.dev":
-			metadataCalls++
-			if callbackID != "callback-configured-bypass" {
-				t.Fatalf("models.dev callback ID = %q", callbackID)
-			}
-			return &hostHTTPResponse{
-				StatusCode: http.StatusOK,
-				Headers:    http.Header{"ETag": []string{`"configured-etag"`}},
-				Body: []byte(`{"synthetic/serve-first":{"id":"serve-first","name":"First configured","limit":{"context":1111}},` +
-					`"synthetic/serve-second":{"id":"serve-second","name":"Second configured","limit":{"context":2222}}}`),
-			}, nil
-		default:
-			t.Fatalf("unexpected model request %s", req.URL)
-			return nil, nil
-		}
+		t.Fatalf("configured mode made a network call: %s", req.URL)
+		return nil, nil
 	})
 	oldRuntime := activeModelRuntime.Swap(runtime)
 	oldFeatures := featureRuntime.Load()
@@ -405,15 +392,17 @@ func TestConfiguredModelsBypassCatalogCacheAndUseModelsDevMetadata(t *testing.T)
 		t.Fatal(err)
 	}
 	response := decodeModelResponse(t, raw)
-	if len(response.Models) != 2 || response.Models[0].ID != "serve-second" || response.Models[0].Name != "Second configured" || response.Models[0].ContextLength != 2222 || response.Models[1].ID != "serve-first" || response.Models[1].Name != "First configured" || response.Models[1].ContextLength != 1111 {
+	if len(response.Models) != 2 || response.Models[0].ID != "serve-second" || response.Models[1].ID != "serve-first" {
 		t.Fatalf("configured response models = %#v", response.Models)
 	}
-	got := runtime.snapshotForAuthID("auth-configured-bypass")
-	if got.State != modelReady || got.ModelSource != modelSourceConfig || got.MetadataSource != modelSourceFresh || !got.ModelsFetchedAt.IsZero() {
-		t.Fatalf("configured snapshot = %#v", got)
+	// A pinned id with no catalogue entry still needs a display name; the host
+	// falls back to the id itself.
+	if response.Models[0].Name != "serve-second" || response.Models[0].OwnedBy != providerName {
+		t.Fatalf("configured model defaults = %#v", response.Models[0])
 	}
-	if workBuddyCalls != 0 || metadataCalls != 1 {
-		t.Fatalf("source calls: WorkBuddy=%d models.dev=%d", workBuddyCalls, metadataCalls)
+	got := runtime.snapshotForAuthID("auth-configured-bypass")
+	if got.State != modelReady || got.ModelSource != modelSourceConfig || !got.ModelsFetchedAt.IsZero() {
+		t.Fatalf("configured snapshot = %#v", got)
 	}
 	if after := modelStoreReadFile(t, modelPath); string(after) != string(primaryBefore) {
 		t.Fatalf("configured mode rewrote catalog primary: before=%s after=%s", primaryBefore, after)
@@ -428,106 +417,68 @@ func TestConfiguredModelsBypassCatalogCacheAndUseModelsDevMetadata(t *testing.T)
 	if len(entries) != 2 {
 		t.Fatalf("configured mode wrote catalog files: %#v", entries)
 	}
-	metadata, found, err := store.loadMetadata()
-	if err != nil || !found || metadata.ETag != `"configured-etag"` {
-		t.Fatalf("persisted metadata = %#v, found=%v err=%v", metadata, found, err)
-	}
 }
 
-func TestConfiguredModelsMetadataReadinessMatrix(t *testing.T) {
+// A pinned list has exactly one outcome now: ready, serving those ids. There is
+// no second source left that can fail, so the old metadata matrix collapses.
+func TestConfiguredModelsReadinessIsIndependentOfCatalogState(t *testing.T) {
 	for _, tt := range []struct {
-		name               string
-		seedMetadata       bool
-		responseStatus     int
-		responseErr        error
-		wantState          modelReadinessState
-		wantMetadataSource modelSnapshotSource
-		wantError          modelErrorCode
-		wantName           string
-		wantFetchedAt      bool
+		name        string
+		seedCatalog bool
+		models      string
+		want        []string
 	}{
-		{name: "fresh success", responseStatus: http.StatusOK, wantState: modelReady, wantMetadataSource: modelSourceFresh, wantName: "Fresh configured", wantFetchedAt: true},
-		{name: "not modified with valid cache", seedMetadata: true, responseStatus: http.StatusNotModified, wantState: modelReady, wantMetadataSource: modelSourceFresh, wantName: "Cached configured", wantFetchedAt: true},
-		{name: "failure with valid last-good", seedMetadata: true, responseErr: errors.New("synthetic metadata failure"), wantState: modelStale, wantMetadataSource: modelSourceCache, wantError: modelErrorModelsDevTransport, wantName: "Cached configured", wantFetchedAt: true},
-		{name: "failure without valid metadata", responseErr: errors.New("synthetic metadata failure"), wantState: modelFailed, wantMetadataSource: modelSourceNone, wantError: modelErrorModelsDevTransport},
+		{name: "single model", models: "[serve-configured]", want: []string{"serve-configured"}},
+		{name: "order preserved", models: "[serve-b, serve-a]", want: []string{"serve-b", "serve-a"}},
+		{name: "with discovered catalogue on disk", seedCatalog: true, models: "[serve-configured]", want: []string{"serve-configured"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
 			store := newModelStore(root)
-			cachedAt := time.Date(2026, time.August, 28, 5, 6, 7, 0, time.UTC)
-			if tt.seedMetadata {
-				cached := metadataCacheV1{
-					SchemaVersion: modelCacheSchemaVersion,
-					ETag:          `"cached-configured-etag"`,
-					FetchedAt:     cachedAt,
-					Records: map[string]modelFacts{
-						"synthetic/serve-configured": {ID: "synthetic/serve-configured", Name: "Cached configured"},
-					},
+			sa := syntheticStoredAuth(t, workBuddyRealmCN)
+			if tt.seedCatalog {
+				identity, err := modelAuthIdentityFor("auth-configured-matrix", sa)
+				if err != nil {
+					t.Fatal(err)
 				}
-				if err := store.saveMetadata(cached); err != nil {
+				cached := modelCatalogCacheV1{
+					SchemaVersion:  modelCacheSchemaVersion,
+					IdentitySHA256: identity.sha256(),
+					Realm:          workBuddyRealmCN,
+					FetchedAt:      time.Date(2026, time.August, 28, 5, 6, 7, 0, time.UTC),
+					Endpoint:       workBuddyEndpointV3Config,
+					Models:         []modelFacts{{ID: "cached-model"}},
+				}
+				if err := store.saveModels(cached); err != nil {
 					t.Fatal(err)
 				}
 			}
 
-			workBuddyCalls, metadataCalls := 0, 0
 			runtime := newModelRuntime(store, func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-				switch req.URL.Host {
-				case "copilot.tencent.com":
-					workBuddyCalls++
-					return modelRuntimeFreshWorkBuddyResponse(), nil
-				case "models.dev":
-					metadataCalls++
-					if callbackID != "callback-configured-matrix" {
-						t.Fatalf("models.dev callback ID = %q", callbackID)
-					}
-					if tt.seedMetadata && req.Header.Get("If-None-Match") != `"cached-configured-etag"` {
-						t.Fatalf("If-None-Match = %q", req.Header.Get("If-None-Match"))
-					}
-					if tt.responseErr != nil {
-						return nil, tt.responseErr
-					}
-					if tt.responseStatus == http.StatusNotModified {
-						return &hostHTTPResponse{StatusCode: http.StatusNotModified, Headers: make(http.Header)}, nil
-					}
-					return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: http.Header{"ETag": []string{`"fresh-configured-etag"`}}, Body: []byte(`{"synthetic/serve-configured":{"id":"serve-configured","name":"Fresh configured"}}`)}, nil
-				default:
-					t.Fatalf("unexpected model request %s", req.URL)
-					return nil, nil
-				}
+				t.Fatalf("configured mode made a network call: %s", req.URL)
+				return nil, nil
 			})
 			oldFeatures := featureRuntime.Load()
 			t.Cleanup(func() { featureRuntime.Store(oldFeatures) })
-			cfg, err := parseFeatureRuntime([]byte("models: [serve-configured]\n"))
+			cfg, err := parseFeatureRuntime([]byte("models: " + tt.models + "\n"))
 			if err != nil {
 				t.Fatal(err)
 			}
 			runtime.commitFeatureRuntime(cfg)
 
 			got := runtime.ensureForAuth(authModelRequestWire{
-				AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-configured-matrix", StorageJSON: mustJSON(syntheticStoredAuth(t, workBuddyRealmCN))},
+				AuthModelRequest: pluginapi.AuthModelRequest{AuthID: "auth-configured-matrix", StorageJSON: mustJSON(sa)},
 				HostCallbackID:   "callback-configured-matrix",
 			})
-			if workBuddyCalls != 0 || metadataCalls != 1 {
-				t.Fatalf("source calls: WorkBuddy=%d models.dev=%d", workBuddyCalls, metadataCalls)
+			if got.State != modelReady || got.ModelSource != modelSourceConfig || got.ErrorCode != modelErrorNone || !got.ModelsFetchedAt.IsZero() {
+				t.Fatalf("configured snapshot = %#v", got)
 			}
-			if got.State != tt.wantState || got.ModelSource != modelSourceConfig || got.MetadataSource != tt.wantMetadataSource || got.ErrorCode != tt.wantError || !got.ModelsFetchedAt.IsZero() {
-				t.Fatalf("configured metadata snapshot = %#v", got)
+			if !got.executable() || len(got.Models) != len(tt.want) {
+				t.Fatalf("configured models = %#v", got.Models)
 			}
-			if got.MetadataFetchedAt.IsZero() == tt.wantFetchedAt {
-				t.Fatalf("metadata fetched_at = %s, want present=%v", got.MetadataFetchedAt, tt.wantFetchedAt)
-			}
-			if tt.wantState == modelFailed {
-				if got.executable() || got.Models == nil || len(got.Models) != 0 {
-					t.Fatalf("failed configured snapshot = %#v", got)
-				}
-				return
-			}
-			if !got.executable() || len(got.Models) != 1 || got.Models[0].ID != "serve-configured" || got.Models[0].Name != tt.wantName {
-				t.Fatalf("configured metadata models = %#v", got.Models)
-			}
-			if tt.responseStatus == http.StatusOK {
-				if persisted, found, err := store.loadMetadata(); err != nil || !found || persisted.ETag != `"fresh-configured-etag"` {
-					t.Fatalf("fresh metadata persisted=%#v found=%v err=%v", persisted, found, err)
+			for i, id := range tt.want {
+				if got.Models[i].ID != id {
+					t.Fatalf("configured models[%d] = %q, want %q", i, got.Models[i].ID, id)
 				}
 			}
 		})
@@ -535,13 +486,13 @@ func TestConfiguredModelsMetadataReadinessMatrix(t *testing.T) {
 }
 
 func TestConfiguredModelsValidateAuthIdentityAndTokenGeneration(t *testing.T) {
-	metadataCalls := 0
+	// Configured mode resolves models and identities locally: any network call
+	// is a regression.
+	dispatchCalls := 0
 	runtime := newModelRuntime(newModelStore(t.TempDir()), func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		if req.URL.Host != "models.dev" {
-			t.Fatalf("configured validation requested %s", req.URL)
-		}
-		metadataCalls++
-		return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"synthetic/serve-configured":{"id":"serve-configured"}}`)}, nil
+		dispatchCalls++
+		t.Fatalf("configured validation requested %s", req.URL)
+		return nil, nil
 	})
 	oldFeatures := featureRuntime.Load()
 	t.Cleanup(func() { featureRuntime.Store(oldFeatures) })
@@ -564,8 +515,8 @@ func TestConfiguredModelsValidateAuthIdentityAndTokenGeneration(t *testing.T) {
 			t.Fatalf("invalid configured auth snapshot = %#v", got)
 		}
 	}
-	if metadataCalls != 0 {
-		t.Fatalf("invalid configured auth made %d metadata calls", metadataCalls)
+	if dispatchCalls != 0 {
+		t.Fatalf("invalid configured auth made %d dispatch calls", dispatchCalls)
 	}
 
 	wwwIssuerAuth := syntheticStoredAuth(t, workBuddyRealmCN)
@@ -585,8 +536,8 @@ func TestConfiguredModelsValidateAuthIdentityAndTokenGeneration(t *testing.T) {
 	if first.State != modelReady || second.State != modelReady || second.authGeneration != first.authGeneration+1 || second.configGeneration != first.configGeneration {
 		t.Fatalf("token generations: first=%#v second=%#v", first, second)
 	}
-	if metadataCalls != 1 {
-		t.Fatalf("valid configured auth metadata calls = %d, want shared 1", metadataCalls)
+	if dispatchCalls != 0 {
+		t.Fatalf("valid configured auth made %d dispatch calls, want none", dispatchCalls)
 	}
 }
 
@@ -611,22 +562,13 @@ func TestConfiguredModelsSwitchToEmptyResumesWorkBuddyCacheDiscovery(t *testing.
 	}
 	catalogBefore := modelStoreReadFile(t, filepath.Join(root, "models", identity.sha256()+".json"))
 
-	workBuddyCalls, metadataCalls := 0, 0
+	workBuddyCalls := 0
 	runtime := newModelRuntime(store, func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		switch req.URL.Host {
-		case "copilot.tencent.com":
-			workBuddyCalls++
-			return nil, errors.New("synthetic WorkBuddy outage")
-		case "models.dev":
-			metadataCalls++
-			if callbackID != "callback-configured-switch" {
-				t.Fatalf("models.dev callback ID = %q", callbackID)
-			}
-			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"synthetic/serve-configured":{"id":"serve-configured"},"synthetic/cached-dynamic":{"id":"cached-dynamic"}}`)}, nil
-		default:
+		if req.URL.Host != "copilot.tencent.com" {
 			t.Fatalf("unexpected model request %s", req.URL)
-			return nil, nil
 		}
+		workBuddyCalls++
+		return nil, errors.New("synthetic WorkBuddy outage")
 	})
 	oldRuntime := activeModelRuntime.Swap(runtime)
 	oldFeatures := featureRuntime.Load()
@@ -666,8 +608,8 @@ func TestConfiguredModelsSwitchToEmptyResumesWorkBuddyCacheDiscovery(t *testing.
 	if dynamic.State != modelStale || dynamic.ModelSource != modelSourceCache || dynamic.ErrorCode != modelErrorWorkBuddyTransport || len(dynamic.Models) != 1 || dynamic.Models[0].ID != "cached-dynamic" {
 		t.Fatalf("dynamic snapshot = %#v", dynamic)
 	}
-	if workBuddyCalls != 1 || metadataCalls != 1 {
-		t.Fatalf("source calls after switch: WorkBuddy=%d models.dev=%d", workBuddyCalls, metadataCalls)
+	if workBuddyCalls != 1 {
+		t.Fatalf("source calls after switch: WorkBuddy=%d, want 1", workBuddyCalls)
 	}
 	if after := modelStoreReadFile(t, filepath.Join(root, "models", identity.sha256()+".json")); string(after) != string(catalogBefore) {
 		t.Fatalf("dynamic fallback rewrote catalog: before=%s after=%s", catalogBefore, after)
