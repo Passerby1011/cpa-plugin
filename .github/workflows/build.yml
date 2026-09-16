@@ -317,14 +317,15 @@ jobs:
           GOFLAGS: -trimpath -buildmode=c-shared
         run: |
           set -euo pipefail
-          # Lowest published 14.x: the ELF osreldate tag follows the target
+          # Lowest published release: the ELF osreldate tag follows the target
           # triple, and a binary tagged newer than the running kernel is
-          # refused, so the smallest 14.x keeps every FreeBSD >= it loadable.
+          # refused, so the oldest sysroot keeps the artifact loadable on
+          # every newer FreeBSD.
           SYSROOT_VERSION="$(curl -fsSL --retry 5 --retry-all-errors \
             https://download.freebsd.org/releases/amd64/ \
-            | grep -oE '14\.[0-9]+-RELEASE' | sort -uV | head -1)"
+            | grep -oE '1[0-9]\.[0-9]+-RELEASE' | sort -uV | head -1)"
           if [ -z "${SYSROOT_VERSION}" ]; then
-            echo "no FreeBSD 14.x sysroot published"; exit 1
+            echo "no FreeBSD release sysroot published"; exit 1
           fi
           echo "FreeBSD sysroot: ${SYSROOT_VERSION}"
           curl -fsSL --retry 5 --retry-all-errors -o /tmp/base.txz \
@@ -336,12 +337,12 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y -qq lld
           }
-          mkdir -p "${{ matrix.id }}/dist/${GOOS_PART}"
+          mkdir -p "${{ matrix.id }}/dist/${{ matrix.target }}"
           cd "${{ matrix.id }}"
           CGO_ENABLED=1 GOOS=freebsd GOARCH=amd64 \
             CGO_LDFLAGS="-fuse-ld=lld" \
             CC="clang --target=x86_64-unknown-freebsd${SYSROOT_VERSION%-RELEASE} --sysroot=/opt/freebsd-sysroot" \
-            go build -o "dist/${GOOS_PART}/${LIB_NAME}" \
+            go build -o "dist/${{ matrix.target }}/${LIB_NAME}" \
               -ldflags "-s -w -X main.version=${VERSION}"
 
       - name: Package plugin
