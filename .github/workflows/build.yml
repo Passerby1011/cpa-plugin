@@ -292,10 +292,9 @@ jobs:
           } >> "${GITHUB_ENV}"
           echo "version=${CLEAN_VERSION}" >> "${GITHUB_OUTPUT}"
 
-      - name: Build cross shared library
+      - name: Build cross shared library (windows-arm64)
+        if: matrix.target == 'windows-arm64'
         timeout-minutes: 45
-        # v1.1.0 pins FreeBSD 14.1 base.txz, which was removed from download.freebsd.org;
-        # the floating v1 tag tracks a live release.
         uses: go-cross/cgo-actions@v1
         env:
           GOFLAGS: -trimpath -buildmode=c-shared
@@ -307,6 +306,43 @@ jobs:
           output: ${{ env.LIB_NAME }}
           flags: -ldflags=-s -w
           x-flags: main.version=${{ steps.meta.outputs.version }}
+
+      # go-cross/cgo-actions pins the FreeBSD 14.3 base.txz, which FreeBSD has
+      # retired from download.freebsd.org; build against a sysroot fetched at
+      # run time instead so the pinned version cannot rot again.
+      - name: Build cross shared library (freebsd-amd64)
+        if: matrix.target == 'freebsd-amd64'
+        timeout-minutes: 45
+        env:
+          GOFLAGS: -trimpath -buildmode=c-shared
+        run: |
+          set -euo pipefail
+          # Lowest published 14.x: the ELF osreldate tag follows the target
+          # triple, and a binary tagged newer than the running kernel is
+          # refused, so the smallest 14.x keeps every FreeBSD >= it loadable.
+          SYSROOT_VERSION="$(curl -fsSL --retry 5 --retry-all-errors \
+            https://download.freebsd.org/releases/amd64/ \
+            | grep -oE '14\.[0-9]+-RELEASE' | sort -uV | head -1)"
+          if [ -z "${SYSROOT_VERSION}" ]; then
+            echo "no FreeBSD 14.x sysroot published"; exit 1
+          fi
+          echo "FreeBSD sysroot: ${SYSROOT_VERSION}"
+          curl -fsSL --retry 5 --retry-all-errors -o /tmp/base.txz \
+            "https://download.freebsd.org/releases/amd64/amd64/${SYSROOT_VERSION}/base.txz"
+          sudo mkdir -p /opt/freebsd-sysroot
+          sudo tar -xf /tmp/base.txz -C /opt/freebsd-sysroot
+          rm -f /tmp/base.txz
+          command -v ld.lld >/dev/null 2>&1 || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq lld
+          }
+          mkdir -p "${{ matrix.id }}/dist/${GOOS_PART}"
+          cd "${{ matrix.id }}"
+          CGO_ENABLED=1 GOOS=freebsd GOARCH=amd64 \
+            CGO_LDFLAGS="-fuse-ld=lld" \
+            CC="clang --target=x86_64-unknown-freebsd${SYSROOT_VERSION%-RELEASE} --sysroot=/opt/freebsd-sysroot" \
+            go build -o "dist/${GOOS_PART}/${LIB_NAME}" \
+              -ldflags "-s -w -X main.version=${VERSION}"
 
       - name: Package plugin
         run: |
