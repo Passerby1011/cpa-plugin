@@ -491,3 +491,24 @@ test("panel CSS truncates the card name and keeps badges on one line", () => {
   assert.match(html, /\.card-badges\{[^}]*flex:0 0 auto/);
   assert.match(html, /\.card-badges\{[^}]*white-space:nowrap/);
 });
+
+test("progressHTML renders exhausted state instead of loading for zero-credit accounts", () => {
+  const { context } = loadPanel();
+  const html = context.progressHTML({ total_remain: 0, total_used: 0, total_size: 0, packages: [{ name: "base" }] });
+  assert.doesNotMatch(html, /加载中/);
+  assert.match(html, /已耗尽/);
+  assert.match(html, /width:100%;background:var\(--err\)/);
+  assert.match(html, /剩余 0 · 已用 0 · 额度池 0/);
+});
+
+test("progressHTML distinguishes unloaded disabled accounts from pending loads", () => {
+  const { context } = loadPanel();
+  const loading = context.progressHTML(null, false);
+  assert.match(loading, /加载中/);
+  assert.match(loading, /class="spin"/);
+
+  const disabled = context.progressHTML(null, true);
+  assert.doesNotMatch(disabled, /加载中/);
+  assert.doesNotMatch(disabled, /class="spin"/);
+  assert.match(disabled, /<span>-<\/span>/);
+});
