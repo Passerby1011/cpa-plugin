@@ -297,17 +297,22 @@ function markCheckinDone(btn){
 }
 function fmtRemain(c){if(!c)return "-";const t=(c.total_remain||0)+(c.total_used||0);return c.total_remain+" 余 / "+t+" 总"}
 function esc(s){return (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
-function progressHTML(c){
+function progressHTML(c, disabled){
   // total uses size when known; remain = spendable, used = cycle spend.
   // Check-in adds packs → size/remain go UP (grant). Chat spend → used goes UP, remain DOWN.
-  if(!c||(!(c.total_remain||0)&&!(c.total_used||0)&&!(c.total_size||0)))return '<div class="pb"><div class="pb-label"><span>可用积分</span><span class="spin"></span>加载中…</span></div><div class="pb-track"><div class="pb-bar" style="width:0%"></div></div></div>';
+  if(!c){
+    if(disabled)return '<div class="pb"><div class="pb-label"><span>可用积分</span><span>-</span></div><div class="pb-track"><div class="pb-bar" style="width:0%"></div></div></div>';
+    return '<div class="pb"><div class="pb-label"><span>可用积分</span><span class="spin"></span>加载中…</span></div><div class="pb-track"><div class="pb-bar" style="width:0%"></div></div></div>';
+  }
   const remain=c.total_remain||0, used=c.total_used||0;
   const size=c.total_size||(remain+used);
   const total=size>0?size:(remain+used);
-  const pct=total>0?Math.round(used/total*100):0;
-  let color='var(--ok)'; if(pct>60)color='var(--warn)'; if(pct>85)color='var(--err)';
+  const isExhausted=remain===0&&(total>0||(c.packages&&c.packages.length>0));
+  const pct=total>0?Math.round(used/total*100):(isExhausted?100:0);
+  let color='var(--ok)'; if(pct>60)color='var(--warn)'; if(pct>85||isExhausted)color='var(--err)';
+  const rightLabel=(isExhausted&&total===0)?'<span style="color:var(--err)">已耗尽</span>':`已用 ${used} · ${pct}%`;
   const when=c.fetched_at?` · 快照 ${esc(String(c.fetched_at).replace('T',' ').replace('Z',' UTC'))}`:'';
-  return `<div class="pb"><div class="pb-label"><span>可用 ${remain}</span><span>已用 ${used} · ${pct}%</span></div><div class="pb-track"><div class="pb-bar" style="width:${pct}%;background:${color}"></div></div><div class="pb-meta">剩余 ${remain} · 已用 ${used} · 额度池 ${total}${c.pack_count?` · ${c.pack_count} 个包`:''}${when}</div></div>`;
+  return `<div class="pb"><div class="pb-label"><span>可用 ${remain}</span><span>${rightLabel}</span></div><div class="pb-track"><div class="pb-bar" style="width:${pct}%;background:${color}"></div></div><div class="pb-meta">剩余 ${remain} · 已用 ${used} · 额度池 ${total}${c.pack_count?` · ${c.pack_count} 个包`:''}${when}</div></div>`;
 }
 function bindCardActions(root){
   (root||document).querySelectorAll("[data-action]").forEach(btn=>{
@@ -353,7 +358,7 @@ function card(a){
   return `<div class="card${selected?" selected":""}" data-region="${region}" data-auth="${esc(a.auth_index)}">
   <h2>${esc(nick)} <span style="display:flex;gap:6px;align-items:center">${badges}</span></h2>
   <div class="uid">${esc(a.uid||"")} · ${esc(a.name||"")}</div>
-  ${progressHTML(cr)}
+  ${progressHTML(cr, disabled)}
   ${a.error?`<div class="row"><span class="k">错误</span><span class="v err">${esc(a.error)}</span></div>`:""}
   <div class="actions">${selectBtn}${refreshBtn}${actionHTML}</div>
   </div>`;
@@ -366,7 +371,7 @@ let authFailUntil=0;
 // Lazy-load: fetch credits for all cards that lack them, concurrently.
 // Each card fetches independently; failed ones retry once after 2s.
 function lazyLoadCredits(accounts){
-  const need=accounts.filter(a=>!a.credits&&!a.error&&!a.disabled);
+  const need=accounts.filter(a=>!a.credits&&!a.error);
   if(!need.length) return;
   need.forEach(a=>{
     const idx=a.auth_index;
