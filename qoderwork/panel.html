@@ -54,7 +54,9 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .card,.summary{background:var(--card);border:1px solid var(--border);border-radius:12px}
 .card{padding:16px}
 .card.selected{border-color:var(--acc);box-shadow:0 0 0 2px var(--acc-ring)}
-.card h2{font-size:15px;margin:0 0 2px;display:flex;justify-content:space-between;align-items:center}
+.card h2{font-size:15px;margin:0 0 2px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.card-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card-badges{display:flex;gap:6px;align-items:center;flex:0 0 auto;white-space:nowrap}
 .uid{color:var(--mut);font-size:11px;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:12px}
 .badge{font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-border)}
 .badge.exhausted{background:var(--err-soft);color:var(--err);border:1px solid var(--err-border)}
@@ -355,8 +357,9 @@ function card(a){
   const badges=(selected?`<span class="badge" style="background:var(--acc-ring);color:var(--acc);border-color:var(--acc)">使用中</span>`:"")+(disabled?`<span class="badge disabled">已禁用</span>`:"")+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${esc(plan)}">${esc(a.plan||"-")}</span>`;
   const display=(a.nickname||a.label||a.name||"").replace(/^qoderwork-?/i,"");
   const nick=display||("u"+(a.uid||"").slice(-8));
+  const fullTitle=a.nickname||a.label||a.name||nick;
   return `<div class="card${selected?" selected":""}" data-region="${region}" data-auth="${esc(a.auth_index)}">
-  <h2>${esc(nick)} <span style="display:flex;gap:6px;align-items:center">${badges}</span></h2>
+  <h2><span class="card-name" title="${esc(fullTitle)}">${esc(nick)}</span><span class="card-badges">${badges}</span></h2>
   <div class="uid">${esc(a.uid||"")} · ${esc(a.name||"")}</div>
   ${progressHTML(cr, disabled)}
   ${a.error?`<div class="row"><span class="k">错误</span><span class="v err">${esc(a.error)}</span></div>`:""}
