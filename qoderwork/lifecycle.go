@@ -95,7 +95,7 @@ func disableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary, r
 	if phys != nil {
 		name, path, legacyPath = resolveAuthFileTarget(sa, phys)
 	}
-	raw, err := buildAuthFileJSON(sa, true, note, nil)
+	raw, err := buildAuthFileJSON(physJSON(phys), sa, true, note, nil)
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func reenableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary) 
 	if err == nil {
 		name, path, legacyPath = resolveAuthFileTarget(sa, phys)
 	}
-	raw, err := buildAuthFileJSON(sa, false, note, nil)
+	raw, err := buildAuthFileJSON(physJSON(phys), sa, false, note, nil)
 	if err != nil {
 		return err
 	}
@@ -164,7 +164,7 @@ func syncAuthNote(authIndex, authID string, sa *storedAuth, cr *creditsSummary, 
 	if lifecycleStateUnchanged(authID, disabled, note) {
 		return nil
 	}
-	raw, err := buildAuthFileJSON(sa, disabled, note, nil)
+	raw, err := buildAuthFileJSON(physJSON(phys), sa, disabled, note, nil)
 	if err != nil {
 		return err
 	}

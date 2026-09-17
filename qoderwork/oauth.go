@@ -514,7 +514,7 @@ func handleRefreshAuth(raw []byte) ([]byte, error) {
 		sa.Auth.RefreshToken = tok.RefreshToken
 		sa.Auth.ExpiresAt = preserveExpiry(deviceExpiryUnix(tok), sa.Auth.ExpiresAt)
 		invalidateCosySession(sa.Account.UID)
-		return okEnvelope(pluginapi.AuthRefreshResponse{Auth: toAuthDataForRefresh(sa)})
+		return okEnvelope(pluginapi.AuthRefreshResponse{Auth: toAuthDataForRefresh(sa, req.Metadata)})
 	}
 
 	// Legacy PAT family: Tier 1 jrt- refresh → Tier 2 PAT re-exchange.
@@ -538,7 +538,7 @@ func handleRefreshAuth(raw []byte) ([]byte, error) {
 	// Host persists the refreshed credential itself after Refresh returns
 	// (conductor.go refreshAuth → m.Update → persist). Writing from the
 	// plugin too would double-write the file.
-	return okEnvelope(pluginapi.AuthRefreshResponse{Auth: toAuthDataForRefresh(sa)})
+	return okEnvelope(pluginapi.AuthRefreshResponse{Auth: toAuthDataForRefresh(sa, req.Metadata)})
 }
 
 // preserveExpiry reuses the previous token's expiresAt when the refresh
@@ -554,8 +554,8 @@ func preserveExpiry(newExpiry, oldExpiry int64) int64 {
 // toAuthDataForRefresh mirrors the WorkBuddy helper: blank out FileName and
 // ID so the host backfills from the original auth path (prevents ID mismatch
 // duplicate files when Refresh round-trips the record).
-func toAuthDataForRefresh(sa *storedAuth) pluginapi.AuthData {
-	ad := toAuthDataOpts(sa, nil, false)
+func toAuthDataForRefresh(sa *storedAuth, carrier map[string]any) pluginapi.AuthData {
+	ad := toAuthDataOpts(sa, nil, false, carrier)
 	ad.FileName = "" // let host backfill original
 	ad.ID = ""       // let host compute from path (prevents ID mismatch dupes)
 	return ad

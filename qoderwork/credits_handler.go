@@ -35,7 +35,7 @@ func handleImportPAT(req pluginapi.ManagementRequest) map[string]any {
 	ui, _ := fetchUserInfo(tok.Token) // best-effort
 	sa := buildStoredAuthFromJobToken(pat, tok, ui)
 
-	fileJSON, err := buildAuthFileJSON(sa, false, displayNote(sa, nil, false), nil)
+	fileJSON, err := buildAuthFileJSON(nil, sa, false, displayNote(sa, nil, false), nil)
 	if err != nil {
 		return map[string]any{"success": false, "error": err.Error()}
 	}

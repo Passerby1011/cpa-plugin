@@ -178,16 +178,7 @@ func persistAuthTokens(authIndex string, sa *storedAuth) error {
 	if name == "" {
 		name = authFileNameFor(sa)
 	}
-	// Carry over the note currently on disk (lifecycle writes credit/status
-	// notes there; dropping it would regress the panel display).
-	note := ""
-	var doc map[string]any
-	if err := json.Unmarshal(phys.JSON, &doc); err == nil {
-		if s, ok := doc["note"].(string); ok {
-			note = s
-		}
-	}
-	raw, err := buildAuthFileJSON(sa, phys.Disabled, note, nil)
+	raw, err := buildRefreshedAuthJSON(phys.JSON, sa)
 	if err != nil {
 		return err
 	}
