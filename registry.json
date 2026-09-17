@@ -6,7 +6,7 @@
       "name": "WorkBuddy",
       "description": "Tencent CodeBuddy (WorkBuddy) OAuth provider for CLIProxyAPI: multi-account login, dynamic models, chat executor, CN daily check-in, Global one-shot expert trial (manual), credit lifecycle (disable CN / delete Global when exhausted), credits panel with CN/Global filters, optional credits-aware scheduler.",
       "author": "Hex",
-      "version": "0.10.0",
+      "version": "0.10.1",
       "repository": "https://github.com/hex-ci/cpa-plugin",
       "logo": "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/WorkBuddy.png",
       "homepage": "https://github.com/hex-ci/cpa-plugin/tree/main/workbuddy",
@@ -24,51 +24,51 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.0/workbuddy_0.10.0_linux_amd64.zip",
-            "sha256": "901abd9ef33d85c2e4ae861cb568a307d3458abcfacfa9f442f4b2331284f01e",
-            "size": 3402564
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.1/workbuddy_0.10.1_linux_amd64.zip",
+            "sha256": "fb40ade21ee7167905fd7c40121f203f1d34632662b5b3e5b47adda2226f3d8b",
+            "size": 3402691
           },
           {
             "goos": "linux",
             "goarch": "arm64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.0/workbuddy_0.10.0_linux_arm64.zip",
-            "sha256": "24ef1af04a1374d727a046567f27b06960355fa02d9af4a81ff479c069ed8847",
-            "size": 3090069
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.1/workbuddy_0.10.1_linux_arm64.zip",
+            "sha256": "cb80fc0748886ae4f84ebd3ce381b57ee6c096d4c73c6cf33c832eeaca4193ef",
+            "size": 3089932
           },
           {
             "goos": "darwin",
             "goarch": "amd64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.0/workbuddy_0.10.0_darwin_amd64.zip",
-            "sha256": "e7222e0eea872d38a682219d4f240f6376f1c4c7a27bfe35a8d80915a42b2f6f",
-            "size": 3237160
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.1/workbuddy_0.10.1_darwin_amd64.zip",
+            "sha256": "3652427b6ac14b70542acb045cd2f8864a3e11dcc18f4898d548a148cb81ccde",
+            "size": 3237209
           },
           {
             "goos": "darwin",
             "goarch": "arm64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.0/workbuddy_0.10.0_darwin_arm64.zip",
-            "sha256": "8e6677deb8addd9c34c01e457056c4c1b5aaac5636f04db12741130a29d36902",
-            "size": 2985106
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.1/workbuddy_0.10.1_darwin_arm64.zip",
+            "sha256": "60d21e7f4876e51b3ac9201ae09ecca239901a8aa1d6100de0ebcea5c710734f",
+            "size": 2985352
           },
           {
             "goos": "windows",
             "goarch": "amd64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.0/workbuddy_0.10.0_windows_amd64.zip",
-            "sha256": "dc766dc34ae6abc2a214bb3561107be078580c17806a3b9360d853ca1eb77751",
-            "size": 3321836
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.1/workbuddy_0.10.1_windows_amd64.zip",
+            "sha256": "cf218a6e1a68c2ce7275efbe13326c9070012f24756991d70a41088ca5ec00c1",
+            "size": 3321981
           },
           {
             "goos": "windows",
             "goarch": "arm64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.0/workbuddy_0.10.0_windows_arm64.zip",
-            "sha256": "cc1e89e5724a3c28c300848d357b05b5d547185d09c97e079a591900f23463f6",
-            "size": 3052241
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.1/workbuddy_0.10.1_windows_arm64.zip",
+            "sha256": "7292b2ccb01463725c54a95fe0fb2a7fa02c956dbb4778d83ad3dae51543435d",
+            "size": 3052866
           },
           {
             "goos": "freebsd",
             "goarch": "amd64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.0/workbuddy_0.10.0_freebsd_amd64.zip",
-            "sha256": "9c31c4b00b96452c75191087b6912f82ccd2efc62def0ff302ea968b3ee80da2",
-            "size": 3319956
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/workbuddy-v0.10.1/workbuddy_0.10.1_freebsd_amd64.zip",
+            "sha256": "992653abbf473b021282ae88230c54bc4814c99312e01ca7969d7ed76452080a",
+            "size": 3320109
           }
         ]
       }
