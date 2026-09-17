@@ -171,7 +171,7 @@ func hostAuthSaveJSON(name string, raw []byte) error {
 
 // lifecycleStateUnchanged avoids redundant saves when note/disabled unchanged.
 
-func buildAuthFileJSON(sa *storedAuth, disabled bool, note string, extra map[string]any) ([]byte, error) {
+func buildAuthFileJSON(physical []byte, sa *storedAuth, disabled bool, note string, extra map[string]any) ([]byte, error) {
 	if sa == nil {
 		return nil, fmt.Errorf("nil storedAuth")
 	}
@@ -183,19 +183,52 @@ func buildAuthFileJSON(sa *storedAuth, disabled bool, note string, extra map[str
 	if err := json.Unmarshal(storage, &nested); err != nil {
 		return nil, err
 	}
-	out := map[string]any{
-		"type":     providerName,
-		"provider": providerName,
-		"logo":     pluginLogoURL,
-		"disabled": disabled,
-		"note":     note,
-		"auth":     nested["auth"],
-		"account":  nested["account"],
+	out := map[string]any{}
+	if len(physical) > 0 {
+		if err := json.Unmarshal(physical, &out); err != nil {
+			return nil, fmt.Errorf("parse existing auth json: %w", err)
+		}
 	}
+	out["type"] = providerName
+	out["provider"] = providerName
+	out["logo"] = pluginLogoURL
+	out["disabled"] = disabled
+	out["note"] = note
+	out["auth"] = nested["auth"]
+	out["account"] = nested["account"]
 	for k, v := range extra {
 		out[k] = v
 	}
 	return json.Marshal(out)
+}
+
+func buildRefreshedAuthJSON(physical []byte, sa *storedAuth) ([]byte, error) {
+	if sa == nil {
+		return nil, fmt.Errorf("nil storedAuth")
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(physical, &doc); err != nil {
+		return nil, err
+	}
+	storage, err := json.Marshal(sa)
+	if err != nil {
+		return nil, err
+	}
+	var nested map[string]json.RawMessage
+	if err := json.Unmarshal(storage, &nested); err != nil {
+		return nil, err
+	}
+	doc["auth"] = nested["auth"]
+	doc["account"] = nested["account"]
+	return json.Marshal(doc)
+}
+
+// physJSON returns the raw auth file the host holds, tolerating a nil record.
+func physJSON(phys *hostAuthPhysical) []byte {
+	if phys == nil {
+		return nil
+	}
+	return phys.JSON
 }
 
 // parseDisabledFromAuthJSON reads top-level disabled from physical auth JSON.

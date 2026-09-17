@@ -598,7 +598,8 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 	// By leaving ID empty, CPA falls back to authIDForPath(path) which
 	// derives ID from the file path → always matches the watcher's key.
 	// FileName is also echoed back to avoid rename-based duplicates.
-	ad := toAuthDataOpts(sa, nil, false)
+	carrier := parseAuthMetadataCarrier(req.RawJSON)
+	ad := toAuthDataOpts(sa, nil, false, carrier)
 	ad.ID = "" // let host compute from path (prevents ID mismatch dupes)
 	if fn := strings.TrimSpace(req.FileName); fn != "" {
 		ad.FileName = fn
@@ -610,11 +611,50 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 }
 
 func toAuthData(sa *storedAuth) pluginapi.AuthData {
-	return toAuthDataOpts(sa, nil, false)
+	return toAuthDataOpts(sa, nil, false, nil)
+}
+
+var authMetadataUserKeys = []string{
+	"weight",
+	"priority",
+	"proxy_url",
+	"proxy-url",
+	"prefix",
+	"headers",
+	"request_retry",
+	"request-retry",
+	"excluded_models",
+	"excluded-models",
+	"model_aliases",
+	"model-aliases",
+	"disable_cooling",
+	"disable-cooling",
+	"websockets",
+	"note",
+}
+
+func parseAuthMetadataCarrier(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil
+	}
+	carrier := make(map[string]any, len(authMetadataUserKeys))
+	for _, key := range authMetadataUserKeys {
+		if value, ok := doc[key]; ok {
+			carrier[key] = value
+		}
+	}
+	if len(carrier) == 0 {
+		return nil
+	}
+	return carrier
 }
 
 // toAuthDataOpts builds AuthData with optional credits snapshot and disabled flag.
-func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool) pluginapi.AuthData {
+func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool, carrier map[string]any) pluginapi.AuthData {
 	storage, _ := json.Marshal(sa)
 	id := providerName
 	fileName := authFileName
@@ -626,6 +666,14 @@ func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool) pluginapi
 	}
 	label := labelForAuth(sa)
 	meta := enrichAuthMetadata(sa, cr, disabled)
+	meta["note"] = displayNote(sa, cr, disabled)
+	meta["disabled"] = disabled
+	for key, value := range carrier {
+		if _, pluginOwned := meta[key]; pluginOwned {
+			continue
+		}
+		meta[key] = value
+	}
 	return pluginapi.AuthData{
 		Provider:    providerName,
 		ID:          id,
