@@ -23,7 +23,7 @@ func TestParseWorkBuddyV3ConfigSelectsCompleteCLIList(t *testing.T) {
 }
 
 func TestParseWorkBuddyLegacyModelsDropsDisabled(t *testing.T) {
-	raw := []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","name":"Alpha","disabled":false,"maxInputTokens":4096,"maxOutputTokens":512},{"id":"serve-off","disabled":true}]}}`)
+	raw := []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha","serve-off"]}],"models":[{"id":"serve-alpha","name":"Alpha","disabled":false,"maxInputTokens":4096,"maxOutputTokens":512},{"id":"serve-off","disabled":true}]}}`)
 	got, err := parseWorkBuddyLegacyModels(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestParseWorkBuddyLegacyModelsDropsDisabled(t *testing.T) {
 // limit stayed nil and the plugin fell back to models.dev values that were up
 // to 5x larger than the models' real allowance. This test pins the real keys.
 func TestParseWorkBuddyLegacyModelsUsesUpstreamLimitKeys(t *testing.T) {
-	raw := []byte(`{"code":0,"data":{"models":[{"id":"deepseek-v4.1-flash","name":"Deepseek-V4.1-Flash",` +
+	raw := []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["deepseek-v4.1-flash"]}],"models":[{"id":"deepseek-v4.1-flash","name":"Deepseek-V4.1-Flash",` +
 		`"maxInputTokens":1000000,"maxOutputTokens":128000,"maxAllowedSize":1000000,` +
 		`"onlyReasoning":true,"supportsReasoning":true,"reasoning":{"effort":"high","summary":"auto"}}]}}`)
 	got, err := parseWorkBuddyLegacyModels(raw)
@@ -71,7 +71,7 @@ func TestParseWorkBuddyLegacyModelsUsesUpstreamLimitKeys(t *testing.T) {
 // input. A missing key stays undeclared, because asserting a modality the
 // model does not accept would invite payloads the upstream rejects.
 func TestParseWorkBuddyCatalogModalitiesFromUpstream(t *testing.T) {
-	raw := []byte(`{"code":0,"data":{"models":[` +
+	raw := []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["vision-model","text-model","silent-model","image-generator"]}],"models":[` +
 		`{"id":"vision-model","supportsImages":true,"supportsToolCall":true},` +
 		`{"id":"text-model","supportsImages":false},` +
 		`{"id":"silent-model"},` +
@@ -115,8 +115,8 @@ func TestParseWorkBuddyCatalogModalitiesFromUpstream(t *testing.T) {
 func TestParseWorkBuddyV3ConfigKeepsModalityThroughRosterJoin(t *testing.T) {
 	raw := []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["vision-model","plain-model"]}],` +
 		`"models":[` +
-		`{"id":"vision-model","name":"Vision","supportsImages":true,"maxInputTokens":1000,"maxOutputTokens":10},` +
-		`{"id":"plain-model","name":"Plain","supportsImages":false,"maxInputTokens":2000,"maxOutputTokens":20}` +
+		`{"id":"vision-model","name":"Vision","supportsImages":true,"maxInputTokens":1000,"maxOutputTokens":32000},` +
+		`{"id":"plain-model","name":"Plain","supportsImages":false,"maxInputTokens":2000,"maxOutputTokens":64000}` +
 		`]}}`)
 	got, err := parseWorkBuddyV3Config(raw)
 	if err != nil {
@@ -136,7 +136,7 @@ func TestParseWorkBuddyV3ConfigKeepsModalityThroughRosterJoin(t *testing.T) {
 // A description may arrive as description / descriptionEn / descriptionZh
 // depending on catalog shape; the parser must not depend on the flat field.
 func TestParseWorkBuddyModelEntryDescriptionFallbacks(t *testing.T) {
-	raw := []byte(`{"code":0,"data":{"models":[` +
+	raw := []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["flat","en","zh","none"]}],"models":[` +
 		`{"id":"flat","description":"flat-desc"},` +
 		`{"id":"en","descriptionEn":"en-desc"},` +
 		`{"id":"zh","descriptionZh":"zh-desc"},` +
@@ -252,27 +252,23 @@ func TestParseWorkBuddyLegacyModelsRejectsInvalidSnapshots(t *testing.T) {
 		},
 		{
 			name: "duplicate ID",
-			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha"},{"id":" serve-alpha "}]}}`),
+			raw:  []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"," serve-alpha "]}],"models":[{"id":"serve-alpha"},{"id":" serve-alpha "}]}}`),
 		},
 		{
 			name: "whitespace-only ID",
-			raw:  []byte(`{"code":0,"data":{"models":[{"id":"   "}]}}`),
+			raw:  []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["   "]}],"models":[{"id":"   "}]}}`),
 		},
 		{
 			name: "ID longer than 512 bytes",
-			raw:  []byte(`{"code":0,"data":{"models":[{"id":"` + strings.Repeat("x", maxDiscoveredModelIDBytes+1) + `"}]}}`),
+			raw:  []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["` + strings.Repeat("x", maxDiscoveredModelIDBytes+1) + `"]}],"models":[{"id":"` + strings.Repeat("x", maxDiscoveredModelIDBytes+1) + `"}]}}`),
 		},
 		{
 			name: "negative maxInputTokens",
-			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","maxInputTokens":-1}]}}`),
+			raw:  []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}],"models":[{"id":"serve-alpha","maxInputTokens":-1}]}}`),
 		},
 		{
 			name: "negative maxOutputTokens",
-			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","maxOutputTokens":-1}]}}`),
-		},
-		{
-			name: "invalid disabled entry",
-			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha"},{"id":"serve-off","disabled":true,"maxOutputTokens":-1}]}}`),
+			raw:  []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}],"models":[{"id":"serve-alpha","maxOutputTokens":-1}]}}`),
 		},
 		{
 			name: "malformed JSON",
@@ -280,11 +276,11 @@ func TestParseWorkBuddyLegacyModelsRejectsInvalidSnapshots(t *testing.T) {
 		},
 		{
 			name: "non-zero business code",
-			raw:  []byte(`{"code":12,"data":{"models":[{"id":"serve-alpha"}]}}`),
+			raw:  []byte(`{"code":12,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}],"models":[{"id":"serve-alpha"}]}}`),
 		},
 		{
 			name: "wrong field type",
-			raw:  []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha","maxInputTokens":"4096"}]}}`),
+			raw:  []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}],"models":[{"id":"serve-alpha","maxInputTokens":"4096"}]}}`),
 		},
 	}
 
@@ -297,13 +293,47 @@ func TestParseWorkBuddyLegacyModelsRejectsInvalidSnapshots(t *testing.T) {
 	}
 }
 
+// Filtered entries are dropped BEFORE validation, so a malformed limit on a
+// row that never reaches the catalogue cannot fail the whole refresh. Serving a
+// good catalogue is strictly better than failing because an entry the client
+// will never see was malformed.
+func TestParseWorkBuddyLegacyModelsFiltersBeforeValidating(t *testing.T) {
+	raw := []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha","gone","image-model"]}],` +
+		`"models":[` +
+		`{"id":"serve-alpha","maxInputTokens":4096},` +
+		`{"id":"gone","disabled":true,"maxInputTokens":-1},` +
+		`{"id":"image-model","maxInputTokens":-1,"tags":["text-to-image"]}` +
+		`]}}`)
+	got, err := parseWorkBuddyLegacyModels(raw)
+	if err != nil {
+		t.Fatalf("filtered rows must not fail the parse: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "serve-alpha" {
+		t.Fatalf("models = %#v", got)
+	}
+}
+
+// A roster that is absent or empty leaves no usable authority for which models
+// the account may call, which is a schema failure rather than an empty success.
+func TestParseWorkBuddyLegacyModelsRequiresRoster(t *testing.T) {
+	for name, raw := range map[string]string{
+		"no agents":    `{"code":0,"data":{"models":[{"id":"serve-alpha"}]}}`,
+		"empty roster": `{"code":0,"data":{"agents":[{"name":"cli","models":[]}],"models":[{"id":"serve-alpha"}]}}`,
+		"other agent":  `{"code":0,"data":{"agents":[{"name":"general-purpose","models":["serve-alpha"]}],"models":[{"id":"serve-alpha"}]}}`,
+	} {
+		if _, err := parseWorkBuddyLegacyModels([]byte(raw)); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+}
+
 func TestParseWorkBuddyAcceptsAdditiveUnknownFields(t *testing.T) {
 	v3 := []byte(`{"code":0,"future":true,"data":{"agents":[{"name":"cli","models":["serve-alpha"],"future":{"accepted":true}}],"future":true}}`)
 	if got, err := parseWorkBuddyV3Config(v3); err != nil || len(got) != 1 || got[0].ID != "serve-alpha" {
 		t.Fatalf("v3 models = %#v, err = %v", got, err)
 	}
 
-	legacy := []byte(`{"code":0,"future":true,"data":{"models":[{"id":"serve-alpha","future":{"accepted":true}}],"future":true}}`)
+	legacy := []byte(`{"code":0,"future":true,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}],"models":[{"id":"serve-alpha","future":{"accepted":true}}],"future":true}}`)
 	if got, err := parseWorkBuddyLegacyModels(legacy); err != nil || len(got) != 1 || got[0].ID != "serve-alpha" {
 		t.Fatalf("legacy models = %#v, err = %v", got, err)
 	}
@@ -391,7 +421,7 @@ func TestFetchWorkBuddyCatalogFallsBackOnlyOn404Or405(t *testing.T) {
 				if calls == 1 {
 					return &hostHTTPResponse{StatusCode: status, Headers: make(http.Header)}, nil
 				}
-				return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha"}]}}`)}, nil
+				return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}],"models":[{"id":"serve-alpha"}]}}`)}, nil
 			}
 			got, err := fetchWorkBuddyCatalog(syntheticStoredAuth(t, workBuddyRealmCN), "callback-1", do)
 			if err != nil || calls != 2 || got.Endpoint != workBuddyEndpointLegacyPersonalModels {
@@ -417,6 +447,12 @@ func TestFetchWorkBuddyCatalogRoutesByJWTRealm(t *testing.T) {
 			var headers http.Header
 			deadlineOK := false
 			do := func(req *http.Request, gotCallbackID string) (*hostHTTPResponse, error) {
+				// The enterprise leg answers 401 (as production does for an
+				// account without entitlement), so the v3 leg alone decides the
+				// catalogue and its routing facts are what get asserted.
+				if req.URL.Path == "/console/enterprises/personal/models" {
+					return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401")}, nil
+				}
 				method = req.Method
 				requestURL = req.URL.String()
 				callbackID = gotCallbackID
@@ -494,7 +530,7 @@ func TestFetchWorkBuddyCatalogLegacyRequestPreservesRealmRouting(t *testing.T) {
 				return &hostHTTPResponse{
 					StatusCode: http.StatusOK,
 					Headers:    make(http.Header),
-					Body:       []byte(`{"code":0,"data":{"models":[{"id":"serve-alpha"}]}}`),
+					Body:       []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}],"models":[{"id":"serve-alpha"}]}}`),
 				}, nil
 			}
 
@@ -586,8 +622,10 @@ func TestFetchWorkBuddyCatalogDoesNotFallbackOnOtherFailures(t *testing.T) {
 			if err == nil {
 				t.Fatalf("catalog = %#v, want error", got)
 			}
-			if calls != 1 {
-				t.Fatalf("calls = %d, want 1", calls)
+			// Both legs are always requested, so a failing catalogue makes two
+			// attempts; the reported error is the primary leg's.
+			if calls != 2 {
+				t.Fatalf("calls = %d, want 2", calls)
 			}
 			if err.Error() != tt.wantError {
 				t.Fatalf("error = %q, want %q", err, tt.wantError)

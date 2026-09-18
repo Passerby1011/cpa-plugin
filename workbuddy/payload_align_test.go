@@ -12,11 +12,11 @@ import (
 // too, but only when the caller is actually asking for thinking.
 func TestAlignThinkingFieldsAddsOfficialFieldsWhenThinkingOn(t *testing.T) {
 	body := []byte(`{"model":"serve-alpha","reasoning_effort":"high","messages":[]}`)
-	if err := json.Unmarshal(prepareUpstreamBody(body, nil, nil, "serve-alpha"), &map[string]any{}); err != nil {
+	if err := json.Unmarshal(prepareUpstreamBody(body, nil, nil, "serve-alpha", nil), &map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
 	var obj map[string]any
-	if err := json.Unmarshal(prepareUpstreamBody(body, nil, nil, "serve-alpha"), &obj); err != nil {
+	if err := json.Unmarshal(prepareUpstreamBody(body, nil, nil, "serve-alpha", nil), &obj); err != nil {
 		t.Fatal(err)
 	}
 	if obj["reasoning_summary"] != "auto" {
@@ -33,7 +33,7 @@ func TestAlignThinkingFieldsAddsOfficialFieldsWhenThinkingOn(t *testing.T) {
 func TestAlignThinkingFieldsRespectsNestedEffort(t *testing.T) {
 	body := []byte(`{"model":"serve-alpha","reasoning":{"effort":"max"},"messages":[]}`)
 	var obj map[string]any
-	if err := json.Unmarshal(prepareUpstreamBody(body, nil, nil, "serve-alpha"), &obj); err != nil {
+	if err := json.Unmarshal(prepareUpstreamBody(body, nil, nil, "serve-alpha", nil), &obj); err != nil {
 		t.Fatal(err)
 	}
 	if obj["reasoning_summary"] != "auto" || obj["verbosity"] != "high" {
@@ -47,7 +47,7 @@ func TestAlignThinkingFieldsRespectsNestedEffort(t *testing.T) {
 func TestAlignThinkingFieldsLeavesNonThinkingRequestAlone(t *testing.T) {
 	body := []byte(`{"model":"serve-alpha","messages":[{"role":"user","content":"hi"}]}`)
 	var obj map[string]any
-	if err := json.Unmarshal(prepareUpstreamBody(body, nil, nil, "serve-alpha"), &obj); err != nil {
+	if err := json.Unmarshal(prepareUpstreamBody(body, nil, nil, "serve-alpha", nil), &obj); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := obj["reasoning_summary"]; ok {
@@ -62,7 +62,7 @@ func TestAlignThinkingFieldsLeavesNonThinkingRequestAlone(t *testing.T) {
 func TestAlignThinkingFieldsDoesNotOverwriteCallerValues(t *testing.T) {
 	body := []byte(`{"model":"serve-alpha","reasoning_effort":"low","reasoning_summary":"detailed","verbosity":"low","messages":[]}`)
 	var obj map[string]any
-	if err := json.Unmarshal(prepareUpstreamBody(body, nil, nil, "serve-alpha"), &obj); err != nil {
+	if err := json.Unmarshal(prepareUpstreamBody(body, nil, nil, "serve-alpha", nil), &obj); err != nil {
 		t.Fatal(err)
 	}
 	if obj["reasoning_summary"] != "detailed" {
@@ -76,8 +76,8 @@ func TestAlignThinkingFieldsDoesNotOverwriteCallerValues(t *testing.T) {
 // Idempotence: running the chain twice must not change the result.
 func TestAlignThinkingFieldsIsIdempotent(t *testing.T) {
 	body := []byte(`{"model":"serve-alpha","reasoning_effort":"high","messages":[]}`)
-	once := prepareUpstreamBody(body, nil, nil, "serve-alpha")
-	twice := prepareUpstreamBody(once, nil, nil, "serve-alpha")
+	once := prepareUpstreamBody(body, nil, nil, "serve-alpha", nil)
+	twice := prepareUpstreamBody(once, nil, nil, "serve-alpha", nil)
 
 	var a, b map[string]any
 	if err := json.Unmarshal(once, &a); err != nil {

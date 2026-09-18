@@ -20,11 +20,20 @@ func TestClassifyUpstreamError(t *testing.T) {
 		body   string
 		want   upstreamErrKind
 	}{
-		// --- hard credit: 402 or credit wording on any status ---
+		// --- hard credit: 402, or credit wording on a NON-429 status ---
 		{"402 payment required", 402, `{"error":"payment required"}`, upstreamErrHardCredit},
 		{"credit wording on 403", 403, `{"message":"insufficient credit"}`, upstreamErrHardCredit},
 		{"chinese credit wording", 400, `{"message":"额度已用尽"}`, upstreamErrHardCredit},
-		{"quota exceeded stays hard", 429, `{"message":"quota exceeded"}`, upstreamErrHardCredit},
+		// 429 outranks the credit wording: upstream returns 429 bodies that
+		// carry quota/credit phrasing while meaning "throttled, retry later".
+		// Judging by the wording would park a healthy account in a ~12h hard
+		// cooldown for a condition that clears itself — measured on the
+		// reference gateway, which moved the 429 check above its credit rules
+		// for exactly this reason. The status code is the stronger signal.
+		{"quota exceeded on 429 is throttle not hard", 429, `{"message":"quota exceeded"}`, upstreamErrSoftRate},
+		{"credit wording on 429 is throttle not hard", 429, `{"message":"积分不足"}`, upstreamErrSoftRate},
+		// 402 keeps its hard semantics regardless of any wording.
+		{"402 with throttle wording stays hard", 402, `{"message":"rate limit"}`, upstreamErrHardCredit},
 
 		// --- session dead ---
 		{"offline session not found", 401, `{"msg":"Offline user session not found"}`, upstreamErrSessionDead},
@@ -168,11 +177,29 @@ func TestParseSoftRateReset(t *testing.T) {
 			wantWall: "2026-09-15 09:00:00",
 		},
 		{
-			// The 11140 envelope carries a generic "resets at" hint that has no
-			// cooldown semantics; emitting an instant for it would make callers
-			// wait for a self-heal that never comes.
-			name:   "non-6004 body with 重置 is not parsed",
-			body:   `{"code":11140,"msg":"请求过于频繁，将在 2026-09-15 10:00:00 重置"}`,
+			// Reset wording is parsed regardless of the business code that
+			// carries it: upstream attaches "resets at <time>" to several
+			// throttle shapes (6004 and the 11140 rate-limiting variant), and
+			// gating the parse on 6004 alone left the others with no known
+			// self-heal instant — callers then fell back to an escalating
+			// cooldown that never aligned with the real reset.
+			name:     "11140 rate-limiting body also parses",
+			body:     `{"code":11140,"msg":"请求过于频繁，将在 2026-09-15 10:00:00 重置"}`,
+			wantOK:   true,
+			wantWall: "2026-09-15 10:00:00",
+		},
+		{
+			// English form (global realm bodies): anchored on the timestamp
+			// shape so natural language like "reset at the end of the day"
+			// cannot match.
+			name:     "english reset form",
+			body:     `{"code":6004,"msg":"usage exceeds frequency limit, reset at 2026-09-15 07:30:00 UTC+8, you can switch to the other models"}`,
+			wantOK:   true,
+			wantWall: "2026-09-15 07:30:00",
+		},
+		{
+			name:   "english natural language does not match",
+			body:   `{"code":6004,"msg":"usage exceeds frequency limit, reset at the end of the day"}`,
 			wantOK: false,
 		},
 		{
@@ -345,7 +372,9 @@ func TestIsSoftRateLimitKeepsLegacyBehaviour(t *testing.T) {
 		{"429 rate limit", 429, "rate limit", true},
 		{"throttled on 403", 403, "request throttled", true},
 		{"credit on 403", 403, "insufficient credit", false},
-		{"quota on 429", 429, "quota exceeded", false},
+		// A 429 body carrying credit wording is throttling, not a spent
+		// balance: the status code wins (see TestClassifyUpstreamError).
+		{"quota on 429 is soft", 429, "quota exceeded", true},
 		{"500", 500, "error", false},
 		{"200", 200, `{"code":0}`, false},
 	}

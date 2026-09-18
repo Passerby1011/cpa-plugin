@@ -110,7 +110,7 @@ func TestSanitizeBlockedTemplates_Fingerprints(t *testing.T) {
 
 func TestPrepareUpstreamBodySanitizesFingerprintsAndPreservesReasoningEffort(t *testing.T) {
 	body := []byte(`{"model":"other-model","reasoning_effort":"low","messages":[{"role":"system","content":"x-anthropic-billing-header: cc_version=1.0; cc_entrypoint=cli; keep me"}]}`)
-	out := prepareUpstreamBody(body, nil, nil, "other-model")
+	out := prepareUpstreamBody(body, nil, nil, "other-model", nil)
 	var obj map[string]any
 	if err := json.Unmarshal(out, &obj); err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestPrepareUpstreamBodySanitizesFingerprintsAndPreservesReasoningEffort(t *
 
 func TestPrepareUpstreamBodyPreservesCallerReasoningEffort(t *testing.T) {
 	body := []byte(`{"model":"serve-alpha","reasoning_effort":"medium","messages":[]}`)
-	out := prepareUpstreamBody(body, nil, nil, "serve-beta")
+	out := prepareUpstreamBody(body, nil, nil, "serve-beta", nil)
 	var obj map[string]any
 	if err := json.Unmarshal(out, &obj); err != nil {
 		t.Fatal(err)

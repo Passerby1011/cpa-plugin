@@ -106,7 +106,7 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 		defer cancel()
 	}
 
-	stream, statusCode, _, err := hostHTTPDoStreamWithCallback(httpReq, callbackID)
+	stream, statusCode, respHeaders, err := hostHTTPDoStreamWithCallback(httpReq, callbackID)
 	if err != nil {
 		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
 		streamEmitError(streamID, fmt.Sprintf("http_error: %v", err))
@@ -119,6 +119,12 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(errPayload))
 		if authUID != "" {
 			go reconcileByUID(authUID, statusCode, string(errPayload))
+		}
+		// See retry_after.go: the host cannot receive the upstream wait hint,
+		// so it is logged instead.
+		if hint := retryAfterHint(respHeaders); hint != "" {
+			hostLogf("warn", fmt.Sprintf("workbuddy upstream %d on auth=%s: upstream asks to wait %s",
+				statusCode, shortUID(authUID), hint))
 		}
 		streamEmitError(streamID, fmt.Sprintf("upstream %d: %s", statusCode, truncateRedacted(string(errPayload), 200)))
 		return
@@ -177,7 +183,7 @@ func collectUpstreamStream(body []byte, sa *storedAuth, sseFramed bool, collecto
 	}
 	backendHeaders(httpReq, sa)
 	// Compliance: route via host.http.do_stream so request-log captures the call.
-	stream, statusCode, _, err := hostHTTPDoStreamWithCallback(httpReq, callbackID)
+	stream, statusCode, respHeaders, err := hostHTTPDoStreamWithCallback(httpReq, callbackID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("http_error: %w", err)
 	}
@@ -187,6 +193,11 @@ func collectUpstreamStream(body []byte, sa *storedAuth, sseFramed bool, collecto
 		errPayload, _ := io.ReadAll(reader)
 		if sa != nil && sa.Account.UID != "" {
 			go reconcileByUID(sa.Account.UID, statusCode, string(errPayload))
+		}
+		// See retry_after.go: the host cannot receive the upstream wait hint,
+		// so it is logged instead.
+		if hint := retryAfterHint(respHeaders); hint != "" {
+			hostLogf("warn", fmt.Sprintf("workbuddy upstream %d: upstream asks to wait %s", statusCode, hint))
 		}
 		return nil, statusCode, &upstreamStatusError{
 			status:  statusCode,
@@ -331,8 +342,43 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
 	// so the folded completion holds whole calls.
 	toolCalls := map[int]map[string]any{}
 	var toolOrder []int
+	// toolIndexByID remembers which slot each call id was assigned, so a later
+	// fragment that omits index but carries the id lands in its own slot
+	// instead of colliding with whatever sits at slot 0.
+	toolIndexByID := map[string]int{}
+	nextToolIndex := 0
 	var scanErr error
 	sawChoice := false
+	sawDone := false
+
+	// nextIndexFor picks the slot for one tool_call fragment. The upstream
+	// usually sends index, but it is not guaranteed: a fragment with an id we
+	// have seen continues that call, a fragment with a new id opens a fresh
+	// slot, and a fragment with neither continues the most recent slot (a
+	// continuation of the call already in flight). Falling back to slot 0 for
+	// everything — the previous behaviour — merges independent calls into one
+	// slot, concatenating their arguments into invalid JSON.
+	nextIndexFor := func(call map[string]any) int {
+		if v, ok := call["index"].(float64); ok {
+			return int(v)
+		}
+		id, _ := call["id"].(string)
+		if id != "" {
+			if idx, ok := toolIndexByID[id]; ok {
+				return idx
+			}
+			idx := nextToolIndex
+			nextToolIndex++
+			toolIndexByID[id] = idx
+			return idx
+		}
+		if len(toolOrder) > 0 {
+			return toolOrder[len(toolOrder)-1]
+		}
+		idx := nextToolIndex
+		nextToolIndex++
+		return idx
+	}
 
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
@@ -342,6 +388,7 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
 			continue
 		}
 		if data == "[DONE]" {
+			sawDone = true
 			break
 		}
 		var chunk map[string]any
@@ -382,10 +429,7 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
 						if !ok {
 							continue
 						}
-						idx := 0
-						if v, ok := call["index"].(float64); ok {
-							idx = int(v)
-						}
+						idx := nextIndexFor(call)
 						merged, seen := toolCalls[idx]
 						if !seen {
 							merged = map[string]any{"index": idx}
@@ -393,6 +437,13 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
 							toolOrder = append(toolOrder, idx)
 						}
 						mergeToolCallDelta(merged, call)
+						// Register the id the fragment carried so later
+						// fragments without index can find this slot, and so
+						// a slot opened by a nameless fragment adopts the id
+						// when it finally arrives.
+						if id, _ := merged["id"].(string); id != "" {
+							toolIndexByID[id] = idx
+						}
 					}
 				}
 			}
@@ -423,9 +474,20 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
 		sort.Ints(toolOrder)
 		calls := make([]map[string]any, 0, len(toolOrder))
 		for _, idx := range toolOrder {
-			calls = append(calls, toolCalls[idx])
+			call := toolCalls[idx]
+			// A stream cut short (finish_reason=length, or EOF without [DONE])
+			// can leave a call's arguments half-written. Handing the client a
+			// broken JSON string makes it fail to parse the call; inventing
+			// "{}" would make it execute a tool with no arguments. Drop the
+			// call instead — the request can be retried with a bigger budget.
+			if (finish == "length" || !sawDone) && isTruncatedArguments(call) {
+				continue
+			}
+			calls = append(calls, call)
 		}
-		message["tool_calls"] = calls
+		if len(calls) > 0 {
+			message["tool_calls"] = calls
+		}
 	}
 	if created == 0 {
 		created = time.Now().Unix()
@@ -451,10 +513,31 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
 	return out, nil
 }
 
+// isTruncatedArguments reports whether a folded tool call's arguments look like
+// they were cut off mid-write.
+//
+// The test is deliberately narrow. An empty string is NOT truncation: it is the
+// legitimate shape of a tool that takes no arguments. Anything that parses as
+// JSON is also not truncation, even if the value type looks wrong — that is the
+// model emitting bad output, which the client's own schema validation should
+// report, not something the gateway may silently reinterpret. Only "non-empty
+// and unparseable" means the stream was interrupted.
+func isTruncatedArguments(call map[string]any) bool {
+	fn, _ := call["function"].(map[string]any)
+	if fn == nil {
+		return false
+	}
+	args, _ := fn["arguments"].(string)
+	if strings.TrimSpace(args) == "" {
+		return false
+	}
+	return !json.Valid([]byte(args))
+}
+
 // mergeToolCallDelta folds one streaming tool_call fragment into the merged
 // call: scalar fields (id/type) are taken when first seen, function.name is
-// concatenated (upstream may split it), and function.arguments text fragments
-// are appended in arrival order.
+// kept from the first fragment that carries one, and function.arguments text
+// fragments are appended in arrival order.
 func mergeToolCallDelta(merged, delta map[string]any) {
 	for _, k := range []string{"id", "type"} {
 		if _, present := merged[k]; !present {
@@ -472,9 +555,17 @@ func mergeToolCallDelta(merged, delta map[string]any) {
 		mfn = map[string]any{}
 		merged["function"] = mfn
 	}
+	// function.name is taken from the first fragment that carries one, never
+	// concatenated. The upstream sends the name on the opening fragment and
+	// then repeats it as an empty string on every continuation, so appending
+	// is a no-op today — but a client that re-sends the name on each fragment
+	// (or an upstream change that starts doing so) would otherwise produce
+	// "BashBashBash". Keeping the first non-empty value is correct for both
+	// shapes.
 	if v, ok := dfn["name"].(string); ok && v != "" {
-		cur, _ := mfn["name"].(string)
-		mfn["name"] = cur + v
+		if cur, _ := mfn["name"].(string); cur == "" {
+			mfn["name"] = v
+		}
 	}
 	if v, ok := dfn["arguments"].(string); ok && v != "" {
 		cur, _ := mfn["arguments"].(string)

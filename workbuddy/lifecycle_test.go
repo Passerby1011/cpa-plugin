@@ -56,8 +56,20 @@ func TestIsHardCreditError(t *testing.T) {
 }
 
 func TestHardCreditErrorRecognizesQuotaAlreadyExhausted(t *testing.T) {
-	if !isHardCreditError(429, `{"message":"额度已用尽"}`) {
-		t.Fatal("额度已用尽 not recognized")
+	// Production shape: "积分不足" arrives with a 402 (measured in the
+	// request-log bodies), which stays hard credit — the balance really is
+	// spent.
+	if !isHardCreditError(402, `{"message":"积分不足"}`) {
+		t.Fatal("402 积分不足 not recognized")
+	}
+	if !isHardCreditError(400, `{"message":"额度已用尽"}`) {
+		t.Fatal("额度已用尽 on a non-429 status not recognized")
+	}
+	// A 429 is throttling regardless of the wording it carries: upstream
+	// attaches quota/credit phrasing to throttle bodies, and treating those as
+	// spent balance would park a healthy account in a hard cooldown.
+	if isHardCreditError(429, `{"message":"额度已用尽"}`) {
+		t.Fatal("429 with credit wording must not be hard credit")
 	}
 	if isHardCreditError(429, `{"message":"too many requests"}`) {
 		t.Fatal("pure 429 classified as hard credit")

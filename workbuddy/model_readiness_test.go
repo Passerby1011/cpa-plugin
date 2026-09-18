@@ -45,6 +45,16 @@ func installModelStatesForTest(t *testing.T, states map[string]modelReadinessSta
 	return runtime
 }
 
+// modelRuntimeLegacyUnavailable answers the enterprise-endpoint leg the way
+// production does for an account without enterprise entitlement: a 401. The
+// union fetch must treat that as "this leg contributed nothing" and serve the
+// v3 catalogue, so tests that only care about the v3 leg use this helper
+// instead of teaching every mock a second response body.
+func modelRuntimeLegacyUnavailable(t *testing.T) (*hostHTTPResponse, error) {
+	t.Helper()
+	return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401 Authorization Required")}, nil
+}
+
 func TestModelRuntimeFreshBootstrapReady(t *testing.T) {
 	store := newModelStore(t.TempDir())
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
@@ -54,6 +64,8 @@ func TestModelRuntimeFreshBootstrapReady(t *testing.T) {
 		switch {
 		case req.URL.Host == "copilot.tencent.com" && req.URL.Path == "/v3/config":
 			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}],"models":[{"id":"serve-alpha","name":"serve-alpha","maxInputTokens":32768}]}}`)}, nil
+		case req.URL.Host == "copilot.tencent.com" && req.URL.Path == "/console/enterprises/personal/models":
+			return modelRuntimeLegacyUnavailable(t)
 		default:
 			t.Fatalf("unexpected model request %s", req.URL)
 			return nil, nil
@@ -171,7 +183,10 @@ func TestModelRuntimeFreshBootstrapModelFutureSchemaIsCacheRead(t *testing.T) {
 	calls := 0
 	do := modelRuntimeFreshFaultDo(t, root, "")
 	runtime := newModelRuntime(store, func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-		if req.URL.Host == "copilot.tencent.com" {
+		// Count refreshes, not legs: the union fetch issues two requests per
+		// refresh, and this test asserts that a future-schema cache stops the
+		// refresh from happening at all.
+		if req.URL.Host == "copilot.tencent.com" && req.URL.Path == "/v3/config" {
 			calls++
 		}
 		return do(req, callbackID)
@@ -319,6 +334,13 @@ func TestModelRuntimeSameAuthSingleflight(t *testing.T) {
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
 		switch req.URL.Host {
 		case "copilot.tencent.com":
+			if req.URL.Path == "/console/enterprises/personal/models" {
+				// The ssoother leg of the union; contributes nothing here.
+				return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401")}, nil
+			}
+			// Count refreshes, not legs: one refresh issues a v3 request and an
+			// enterprise-endpoint request, and this test asserts single-flight
+			// collapses concurrent refreshes into one.
 			if workBuddyCalls.Add(1) == 1 {
 				close(started)
 			}
@@ -362,6 +384,12 @@ func TestModelRuntimeDifferentAuthIsolation(t *testing.T) {
 	cnRelease := make(chan struct{})
 	globalRelease := make(chan struct{})
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
+		// Count refreshes, not legs: the union fetch issues a v3 request and an
+		// enterprise-endpoint request per refresh, and this test asserts that
+		// two different auths refresh concurrently and independently.
+		if req.URL.Path == "/console/enterprises/personal/models" {
+			return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401")}, nil
+		}
 		switch req.URL.Host {
 		case "copilot.tencent.com":
 			if cnCalls.Add(1) == 1 {
@@ -430,10 +458,17 @@ func TestModelRuntimeDifferentAuthIsolation(t *testing.T) {
 func TestModelRuntimeConcurrentReaders(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
+	var startedOnce sync.Once
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
+		// The union fetch issues a v3 request and an enterprise-endpoint
+		// request; only the first must signal, and neither may be released
+		// before the readers have started.
+		if req.URL.Path == "/console/enterprises/personal/models" {
+			return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401")}, nil
+		}
 		switch req.URL.Host {
 		case "copilot.tencent.com":
-			close(started)
+			startedOnce.Do(func() { close(started) })
 			<-release
 			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
 		default:
@@ -505,10 +540,16 @@ func TestModelRuntimeConcurrentReaders(t *testing.T) {
 func TestModelRuntimeOldGenerationCannotCommit(t *testing.T) {
 	oldStarted := make(chan struct{})
 	releaseOld := make(chan struct{})
+	var oldStartedOnce sync.Once
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
+		// The union fetch issues two requests per refresh, so the "old" signal
+		// fires once even though both legs carry the same token.
+		if req.URL.Path == "/console/enterprises/personal/models" {
+			return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401")}, nil
+		}
 		token := req.Header.Get("Authorization")
 		if strings.HasSuffix(token, "signature-a") {
-			close(oldStarted)
+			oldStartedOnce.Do(func() { close(oldStarted) })
 			<-releaseOld
 			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
 		}
@@ -562,9 +603,13 @@ func TestModelRuntimeOldGenerationCannotCommit(t *testing.T) {
 	t.Run("late failure does not publish an error", func(t *testing.T) {
 		oldStarted := make(chan struct{})
 		releaseOld := make(chan struct{})
+		var oldStartedOnce sync.Once
 		do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
+			if req.URL.Path == "/console/enterprises/personal/models" {
+				return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401")}, nil
+			}
 			if strings.HasSuffix(req.Header.Get("Authorization"), "signature-a") {
-				close(oldStarted)
+				oldStartedOnce.Do(func() { close(oldStarted) })
 				<-releaseOld
 				return nil, errors.New(modelRuntimeRawWorkBuddyTransport)
 			}
@@ -592,9 +637,13 @@ func TestModelRuntimeOldGenerationCannotCommit(t *testing.T) {
 func TestModelRuntimeSharedIdentityRejectsLateOlderCatalogCommit(t *testing.T) {
 	oldStarted := make(chan struct{})
 	releaseOld := make(chan struct{})
+	var oldStartedOnce sync.Once
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
+		if req.URL.Path == "/console/enterprises/personal/models" {
+			return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401")}, nil
+		}
 		if strings.HasSuffix(req.Header.Get("Authorization"), "signature-a") {
-			close(oldStarted)
+			oldStartedOnce.Do(func() { close(oldStarted) })
 			<-releaseOld
 			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
 		}
@@ -706,6 +755,11 @@ func TestModelRuntimeSharedIdentityFailureDoesNotDiscardConcurrentSuccess(t *tes
 	failureReturned := make(chan struct{})
 	releaseSuccess := make(chan struct{})
 	do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
+		// The enterprise leg answers 401 for these synthetic accounts, so it
+		// contributes nothing and the v3 leg alone decides the outcome.
+		if req.URL.Path == "/console/enterprises/personal/models" {
+			return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401")}, nil
+		}
 		if strings.HasSuffix(req.Header.Get("Authorization"), "signature-good") {
 			close(successStarted)
 			<-releaseSuccess
@@ -767,8 +821,13 @@ func TestModelRuntimeConfigGenerationInvalidatesSnapshot(t *testing.T) {
 		oldStarted := make(chan struct{})
 		releaseOld := make(chan struct{})
 		do := func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
+			// Count refreshes, not legs: a refresh issues one v3 request and one
+			// enterprise-endpoint request, and this test tracks refreshes.
 			switch req.URL.Host {
 			case "copilot.tencent.com":
+				if req.URL.Path == "/console/enterprises/personal/models" {
+					return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401")}, nil
+				}
 				if workBuddyCalls.Add(1) == 1 {
 					close(oldStarted)
 					<-releaseOld
@@ -932,6 +991,8 @@ func TestModelRuntimeStaleMatrix(t *testing.T) {
 						return nil, errors.New(modelRuntimeRawWorkBuddyTransport)
 					}
 					return modelRuntimeFreshWorkBuddyResponse(), nil
+				case req.URL.Host == "copilot.tencent.com" && req.URL.Path == "/console/enterprises/personal/models":
+					return modelRuntimeLegacyUnavailable(t)
 				default:
 					t.Fatalf("unexpected model request %s", req.URL)
 					return nil, nil
@@ -1101,7 +1162,7 @@ func modelRuntimeFreshWorkBuddyResponse() *hostHTTPResponse {
 		StatusCode: http.StatusOK,
 		Headers:    make(http.Header),
 		Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["fresh-model"]}],` +
-			`"models":[{"id":"fresh-model","name":"fresh-model","maxInputTokens":2222,"maxOutputTokens":111}]}}`),
+			`"models":[{"id":"fresh-model","name":"fresh-model","maxInputTokens":2222,"maxOutputTokens":32000}]}}`),
 	}
 }
 
@@ -1151,6 +1212,8 @@ func modelRuntimeFreshFaultDo(t *testing.T, root string, fault modelRuntimeFresh
 				modelRuntimeMakeModelsDirectoryReadOnly(t, root)
 			}
 			return &hostHTTPResponse{StatusCode: http.StatusOK, Headers: make(http.Header), Body: []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-alpha"]}]}}`)}, nil
+		case req.URL.Host == "copilot.tencent.com" && req.URL.Path == "/console/enterprises/personal/models":
+			return modelRuntimeLegacyUnavailable(t)
 		default:
 			t.Fatalf("unexpected model request %s", req.URL)
 			return nil, nil

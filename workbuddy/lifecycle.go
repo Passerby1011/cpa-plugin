@@ -223,6 +223,13 @@ func peerAuthDir() string {
 }
 
 // syncAuthNote writes note without changing disabled state.
+//
+// A note written for a fault reason (session dead / 11140) is preserved: the
+// credit-driven refresh must not overwrite it, because reenableBlockedByNote
+// reads that wording back to keep the account disabled. Without this, an
+// account disabled for a fault would have its note replaced by an ordinary
+// credits line on the next reconcile tick, and the credit-driven re-enable
+// would then put a credential upstream still rejects back into rotation.
 func syncAuthNote(authIndex, authID string, sa *storedAuth, cr *creditsSummary, disabled bool) error {
 	if sa == nil {
 		return nil
@@ -243,6 +250,10 @@ func syncAuthNote(authIndex, authID string, sa *storedAuth, cr *creditsSummary, 
 		// re-read disabled from disk as source of truth
 		disabled = parseDisabledFromAuthJSON(phys.JSON)
 		note = displayNote(sa, cr, disabled)
+		if existing := parseNoteFromAuthJSON(phys.JSON); reenableBlockedByNote(existing) {
+			// The stored note is a fault note; keep it as-is.
+			note = existing
+		}
 	}
 	if lifecycleStateUnchanged(authID, disabled, note) {
 		return nil
@@ -436,8 +447,11 @@ func applyExecutorErrorEffect(authID string, kind upstreamErrKind, status int, b
 	if effect == executorEffectIgnore {
 		// Logged (not silent) so the panel-side story for "why is this account
 		// still in rotation after an error" is answerable without a debugger.
-		hostLogf("debug", fmt.Sprintf("workbuddy upstream %d classified as %s (account untouched, auth=%s)",
-			status, kind.String(), shortUID(authID)))
+		// The level is info, not debug: production runs with debug off, so a
+		// debug line the comment promises would be invisible exactly when a
+		// request-level error needs explaining. Throttled to one line per
+		// (status, class) so a client retrying a too-long prompt cannot flood.
+		logUpstreamClassification(status, kind, authID)
 		return
 	}
 	if upstreamErrKindIsCredits(kind) {
@@ -454,6 +468,22 @@ func applyExecutorErrorEffect(authID string, kind upstreamErrKind, status int, b
 // credit-driven reconcile path.
 func upstreamErrKindIsCredits(kind upstreamErrKind) bool {
 	return kind == upstreamErrHardCredit
+}
+
+// classificationLogDedup throttles the ignore-class log to one line per
+// (status, class) pair. A request-level error (too-long prompt, blocked
+// content) is per-request and a retrying client repeats it; the interesting
+// fact is which class it maps to and that the account was left alone — not how
+// many times it happened.
+var classificationLogDedup sync.Map
+
+func logUpstreamClassification(status int, kind upstreamErrKind, authID string) {
+	key := fmt.Sprintf("%d|%s", status, kind.String())
+	if _, seen := classificationLogDedup.LoadOrStore(key, struct{}{}); seen {
+		return
+	}
+	hostLogf("info", fmt.Sprintf("workbuddy upstream %d classified as %s (account untouched, auth=%s)",
+		status, kind.String(), shortUID(authID)))
 }
 
 // reconcileAfterExecutorErrorAsync resolves an executor AuthID to host indices

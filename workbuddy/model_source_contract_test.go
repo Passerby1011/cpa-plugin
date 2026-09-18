@@ -22,7 +22,7 @@ const realV3Catalog = `{"code":0,"data":{
 
 // /console/enterprises/personal/models (and .../{enterpriseId}/models) — richer:
 // adds iconUrl/isDefault/top_k/repetition_penalty, same limit keys.
-const realFullCatalog = `{"code":0,"data":{"models":[
+const realFullCatalog = `{"code":0,"data":{"agents":[{"name":"cli","models":["deepseek-v4.1-flash","glm-5.3-flash"]}],"models":[
   {"credits":"x0.03 credits","descriptionEn":"DeepSeek flagship model, supporting 1M context window, native multimodal model","descriptionZh":"DeepSeek 旗舰模型，支持 1M 上下文窗口，原生多模态","disabledMultimodal":false,"id":"deepseek-v4.1-flash","isDefault":false,"maxAllowedSize":1000000,"maxInputTokens":1000000,"maxOutputTokens":128000,"name":"Deepseek-V4.1-Flash","onlyReasoning":true,"reasoning":{"effort":"high","summary":"auto"},"supportsImages":true,"supportsReasoning":true,"supportsToolCall":true,"tags":["craft"],"temperature":1,"top_p":1,"vendor":"f"},
   {"id":"glm-5.3-flash","maxAllowedSize":1000000,"maxInputTokens":1000000,"maxOutputTokens":32000,"name":"GLM-5.3-Flash","reasoning":{"canDisableThinking":true,"defaultEffort":"high","summary":"auto","supportedEfforts":["low","high","max"]}}
 ]}}`
@@ -126,7 +126,7 @@ func TestParseCatalogIsRouteIndependent(t *testing.T) {
 // entries, as a bare "x0.05" with no unit. Both must survive parsing, and the
 // host may only ever show display_name, so the rate rides along there.
 func TestParseCatalogAcceptsBothCreditsShapes(t *testing.T) {
-	raw := []byte(`{"code":0,"data":{"models":[
+	raw := []byte(`{"code":0,"data":{"agents":[{"name":"cli","models":["serve-unit","serve-bare","serve-zero"]}],"models":[
 	  {"id":"serve-unit","name":"Unit","credits":"x0.79 credits"},
 	  {"id":"serve-bare","name":"Bare","credits":"x0.05"},
 	  {"id":"serve-zero","name":"Zero","credits":"x0.00 credits"}

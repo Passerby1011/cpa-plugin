@@ -83,7 +83,7 @@ func TestNormalizeRolesInPlace(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			body := []byte(`{"model":"m","messages":[{"role":` + string(mustJSON(tc.role)) + `,"content":"hi"}]}`)
-			out := prepareUpstreamBody(body, nil, nil, "m")
+			out := prepareUpstreamBody(body, nil, nil, "m", nil)
 			got := rolesOf(t, out)
 			if len(got) != 1 {
 				t.Fatalf("message count = %d, want 1 (%s)", len(got), out)
@@ -113,13 +113,13 @@ func TestNormalizeRolesInPlaceMalformed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_ = prepareUpstreamBody([]byte(tc.body), nil, nil, "m") // must not panic
+			_ = prepareUpstreamBody([]byte(tc.body), nil, nil, "m", nil) // must not panic
 		})
 	}
 
 	// Non-object elements keep their position (no message may be dropped).
 	body := []byte(`{"model":"m","messages":[123,{"role":"developer","content":"a"},{"role":"user","content":"b"}]}`)
-	out := prepareUpstreamBody(body, nil, nil, "m")
+	out := prepareUpstreamBody(body, nil, nil, "m", nil)
 	got := rolesOf(t, out)
 	want := []string{"<non-object>", "system", "user"}
 	if !reflect.DeepEqual(got, want) {
@@ -133,8 +133,8 @@ func TestNormalizeRolesInPlaceMalformed(t *testing.T) {
 // Two passes must converge: normalizing an already-normalized body is a no-op.
 func TestNormalizeRolesIdempotent(t *testing.T) {
 	body := []byte(`{"model":"m","messages":[{"role":"Developer","content":"a"},{"role":"SYSTEM","content":"b"},{"role":"user","content":"c"}]}`)
-	once := prepareUpstreamBody(body, nil, nil, "m")
-	twice := prepareUpstreamBody(once, nil, nil, "m")
+	once := prepareUpstreamBody(body, nil, nil, "m", nil)
+	twice := prepareUpstreamBody(once, nil, nil, "m", nil)
 	if string(once) != string(twice) {
 		t.Errorf("not idempotent:\n once = %s\n twice = %s", once, twice)
 	}
@@ -148,7 +148,7 @@ func TestEnsureSystemMessageFirstMessageRules(t *testing.T) {
 
 	t.Run("injects when first message is user", func(t *testing.T) {
 		body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
-		out := prepareUpstreamBody(body, nil, global, "m")
+		out := prepareUpstreamBody(body, nil, global, "m", nil)
 		got := rolesOf(t, out)
 		want := []string{"system", "user"}
 		if !reflect.DeepEqual(got, want) {
@@ -163,7 +163,7 @@ func TestEnsureSystemMessageFirstMessageRules(t *testing.T) {
 		// Capitalized `System` used to be treated as "a system message exists"
 		// and suppressed injection, causing upstream 400.
 		body := []byte(`{"model":"m","messages":[{"role":"System","content":"be terse"},{"role":"user","content":"hi"}]}`)
-		out := prepareUpstreamBody(body, nil, global, "m")
+		out := prepareUpstreamBody(body, nil, global, "m", nil)
 		got := rolesOf(t, out)
 		want := []string{"system", "user"}
 		if !reflect.DeepEqual(got, want) {
@@ -176,7 +176,7 @@ func TestEnsureSystemMessageFirstMessageRules(t *testing.T) {
 
 	t.Run("injects when system sits after user", func(t *testing.T) {
 		body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"},{"role":"system","content":"be terse"}]}`)
-		out := prepareUpstreamBody(body, nil, global, "m")
+		out := prepareUpstreamBody(body, nil, global, "m", nil)
 		got := rolesOf(t, out)
 		want := []string{"system", "user", "system"}
 		if !reflect.DeepEqual(got, want) {
@@ -189,7 +189,7 @@ func TestEnsureSystemMessageFirstMessageRules(t *testing.T) {
 
 	t.Run("developer first is normalized so no injection is needed", func(t *testing.T) {
 		body := []byte(`{"model":"m","messages":[{"role":"developer","content":"be terse"},{"role":"user","content":"hi"}]}`)
-		out := prepareUpstreamBody(body, nil, global, "m")
+		out := prepareUpstreamBody(body, nil, global, "m", nil)
 		got := rolesOf(t, out)
 		want := []string{"system", "user"}
 		if !reflect.DeepEqual(got, want) {
@@ -200,7 +200,7 @@ func TestEnsureSystemMessageFirstMessageRules(t *testing.T) {
 	t.Run("CN is untouched", func(t *testing.T) {
 		cn := &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.cn"}}
 		body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
-		out := prepareUpstreamBody(body, nil, cn, "m")
+		out := prepareUpstreamBody(body, nil, cn, "m", nil)
 		got := rolesOf(t, out)
 		want := []string{"user"}
 		if !reflect.DeepEqual(got, want) {
@@ -211,7 +211,7 @@ func TestEnsureSystemMessageFirstMessageRules(t *testing.T) {
 	t.Run("CN still normalizes roles", func(t *testing.T) {
 		cn := &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.cn"}}
 		body := []byte(`{"model":"m","messages":[{"role":"developer","content":"x"},{"role":"user","content":"hi"}]}`)
-		out := prepareUpstreamBody(body, nil, cn, "m")
+		out := prepareUpstreamBody(body, nil, cn, "m", nil)
 		if got := rolesOf(t, out); got[0] != "system" {
 			t.Fatalf("roles = %v; developer must be normalized on CN too", got)
 		}
@@ -222,7 +222,7 @@ func TestEnsureSystemMessageFirstMessageRules(t *testing.T) {
 // auth (the tests and the direct-HTTP path pass sa=nil).
 func TestEnsureSystemMessageNilAuth(t *testing.T) {
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
-	out := prepareUpstreamBody(body, nil, nil, "m")
+	out := prepareUpstreamBody(body, nil, nil, "m", nil)
 	if got := rolesOf(t, out); !reflect.DeepEqual(got, []string{"user"}) {
 		t.Fatalf("roles = %v, want [user]", got)
 	}

@@ -25,6 +25,15 @@ type modelFacts struct {
 	MaxCompletionTokens       *int64   `json:"max_completion_tokens,omitempty"`
 	SupportedInputModalities  []string `json:"supported_input_modalities,omitempty"`
 	SupportedOutputModalities []string `json:"supported_output_modalities,omitempty"`
+	// ReasoningEfforts lists the selectable thinking tiers for this model, and
+	// ReasoningDefaultEffort names the one the upstream uses when the caller
+	// picks none. Both are empty when the upstream declared nothing, which is
+	// what keeps "no metadata" distinguishable from "no tiers".
+	ReasoningEfforts       []string `json:"reasoning_efforts,omitempty"`
+	ReasoningDefaultEffort string   `json:"reasoning_default_effort,omitempty"`
+	// ReasoningZeroAllowed mirrors canDisableThinking: false means the model
+	// always thinks, so a client that offers an off switch would be lying.
+	ReasoningZeroAllowed *bool `json:"reasoning_zero_allowed,omitempty"`
 }
 
 type modelHTTPDo func(*http.Request, string) (*hostHTTPResponse, error)
@@ -78,6 +87,10 @@ type workBuddyEndpointKind string
 const (
 	workBuddyEndpointV3Config             workBuddyEndpointKind = "v3_config"
 	workBuddyEndpointLegacyPersonalModels workBuddyEndpointKind = "legacy_personal_models"
+	// workBuddyEndpointV3ConfigUnion marks a catalogue assembled from both
+	// endpoints. The kind is persisted with the cache, so a reader can tell a
+	// union snapshot apart from a single-endpoint one.
+	workBuddyEndpointV3ConfigUnion workBuddyEndpointKind = "v3_config+legacy"
 )
 
 type workBuddyCatalog struct {
@@ -111,6 +124,45 @@ type workBuddyModelEntryWire struct {
 	// distinguishable from an explicit false. Declaring a modality the model
 	// does not accept would invite clients to send payloads upstream rejects.
 	SupportsImages *bool `json:"supportsImages"`
+	// Reasoning carries the model's thinking-effort metadata. Measured shapes
+	// (2026-09-18, /v3/config) include: a model with an explicit tier list plus
+	// a default and a working off-switch; a model with a single tier and no
+	// off-switch; and models with no tier list at all, only a fixed tier.
+	// Absent fields mean the upstream expressed nothing and must stay
+	// distinguishable from an explicit value.
+	Reasoning *workBuddyReasoningWire `json:"reasoning"`
+	// Tags carries classification labels ("is_recommend", "text-to-image", …).
+	Tags []string `json:"tags"`
+}
+
+// workBuddyReasoningWire is the reasoning sub-object of a catalog entry.
+type workBuddyReasoningWire struct {
+	// Effort is a single fixed tier (e.g. "medium") for models that offer no
+	// choice. When SupportedEfforts is absent but this is set, the model has
+	// exactly one tier.
+	Effort string `json:"effort"`
+	// SupportedEfforts enumerates the selectable tiers.
+	SupportedEfforts []string `json:"supportedEfforts"`
+	// DefaultEffort is the tier the upstream uses when the caller names none.
+	DefaultEffort string `json:"defaultEffort"`
+	// CanDisableThinking: false means the model always thinks.
+	CanDisableThinking *bool `json:"canDisableThinking"`
+}
+
+// effortLevels resolves the selectable tiers for this entry: the explicit list
+// when present, otherwise a single-tier list built from the fixed effort, or
+// nil when the upstream declared nothing.
+func (r *workBuddyReasoningWire) effortLevels() []string {
+	if r == nil {
+		return nil
+	}
+	if len(r.SupportedEfforts) > 0 {
+		return r.SupportedEfforts
+	}
+	if strings.TrimSpace(r.Effort) != "" {
+		return []string{r.Effort}
+	}
+	return nil
 }
 
 // fact converts a catalog entry into modelFacts. The upstream sends the display
@@ -138,6 +190,25 @@ func (m workBuddyModelEntryWire) fact() modelFacts {
 	// so asserting more would be invention.
 	if m.SupportsImages != nil && *m.SupportsImages {
 		f.SupportedInputModalities = []string{modalityText, modalityImage}
+	}
+	// Reasoning metadata: only what the upstream declared. A model with a
+	// fixed single tier reports a one-element list; a model with no metadata
+	// at all reports nothing, which the host reads as "unknown" rather than
+	// inventing tiers.
+	if levels := m.Reasoning.effortLevels(); len(levels) > 0 {
+		f.ReasoningEfforts = levels
+	}
+	if m.Reasoning != nil {
+		// A default only counts when it is one of the model's own tiers —
+		// otherwise the client would offer a value the model rejects.
+		def := strings.TrimSpace(m.Reasoning.DefaultEffort)
+		for _, lvl := range f.ReasoningEfforts {
+			if lvl == def {
+				f.ReasoningDefaultEffort = def
+				break
+			}
+		}
+		f.ReasoningZeroAllowed = m.Reasoning.CanDisableThinking
 	}
 	return f
 }
@@ -203,18 +274,74 @@ func parseWorkBuddyV3Config(raw []byte) ([]modelFacts, error) {
 			models = append(models, modelFacts{ID: id})
 			continue
 		}
+		// Disabled entries are withdrawn from the catalogue: offering one
+		// invites the client to pick a model the upstream then refuses.
+		if entry.Disabled {
+			continue
+		}
+		// Non-chat entries (embedding/completion/image) are not reachable
+		// through the chat endpoint; selecting one returns 11102.
+		if isNonChatModel(entry) {
+			continue
+		}
 		models = append(models, entry.fact())
 	}
 	return validateModelFacts(models)
 }
 
-// parseWorkBuddyLegacyModels reads the /console/enterprises/.../models payload,
-// whose data.models[] carries the same entry shape (the fuller variant also
-// includes iconUrl/isDefault/top_k, which this parser deliberately ignores).
+// nonChatIDPrefixes are model-id prefixes for entries that are not chat models:
+// embeddings, code completion, and the internal "codewise" family. Selecting one
+// through the chat endpoint returns 11102 ("service info not found").
+var nonChatIDPrefixes = []string{"nes-", "completion-", "codewise-"}
+
+// nonChatMaxOutputTokens is the output ceiling below which an entry is treated
+// as a non-chat utility model (classifiers, rerankers). The bound is guarded by
+// "greater than zero" below so an entry whose limit the upstream did not state
+// is never filtered on this rule.
+const nonChatMaxOutputTokens = 256
+
+// isNonChatModel reports whether a catalogue entry describes something other
+// than a chat model. The three rules come from what happens when such an entry
+// is selected: the upstream answers 11102.
+func isNonChatModel(entry workBuddyModelEntryWire) bool {
+	id := strings.ToLower(strings.TrimSpace(entry.ID))
+	for _, prefix := range nonChatIDPrefixes {
+		if strings.HasPrefix(id, prefix) {
+			return true
+		}
+	}
+	// An explicitly tiny output limit means a utility model — but only when
+	// the upstream actually stated one. A missing or zero limit is "unknown",
+	// not "tiny", so those entries stay.
+	if entry.MaxOutput != nil && *entry.MaxOutput > 0 && *entry.MaxOutput <= nonChatMaxOutputTokens {
+		return true
+	}
+	for _, tag := range entry.Tags {
+		if strings.EqualFold(strings.TrimSpace(tag), "text-to-image") {
+			return true
+		}
+	}
+	return false
+}
+
+// parseWorkBuddyLegacyModels reads the /console/enterprises/.../models payload.
+//
+// The roster is the authority, exactly as on the v3 endpoint: the payload's
+// data.models[] is a FULL model table that also lists models this account
+// cannot call. Measured on one real account: a model in the full list but
+// absent from the cli roster answered 400 code=11102 ("service info not
+// found"), while roster members answered 200 — so exposing the full list would
+// offer clients models that cannot run. The cli roster lists what the account's
+// client may actually use, and data.models[] supplies the per-model fields for
+// those ids.
 func parseWorkBuddyLegacyModels(raw []byte) ([]modelFacts, error) {
 	var response struct {
 		Code *int `json:"code"`
 		Data *struct {
+			Agents []struct {
+				Name   string   `json:"name"`
+				Models []string `json:"models"`
+			} `json:"agents"`
 			Models []workBuddyModelEntryWire `json:"models"`
 		} `json:"data"`
 	}
@@ -228,24 +355,47 @@ func parseWorkBuddyLegacyModels(raw []byte) ([]modelFacts, error) {
 		return nil, fmt.Errorf("legacy models data is missing")
 	}
 
-	models := make([]modelFacts, len(response.Data.Models))
-	for i, model := range response.Data.Models {
-		models[i] = model.fact()
-	}
-	models, err := validateModelFacts(models)
-	if err != nil {
-		return nil, err
-	}
-	enabled := make([]modelFacts, 0, len(models))
-	for i, model := range models {
-		if !response.Data.Models[i].Disabled {
-			enabled = append(enabled, model)
+	var roster []string
+	for _, agent := range response.Data.Agents {
+		if strings.EqualFold(strings.TrimSpace(agent.Name), "cli") {
+			roster = agent.Models
+			break
 		}
 	}
-	if len(enabled) == 0 {
+	if len(roster) == 0 {
+		return nil, fmt.Errorf("legacy models cli roster is missing")
+	}
+
+	details := make(map[string]workBuddyModelEntryWire, len(response.Data.Models))
+	for _, entry := range response.Data.Models {
+		if id := strings.TrimSpace(entry.ID); id != "" {
+			details[id] = entry
+		}
+	}
+
+	models := make([]modelFacts, 0, len(roster))
+	for _, id := range roster {
+		id = strings.TrimSpace(id)
+		entry, ok := details[id]
+		if !ok {
+			// Roster id with no detail row: keep it, limits stay nil. An empty
+			// id is NOT skipped — validateModelFacts rejects it, which is what
+			// makes a truncated roster a refresh failure instead of a silently
+			// shortened catalogue.
+			models = append(models, modelFacts{ID: id})
+			continue
+		}
+		// Same withdraw/filter rules as the v3 path: a disabled entry or a
+		// non-chat model would only earn the client an 11102.
+		if entry.Disabled || isNonChatModel(entry) {
+			continue
+		}
+		models = append(models, entry.fact())
+	}
+	if len(models) == 0 {
 		return nil, fmt.Errorf("model snapshot is empty")
 	}
-	return validateModelFacts(enabled)
+	return validateModelFacts(models)
 }
 
 func validateModelFacts(models []modelFacts) ([]modelFacts, error) {
@@ -323,6 +473,17 @@ func modelInfoFromFacts(facts modelFacts) pluginapi.ModelInfo {
 	}
 	info.SupportedInputModalities = append([]string(nil), facts.SupportedInputModalities...)
 	info.SupportedOutputModalities = append([]string(nil), facts.SupportedOutputModalities...)
+	// Thinking declares the model's real tiers to the host. Left nil when the
+	// catalogue said nothing, which the host reads as "this model has no
+	// thinking metadata" — it does not invent tiers on its own, it simply
+	// strips thinking configuration for models it has no data for.
+	if len(facts.ReasoningEfforts) > 0 || facts.ReasoningZeroAllowed != nil {
+		thinking := &pluginapi.ThinkingSupport{Levels: append([]string(nil), facts.ReasoningEfforts...)}
+		if facts.ReasoningZeroAllowed != nil {
+			thinking.ZeroAllowed = *facts.ReasoningZeroAllowed
+		}
+		info.Thinking = thinking
+	}
 	return info
 }
 
@@ -363,33 +524,108 @@ func fetchWorkBuddyCatalog(sa *storedAuth, callbackID string, do modelHTTPDo) (w
 		return resp, nil
 	}
 
-	resp, err := request("/v3/config")
-	if err != nil {
-		return workBuddyCatalog{}, err
-	}
-	if resp.StatusCode == http.StatusOK {
-		models, err := parseWorkBuddyV3Config(resp.Body)
-		if err != nil {
-			return workBuddyCatalog{}, &modelSourceError{Kind: modelSourceSchemaFailure, err: err}
+	// Both endpoints answer for an entitled account and each carries models the
+	// other lacks (measured: the enterprise roster adds "auto", the v3 roster
+	// adds one model the enterprise roster omits). Fetching only one loses
+	// whatever the other alone serves, so both are requested and merged.
+	//
+	// The merge is deliberately not all-or-nothing: a single-endpoint failure
+	// degrades to whatever the other endpoint returned rather than failing the
+	// refresh, because a partial catalogue that lists working models beats no
+	// catalogue at all. Both failing is a real refresh failure.
+	v3Resp, v3Err := request("/v3/config")
+	var v3Models []modelFacts
+	v3OK := false
+	if v3Err == nil && v3Resp.StatusCode == http.StatusOK {
+		models, parseErr := parseWorkBuddyV3Config(v3Resp.Body)
+		if parseErr == nil {
+			v3Models, v3OK = models, true
+		} else {
+			v3Err = &modelSourceError{Kind: modelSourceSchemaFailure, err: parseErr}
 		}
-		return workBuddyCatalog{Realm: realm, Endpoint: workBuddyEndpointV3Config, Models: models}, nil
-	}
-	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
-		return workBuddyCatalog{}, &modelSourceError{Kind: modelSourceHTTPFailure, StatusCode: resp.StatusCode}
+	} else if v3Err == nil {
+		v3Err = &modelSourceError{Kind: modelSourceHTTPFailure, StatusCode: v3Resp.StatusCode}
 	}
 
-	resp, err = request("/console/enterprises/personal/models")
-	if err != nil {
-		return workBuddyCatalog{}, err
+	legacyResp, legacyErr := request("/console/enterprises/personal/models")
+	var legacyModels []modelFacts
+	legacyOK := false
+	if legacyErr == nil && legacyResp.StatusCode == http.StatusOK {
+		models, parseErr := parseWorkBuddyLegacyModels(legacyResp.Body)
+		if parseErr == nil {
+			legacyModels, legacyOK = models, true
+		} else {
+			legacyErr = &modelSourceError{Kind: modelSourceSchemaFailure, err: parseErr}
+		}
+	} else if legacyErr == nil {
+		legacyErr = &modelSourceError{Kind: modelSourceHTTPFailure, StatusCode: legacyResp.StatusCode}
 	}
-	if resp.StatusCode != http.StatusOK {
-		return workBuddyCatalog{}, &modelSourceError{Kind: modelSourceHTTPFailure, StatusCode: resp.StatusCode}
+
+	switch {
+	case v3OK && legacyOK:
+		return workBuddyCatalog{
+			Realm:    realm,
+			Endpoint: workBuddyEndpointV3ConfigUnion,
+			Models:   unionModelFacts(v3Models, legacyModels),
+		}, nil
+	case v3OK:
+		// The primary endpoint alone. The legacy endpoint is entitlement-gated
+		// (measured 401 for a personal account with a valid token), so this is
+		// the expected shape for those accounts, not a fault.
+		logModelSourceDegrade(realm, "legacy endpoint unavailable", legacyErr)
+		return workBuddyCatalog{Realm: realm, Endpoint: workBuddyEndpointV3Config, Models: v3Models}, nil
+	case legacyOK:
+		logModelSourceDegrade(realm, "v3 endpoint unavailable", v3Err)
+		return workBuddyCatalog{Realm: realm, Endpoint: workBuddyEndpointLegacyPersonalModels, Models: legacyModels}, nil
 	}
-	models, err := parseWorkBuddyLegacyModels(resp.Body)
-	if err != nil {
-		return workBuddyCatalog{}, &modelSourceError{Kind: modelSourceSchemaFailure, err: err}
+	if v3Err != nil {
+		return workBuddyCatalog{}, v3Err
 	}
-	return workBuddyCatalog{Realm: realm, Endpoint: workBuddyEndpointLegacyPersonalModels, Models: models}, nil
+	return workBuddyCatalog{}, legacyErr
+}
+
+// unionModelFacts merges two catalogues by model id.
+//
+// primary's entries win on field conflicts: it is the endpoint whose per-model
+// fields (context, credits, reasoning) are authoritative, and the secondary
+// endpoint exists to contribute models the primary omits, not to correct it.
+// Ordering is primary-first, then the secondary's additions in their own order,
+// so the list is stable across refreshes.
+func unionModelFacts(primary, secondary []modelFacts) []modelFacts {
+	merged := make([]modelFacts, 0, len(primary)+len(secondary))
+	seen := make(map[string]struct{}, len(primary)+len(secondary))
+	for _, model := range primary {
+		key := strings.TrimSpace(model.ID)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, model)
+	}
+	for _, model := range secondary {
+		key := strings.TrimSpace(model.ID)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, model)
+	}
+	if len(merged) == 0 {
+		// Callers only reach here with at least one non-empty side, but an
+		// empty merge must never be published as a catalogue: the store treats
+		// an empty list as "no models", which would wipe a working one.
+		return primary
+	}
+	return merged
+}
+
+// logModelSourceDegrade records a single-endpoint fallback. It is a notice, not
+// an error: one reachable endpoint still produced a usable catalogue.
+func logModelSourceDegrade(realm workBuddyRealm, reason string, cause error) {
+	if cause == nil {
+		return
+	}
+	hostLogf("warn", fmt.Sprintf("workbuddy model catalog %s: %s (%v)", realm, reason, cause))
 }
 
 // workBuddyRealmFromAccessToken decodes unverified JWT routing facts only.

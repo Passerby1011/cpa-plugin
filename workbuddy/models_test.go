@@ -89,8 +89,13 @@ func TestModelForAuthReturnsResponseLocalReadyAndStaleModels(t *testing.T) {
 				if gotCallbackID != callbackID {
 					t.Fatalf("callback ID = %q, want %q", gotCallbackID, callbackID)
 				}
+				// Count refreshes, not legs: a refresh issues one v3 request and
+				// one enterprise-endpoint request.
 				switch req.URL.Host {
 				case "copilot.tencent.com":
+					if req.URL.Path == "/console/enterprises/personal/models" {
+						return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401")}, nil
+					}
 					workBuddyCalls++
 					if tt.stale {
 						return nil, errors.New("synthetic WorkBuddy outage")
@@ -187,10 +192,15 @@ func TestModelForAuthFailedAndNotStartedReturnEmptySuccess(t *testing.T) {
 		var runtime *modelRuntime
 		calls := 0
 		runtime = newModelRuntime(newModelStore(t.TempDir()), func(req *http.Request, callbackID string) (*hostHTTPResponse, error) {
-			calls++
 			if req.URL.Host != "copilot.tencent.com" || callbackID != "callback-not-started" {
 				t.Fatalf("unexpected bootstrap request %s callback=%q", req.URL, callbackID)
 			}
+			if req.URL.Path == "/console/enterprises/personal/models" {
+				// The enterprise leg of the union; contributes nothing here.
+				return &hostHTTPResponse{StatusCode: http.StatusUnauthorized, Headers: make(http.Header), Body: []byte("401")}, nil
+			}
+			// Count refreshes, not legs.
+			calls++
 			runtime.advanceConfigGeneration()
 			return modelRuntimeFreshWorkBuddyResponse(), nil
 		})

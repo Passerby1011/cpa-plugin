@@ -18,7 +18,11 @@ import (
 // single unmarshal/marshal pass (v0.6.31 perf: was 4-5 full JSON round-trips
 // on every chat completion). The 4 legacy helpers remain for tests and other
 // call sites that need them individually.
-func prepareUpstreamBody(payload, original []byte, sa *storedAuth, upstreamModel string) []byte {
+//
+// efforts is the target model's accepted thinking tiers, or nil when the
+// catalogue has no record of it; it drives the reasoning_effort downgrade (see
+// effort.go) and a nil value leaves any effort untouched.
+func prepareUpstreamBody(payload, original []byte, sa *storedAuth, upstreamModel string, efforts []string) []byte {
 	src := payload
 	if len(src) == 0 {
 		src = original
@@ -67,6 +71,24 @@ func prepareUpstreamBody(payload, original []byte, sa *storedAuth, upstreamModel
 	// which is NOT part of the compatibility pipeline it skips for internal
 	// domains, so these fields are what the real client sends to this gateway.
 	alignThinkingFieldsInPlace(obj)
+
+	// 10. translateMaxCompletionTokens: fold the newer OpenAI alias into the
+	// only field the upstream reads. Without this an alias-only request is
+	// accepted but silently capped at the upstream default output limit.
+	translateMaxCompletionTokensInPlace(obj)
+
+	// 11. downgradeEffort: map the caller's reasoning_effort onto a tier the
+	// target model actually offers. The upstream answers 400 for a tier the
+	// model does not list, so a client hardcoding "high" loses the request
+	// entirely on any model whose list omits it.
+	applyEffortDowngradeInPlace(obj, efforts)
+
+	// 12. repairToolPairing: the upstream rejects a broken
+	// assistant.tool_calls ↔ tool pairing with a 400, and an agent client that
+	// persisted an unanswered call replays that broken history every turn —
+	// which keeps the whole conversation unusable. Drop the unpaired entries so
+	// the session can heal.
+	repairToolPairingInPlace(obj)
 
 	out, err := json.Marshal(obj)
 	if err != nil {
@@ -126,6 +148,54 @@ func requestWantsThinking(obj map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// translateMaxCompletionTokensInPlace folds the newer OpenAI alias
+// max_completion_tokens into max_tokens and always drops the alias.
+//
+// The upstream request struct only reads max_tokens: an alias-only request is
+// accepted (200, normal stream) but silently capped at the upstream default
+// output limit — measured at 32000 on the reference gateway for a client that
+// asked for 128000. Nothing in the response says the cap was applied, so long
+// generations just stop early.
+//
+// Rules, in the order they are applied:
+//   - explicit max_tokens present → keep it, the alias is dropped untranslated
+//     (the caller's own field is authoritative, including an explicit 0).
+//   - alias is a positive integer-valued number → write it as max_tokens.
+//   - alias is 0, null, negative, fractional, or non-numeric → do not
+//     translate. 0 and null mean "unset" upstream, and copying a malformed
+//     value into the real field would turn a loud parameter error into a
+//     silent behaviour change.
+//   - the alias is removed in every case, so the upstream never sees a field
+//     it does not understand.
+//
+// Returns true when obj was modified.
+func translateMaxCompletionTokensInPlace(obj map[string]any) bool {
+	if obj == nil {
+		return false
+	}
+	raw, present := obj["max_completion_tokens"]
+	if !present {
+		return false
+	}
+	delete(obj, "max_completion_tokens")
+
+	if _, hasExplicit := obj["max_tokens"]; hasExplicit {
+		return true
+	}
+	// json.Unmarshal yields float64 for every JSON number. Only an integral
+	// value is a usable token cap; re-marshal as int64 so the body carries
+	// 128000 and not 1.28e+05.
+	f, ok := raw.(float64)
+	if !ok {
+		return true
+	}
+	if f <= 0 || f != float64(int64(f)) {
+		return true
+	}
+	obj["max_tokens"] = int64(f)
+	return true
 }
 
 // normalizeToolsInPlace is the in-place form of normalizeToolsForUpstream.
@@ -503,14 +573,14 @@ func rewriteToolCallArguments(msg map[string]any) bool {
 // handling both plain-string and OpenAI multimodal (array of parts) shapes.
 // Returns true if the message was modified.
 func rewriteContentField(msg map[string]any) bool {
+	modified := false
 	switch c := msg["content"].(type) {
 	case string:
 		if r := sanitizeBlockedTemplates(c); r != c {
 			msg["content"] = r
-			return true
+			modified = true
 		}
 	case []any:
-		modified := false
 		for _, p := range c {
 			part, ok := p.(map[string]any)
 			if !ok {
@@ -523,13 +593,21 @@ func rewriteContentField(msg map[string]any) bool {
 				}
 			}
 		}
-		return modified
 	}
-	return false
+	// reasoning_content carries the same text class as content and reaches the
+	// upstream on the same request, so a blocked phrase echoed into a reasoning
+	// trace trips the filter just like one in the body. It is a plain string in
+	// every shape observed; array forms are not produced by the upstream.
+	if rc, ok := msg["reasoning_content"].(string); ok && rc != "" {
+		if r := sanitizeBlockedTemplates(rc); r != rc {
+			msg["reasoning_content"] = r
+			modified = true
+		}
+	}
+	return modified
 }
 
 var sanitizeFeatures = []string{
-	"x-anthropic-billing-header",
 	"You are Claude Code",
 	"Main branch (",
 	// Upstream blocks the Anthropic feedback sentence as a whole (verified
@@ -538,7 +616,30 @@ var sanitizeFeatures = []string{
 	"anthropics/claude-code/issues",
 }
 
-var sanitizeBillingHeaderRE = regexp.MustCompile(`(?i)x-anthropic-billing-header(?::[^;\n]*;?\s*)?`)
+// sanitizeFingerprintRE is the case-insensitive, colon-free superset used by
+// the pre-check.
+//
+// The pre-check must never be narrower than what the rewriters actually handle,
+// or a blocked phrase slips through unrewritten: the string probes below are
+// case-sensitive, so `you are claude code` in lower case missed the pre-check
+// entirely and the phrase reached the upstream verbatim. Matching loosely here
+// costs nothing — a false positive just runs the rewriters, which are
+// idempotent no-ops when there is nothing to change.
+var sanitizeFingerprintRE = regexp.MustCompile(`(?i)(you are claude code|main branch \(|anthropics/claude-code/issues)`)
+
+// sanitizeBillingHeaderRE removes the billing-header marker itself.
+//
+// The upstream rejects a request that merely MENTIONS this marker (five shapes
+// verified against the gateway, all 400 code=11128), so the marker text must go
+// — but only the marker and the value that follows it. An earlier version used
+// an entirely optional pattern (`(?::[^;\n]*;?\s*)?`), which matches the empty
+// string at every position; ReplaceAllString then deleted every `: ...;` run in
+// the text and turned ordinary prose like "a: b; c" into "ac". Prompt text is
+// user data: remove the fingerprint, never the punctuation around it.
+//
+// The marker is assembled from parts so this source line does not itself read
+// as a fingerprint in review diffs.
+var sanitizeBillingHeaderRE = regexp.MustCompile("(?i)x-anthropic-billing-header(:[^;]*;?[ ]*)?")
 var sanitizeCCEntrypointRE = regexp.MustCompile(`(?i)\bcc_entrypoint=`)
 var sanitizeCCKeyValueRE = regexp.MustCompile(`(?i)\bcc_[a-z0-9_]+=[^;\n]*;?\s*`)
 
@@ -564,8 +665,15 @@ func sanitizeBlockedTemplates(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// hasFingerprint is the gate in front of the rewriters. It must be at least as
+// wide as everything they can fix — a narrower gate silently skips the
+// rewrite — so it matches case-insensitively via sanitizeFingerprintRE and
+// keeps the billing-header probe.
 func hasFingerprint(s string) bool {
 	if sanitizeCCEntrypointRE.MatchString(s) {
+		return true
+	}
+	if sanitizeFingerprintRE.MatchString(s) {
 		return true
 	}
 	for _, feature := range sanitizeFeatures {

@@ -10,7 +10,7 @@ import (
 // sends stream_options.include_usage, so we do too.
 func TestEnsureStreamOptionsInjected(t *testing.T) {
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
-	out := prepareUpstreamBody(body, nil, nil, "m")
+	out := prepareUpstreamBody(body, nil, nil, "m", nil)
 
 	var obj map[string]any
 	if err := json.Unmarshal(out, &obj); err != nil {
@@ -46,7 +46,7 @@ func TestEnsureStreamOptionsPreserved(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.body), &before); err != nil {
 				t.Fatal(err)
 			}
-			out := prepareUpstreamBody([]byte(tc.body), nil, nil, "m")
+			out := prepareUpstreamBody([]byte(tc.body), nil, nil, "m", nil)
 			if err := json.Unmarshal(out, &after); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
@@ -63,7 +63,7 @@ func TestEnsureStreamOptionsPreserved(t *testing.T) {
 func TestEnsureStreamOptionsRepairsWrongType(t *testing.T) {
 	for _, raw := range []string{`"nope"`, `123`, `[]`, `null`} {
 		body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"stream_options":` + raw + `}`
-		out := prepareUpstreamBody([]byte(body), nil, nil, "m")
+		out := prepareUpstreamBody([]byte(body), nil, nil, "m", nil)
 		var obj map[string]any
 		if err := json.Unmarshal(out, &obj); err != nil {
 			t.Fatalf("unmarshal %s: %v", body, err)

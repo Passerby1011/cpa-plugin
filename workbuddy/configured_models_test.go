@@ -567,7 +567,12 @@ func TestConfiguredModelsSwitchToEmptyResumesWorkBuddyCacheDiscovery(t *testing.
 		if req.URL.Host != "copilot.tencent.com" {
 			t.Fatalf("unexpected model request %s", req.URL)
 		}
-		workBuddyCalls++
+		// Count refreshes, not legs: the union fetch issues a v3 request and an
+		// enterprise-endpoint request per refresh. This test asserts that a
+		// configured model list suppresses cache discovery entirely.
+		if req.URL.Path == "/v3/config" {
+			workBuddyCalls++
+		}
 		return nil, errors.New("synthetic WorkBuddy outage")
 	})
 	oldRuntime := activeModelRuntime.Swap(runtime)

@@ -818,7 +818,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	// upstream and fold the chunks into a single chat.completion object.
 	// prepareUpstreamBody does forceStream + normalizeTools + rewriteSystem +
 	// ensureSystemMessageInPlace + rewriteModel in ONE unmarshal/marshal pass.
-	body := prepareUpstreamBody(req.Payload, req.OriginalRequest, sa, upstreamModel)
+	body := prepareUpstreamBody(req.Payload, req.OriginalRequest, sa, upstreamModel, modelEffortsForRequest(req.AuthID, upstreamModel))
 	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -826,7 +826,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	backendHeaders(httpReq, sa)
 	// Compliance: route via host.http.do_stream so request-log captures the
 	// outbound call. Read entire body via the bridge, then fold SSE → completion.
-	stream, statusCode, _, err := hostHTTPDoStreamWithCallback(httpReq, req.HostCallbackID)
+	stream, statusCode, respHeaders, err := hostHTTPDoStreamWithCallback(httpReq, req.HostCallbackID)
 	if err != nil {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
 		return nil, fmt.Errorf("http_error: %w", err)
@@ -837,6 +837,13 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 		payload, _ := io.ReadAll(reader)
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(payload))
 		reconcileAfterExecutorError(req.AuthID, statusCode, string(payload))
+		// Surface the upstream's own wait hint (Retry-After family) so the
+		// operator can see how long the throttle actually lasts; the host
+		// cannot receive it (see retry_after.go).
+		if hint := retryAfterHint(respHeaders); hint != "" {
+			hostLogf("warn", fmt.Sprintf("workbuddy upstream %d on auth=%s: upstream asks to wait %s",
+				statusCode, shortUID(authUID), hint))
+		}
 		return errorEnvelopeWithStatus("http_error", fmt.Sprintf("upstream %d: %s", statusCode, truncateRedacted(string(payload), 200)), statusCode), nil
 	}
 	completion, err := aggregateCompletion(reader, req.Model)
@@ -880,7 +887,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		body = req.OriginalRequest
 	}
 	// Single-pass JSON rewrite (see handleExecExecute for the non-stream path).
-	body = prepareUpstreamBody(body, nil, sa, upstreamModel)
+	body = prepareUpstreamBody(body, nil, sa, upstreamModel, modelEffortsForRequest(req.AuthID, upstreamModel))
 
 	headers := streamHeaders()
 	sseFramed := clientNeedsSSEFrame(req.Metadata)

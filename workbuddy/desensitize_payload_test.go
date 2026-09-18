@@ -23,7 +23,7 @@ func TestPrepareUpstreamBodyDesensitizesAllowedFields(t *testing.T) {
 			{"role":"user","content":[{"type":"text","text":"# AGENTS.md instructions"},{"type":"text","text":"attack"}]}
 		],
 		"tools":[{"function":{"name":"attack","description":"attack tool","parameters":{"title":"attack schema","description":"exploit field"}}}]
-	}`), nil, nil, "m")
+	}`), nil, nil, "m", nil)
 	var body map[string]any
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestPrepareUpstreamBodyLeavesDisallowedFieldsUnchanged(t *testing.T) {
 			{"role":"tool","content":"attack"}
 		],
 		"tools":[{"function":{"name":"attack","parameters":{"enum":["attack"],"default":"attack","example":"attack"}}}]
-	}`), nil, nil, "m")
+	}`), nil, nil, "m", nil)
 	encoded := string(out)
 	for _, want := range []string{
 		`"text":"attack","type":"image_url"`,
@@ -117,7 +117,7 @@ func TestPrepareUpstreamBodyDoesNotDesensitizeWhenDisabled(t *testing.T) {
 	featureRuntime.Store(cfg)
 	t.Cleanup(func() { featureRuntime.Store(old) })
 
-	out := prepareUpstreamBody([]byte(`{"model":"m","messages":[{"role":"system","content":"attack"}]}`), nil, nil, "m")
+	out := prepareUpstreamBody([]byte(`{"model":"m","messages":[{"role":"system","content":"attack"}]}`), nil, nil, "m", nil)
 	if strings.Contains(string(out), "a"+zeroWidthSpace+"ttack") {
 		t.Fatalf("disabled desensitize changed payload: %s", out)
 	}
@@ -138,7 +138,7 @@ func TestPrepareUpstreamBodyDesensitizesNestedToolMetadataBelowStructuredMetadat
 			"description":{"field":{"description":"attack"}},
 			"title":[{"title":"attack"}]
 		}}]
-	}`), nil, nil, "m")
+	}`), nil, nil, "m", nil)
 	var body map[string]any
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatal(err)

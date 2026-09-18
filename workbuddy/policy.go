@@ -81,10 +81,15 @@ var hardCreditMarkers = []string{
 }
 
 // isHardCreditError reports business "out of credits" style failures.
-// 402 is treated as payment/credit. Pure 429 is not hard unless body has credit markers.
+// 402 is treated as payment/credit. A 429 never qualifies: upstream attaches
+// quota/credit wording to throttling bodies, and the status code is the
+// stronger signal (see classifyUpstreamError, which probes 429 first).
 func isHardCreditError(status int, body string) bool {
 	if status == httpStatusPaymentRequired {
 		return true
+	}
+	if status == 429 {
+		return false
 	}
 	lower := strings.ToLower(body)
 	for _, m := range hardCreditMarkers {
@@ -161,6 +166,16 @@ const (
 	// (11101 / "Unmarshal chat params failed"). Re-sending it to another
 	// account changes nothing.
 	upstreamErrBadParams
+	// upstreamErrModelBlocked: 11102 "service info not found" — this backend
+	// does not serve that model. The account is healthy; only the (account,
+	// model) pair is unusable, so retrying the same model on the same account
+	// just repeats the failure.
+	upstreamErrModelBlocked
+	// upstreamErrPromptTooLong: 11115 "prompt is too long" — the request
+	// exceeds the model's context window. A request-level problem: any account
+	// rejects the same body, so rotating or punishing the credential would
+	// discard healthy accounts for nothing.
+	upstreamErrPromptTooLong
 	// upstreamErrServer: 5xx — upstream fault.
 	upstreamErrServer
 	// upstreamErrOther: any other 4xx / business error.
@@ -185,6 +200,10 @@ func (k upstreamErrKind) String() string {
 		return "content_blocked"
 	case upstreamErrBadParams:
 		return "bad_params"
+	case upstreamErrModelBlocked:
+		return "model_blocked"
+	case upstreamErrPromptTooLong:
+		return "prompt_too_long"
 	case upstreamErrServer:
 		return "server"
 	case upstreamErrOther:
@@ -314,21 +333,31 @@ var softRateResetLoc = time.FixedZone("UTC+8", 8*60*60)
 // softRateResetRe captures the time in 「将在 <时间> 重置」.
 var softRateResetRe = regexp.MustCompile(`将在 (.+?) 重置`)
 
+// softRateResetReEN captures the English reset form. The timestamp shape is
+// anchored on purpose: global-realm bodies say "reset at the end of the day"
+// in prose too, and a loose match would turn that into a bogus instant.
+var softRateResetReEN = regexp.MustCompile(`(?i)reset at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`)
+
 // softRateTimeLayout is the upstream reset-time format (no zone suffix; the
 // zone is fixed to UTC+8 above).
 const softRateTimeLayout = "2006-01-02 15:04:05"
 
-// parseSoftRateReset extracts the model reset instant from a 6004 body.
+// parseSoftRateReset extracts the reset instant from a throttle body.
 //
-// Only 6004 bodies are parsed: other kinds (e.g. the generic "try later, quota
-// resets at …" wording that rides on account faults) must not produce a reset
-// instant, because the caller would treat it as a known self-heal time and
-// wait for something that never comes.
+// The parse is deliberately NOT gated on the 6004 business code: upstream
+// attaches "resets at <time>" to several throttle shapes (6004 and the 11140
+// rate-limiting variant). Gating on 6004 left the others with no known
+// self-heal instant, so callers fell back to an escalating cooldown that never
+// aligned with the real reset. Whether the throttle is model-level is a
+// separate question answered by isModelRateLimit, not by this parser.
+//
+// Both wording forms are accepted: the Chinese 「将在 … 重置」 and the English
+// "reset at <timestamp>" used by the global realm.
 func parseSoftRateReset(body string) (time.Time, bool) {
-	if !isModelRateLimit(body) {
-		return time.Time{}, false
-	}
 	m := softRateResetRe.FindStringSubmatch(body)
+	if len(m) < 2 {
+		m = softRateResetReEN.FindStringSubmatch(body)
+	}
 	if len(m) < 2 {
 		return time.Time{}, false
 	}
@@ -340,34 +369,71 @@ func parseSoftRateReset(body string) (time.Time, bool) {
 	return t, true
 }
 
+// modelBlockedCodeRe matches 11102 "service info not found" — the backend does
+// not serve that model.
+//
+// Matched by code or by the narrow phrase, never by a whole-body substring
+// search: a body's requestId is a random hex string that can contain "11102",
+// and treating that as a model block would blacklist a perfectly usable model
+// for the rest of the session. The reference implementation learned this the
+// hard way, so the rule here only reads the structured fields.
+var modelBlockedCodeRe = upstreamBizCodeRe("11102")
+
+var modelBlockedMsgRe = regexp.MustCompile(`(?i)"msg"\s*:\s*"[^"]*service info not found`)
+
+// promptTooLongCodeRe matches 11115 "prompt is too long".
+var promptTooLongCodeRe = upstreamBizCodeRe("11115")
+
+var promptTooLongMsgRe = regexp.MustCompile(`(?i)prompt is too long`)
+
+// isModelBlocked reports the 11102 shape.
+func isModelBlocked(status int, body string) bool {
+	if status != 400 && status != 404 {
+		return false
+	}
+	return modelBlockedCodeRe.MatchString(body) || modelBlockedMsgRe.MatchString(body)
+}
+
+// isPromptTooLong reports the 11115 shape. Only request-level statuses count:
+// a 429 carrying this text is still a rate limit, and a 5xx is an upstream
+// fault — neither is evidence that the body is too long.
+func isPromptTooLong(status int, body string) bool {
+	if status != 400 && status != 404 && status != 413 {
+		return false
+	}
+	return promptTooLongCodeRe.MatchString(body) || promptTooLongMsgRe.MatchString(body)
+}
+
 // classifyUpstreamError sorts one upstream failure into exactly one kind.
 //
 // Order runs strict → loose; each step is above the looser ones for a reason:
-//  1. hard credit (402, or credit wording on any status) — the least
-//     self-healing class, and the only one that may delete a Global auth.
-//     Kept first and backed by the unchanged isHardCreditError so its marker
-//     set (including "quota exceeded") never regresses.
-//  2. session dead — a terminal credential state. A body that also mentions
+//  1. session dead — a terminal credential state. A body that also mentions
 //     rate limiting must not be downgraded to soft rate: throttling expires,
 //     a revoked offline session does not.
-//  3. account fault (11140 "request illegal" / 14017 "trial not activated") —
+//  2. account fault (11140 "request illegal" / 14017 "trial not activated") —
 //     account-determined rejections. This must sit before the status==429
 //     fallback: 14017 arrives with a 429 status, and classifying it as soft
 //     rate would wait forever for a cooldown that never heals.
-//  4. model rate limit (6004) — an explicit, structured model-level signal, so
+//  3. model rate limit (6004) — an explicit, structured model-level signal, so
 //     it outranks the loose wording checks below. The account is healthy.
-//  5. soft rate wording on any status — upstream returns throttle semantics on
+//  4. 11134 — same throttling semantics as 6004 but arriving as a 500 whose
+//     explanatory text sits at the tail (see upstreamBusyCodeRe).
+//  5. bare 429 — BEFORE the credit wording, deliberately. Upstream attaches
+//     quota/credit phrasing to throttling bodies, so wording alone would park
+//     a healthy account in a hard cooldown for a condition that clears itself;
+//     the status code is the stronger signal.
+//  6. soft rate wording on any status — upstream returns throttle semantics on
 //     200/400/403 as well, and those responses would otherwise look like
 //     health problems (or like nothing at all).
-//  6. bare 429 — no wording to go on, still a rate limit.
-//  7. 5xx — upstream fault, unrelated to the credential.
-//  8. 4xx: content firewall and malformed outbound body first, so ordinary
+//  7. hard credit (402, or credit wording on a non-429 status) — the least
+//     self-healing class and the only one that may delete a Global auth. Kept
+//     after 429 so throttle bodies never reach it, and backed by the unchanged
+//     marker set so no real credit body regresses.
+//  8. 5xx — upstream fault, unrelated to the credential.
+//  9. 4xx: content firewall and malformed outbound body first, so ordinary
 //     audit false positives never fall through to a class that punishes the
 //     account; then everything else as "other".
 func classifyUpstreamError(status int, body string) upstreamErrKind {
-	if isHardCreditError(status, body) {
-		return upstreamErrHardCredit
-	}
 	if bodyHasMarker(body, sessionDeadMarkers) {
 		return upstreamErrSessionDead
 	}
@@ -380,17 +446,32 @@ func classifyUpstreamError(status int, body string) upstreamErrKind {
 	if isModelRateLimit(body) {
 		return upstreamErrModelRateLimit
 	}
-	// 11134 before the wording probes: it is the same throttling semantics but
-	// arrives as a 500 whose explanatory text sits at the tail, where a
-	// truncated body loses it.
+	// 11102 / 11115 are request-level verdicts: they must sit above the loose
+	// wording probes so a body that also carries throttle-ish words is still
+	// read as "this request/model is the problem", not as an account signal.
+	if isModelBlocked(status, body) {
+		return upstreamErrModelBlocked
+	}
+	if isPromptTooLong(status, body) {
+		return upstreamErrPromptTooLong
+	}
 	if upstreamBusyCodeRe.MatchString(body) {
+		return upstreamErrSoftRate
+	}
+	// 402 before the wording probes: "payment required" is unambiguous, and a
+	// 402 body that also carries throttle wording (they overlap in practice)
+	// must still read as a spent balance, not as something that self-heals.
+	if status == httpStatusPaymentRequired {
+		return upstreamErrHardCredit
+	}
+	if status == 429 {
 		return upstreamErrSoftRate
 	}
 	if bodyHasMarker(body, softRateMarkers) {
 		return upstreamErrSoftRate
 	}
-	if status == 429 {
-		return upstreamErrSoftRate
+	if isHardCreditError(status, body) {
+		return upstreamErrHardCredit
 	}
 	if status >= 500 {
 		return upstreamErrServer
