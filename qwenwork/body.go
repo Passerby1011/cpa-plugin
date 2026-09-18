@@ -91,6 +91,11 @@ func buildQwenBody(payload map[string]any, modelKey string) ([]byte, error) {
 	if modelKey == "" {
 		modelKey = "pro"
 	}
+	// Server-driven model metadata (qoder-agent-sdk o9c). is_reasoning / is_vl /
+	// display_name / format / source / max_input_tokens all come from the live
+	// catalog; falls back to the pre-change hardcoded shape when the catalog has
+	// not been fetched. See models.go lookupModelMeta.
+	meta := lookupModelMeta(modelKey)
 	// Desensitize the configured prompt and tool metadata fields before the
 	// OpenAI payload is folded into the QwenWork body (same scope as the
 	// WorkBuddy plugin: system/developer text, marker-flagged user text,
@@ -115,7 +120,7 @@ func buildQwenBody(payload map[string]any, modelKey string) ([]byte, error) {
 		lastUser = "ping"
 	}
 
-	isReasoning := false
+	isReasoning := meta.IsReasoning
 	parameters := map[string]any{}
 	for _, k := range []string{"temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty"} {
 		if v, ok := payload[k]; ok && v != nil {
@@ -157,22 +162,11 @@ func buildQwenBody(payload map[string]any, modelKey string) ([]byte, error) {
 		"task_id":          "common",
 		"session_type":     "qoder_work",
 		"aliyun_user_type": "",
-		"model_config": map[string]any{
-			"key":              modelKey,
-			"display_name":     modelKey,
-			"model":            "",
-			"format":           "openai",
-			"is_vl":            true,
-			"is_reasoning":     isReasoning,
-			"api_key":          "",
-			"url":              "",
-			"source":           "system",
-			"max_input_tokens": 180000,
-		},
-		"system":     system,
-		"messages":   messages,
-		"tools":      tools,
-		"parameters": parameters,
+		"model_config":     buildModelConfig(modelKey, meta),
+		"system":           system,
+		"messages":         messages,
+		"tools":            tools,
+		"parameters":       parameters,
 	}
 
 	raw, err := json.Marshal(body)

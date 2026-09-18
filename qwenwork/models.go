@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -19,11 +21,21 @@ import (
 // upstream model keys (pro/flash/qwen3.8-max-preview, qwork scene). Dynamic
 // refresh via /algo/api/v2/model/list replaces this at runtime when an account
 // is present.
+//
+// DisplayName here carries the server display_name ONLY — never the charge
+// rate. The rate (price_factor) is volatile: it was observed flipping
+// 1.1 -> 1.8 for qwen3.8-max-preview within ~30 minutes (server-side
+// repricing/promotion). A hardcoded rate in the static fallback would drift and
+// show a wrong multiplier whenever the dynamic fetch is unavailable. The rate is
+// attached ONLY by parseQworkModels, which reads the live price_factor — same
+// discipline as the WorkBuddy plugin (display_name shows the rate only when the
+// catalog actually supplied one). Display names mirror the live qwork scene:
+// pro=高级, flash=标准｜Qwen3.8-Flash, qwen3.8-max-preview=Qwen3.8-Max.
 func wbModels() []pluginapi.ModelInfo {
 	return []pluginapi.ModelInfo{
-		{ID: "pro", Name: "QwenWork 高级 (Pro)", ContextLength: 180000, MaxCompletionTokens: 32768, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "flash", Name: "QwenWork Qwen3.8-Flash", ContextLength: 180000, MaxCompletionTokens: 32768, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "qwen3.8-max-preview", Name: "QwenWork Qwen3.8-Max", ContextLength: 180000, MaxCompletionTokens: 32768, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
+		{ID: "pro", Name: "QwenWork 高级 (Pro)", DisplayName: "高级", ContextLength: 1000000, MaxCompletionTokens: 32768, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
+		{ID: "flash", Name: "QwenWork Qwen3.8-Flash", DisplayName: "标准｜Qwen3.8-Flash", ContextLength: 1000000, MaxCompletionTokens: 32768, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
+		{ID: "qwen3.8-max-preview", Name: "QwenWork Qwen3.8-Max", DisplayName: "Qwen3.8-Max", ContextLength: 1000000, MaxCompletionTokens: 32768, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
 	}
 }
 
@@ -131,15 +143,32 @@ func callModelsAPI(sa *storedAuth) ([]pluginapi.ModelInfo, error) {
 	if !ok {
 		return nil, fmt.Errorf("no qwork scene in models response")
 	}
-	var models []struct {
-		Key            string  `json:"key"`
-		DisplayName    string  `json:"display_name"`
-		Enable         bool    `json:"enable"`
-		IsReasoning    bool    `json:"is_reasoning"`
-		IsVL           bool    `json:"is_vl"`
-		MaxInputTokens int64   `json:"max_input_tokens"`
-		PriceFactor    float64 `json:"price_factor"`
-	}
+	return parseQworkModels(rawList)
+}
+
+// qworkModelEntry is one upstream model record from the qwork scene of
+// /algo/api/v2/model/list.
+type qworkModelEntry struct {
+	Key            string  `json:"key"`
+	DisplayName    string  `json:"display_name"`
+	Enable         bool    `json:"enable"`
+	IsReasoning    bool    `json:"is_reasoning"`
+	IsVL           bool    `json:"is_vl"`
+	Format         string  `json:"format"`
+	Source         string  `json:"source"`
+	MaxInputTokens int64   `json:"max_input_tokens"`
+	PriceFactor    float64 `json:"price_factor"`
+	// ContextConfig mirrors the upstream {"1M":{token_count,is_default},...}
+	// map. The desktop client picks the is_default entry's token_count as the
+	// effective context window (currently 1M), so we do the same.
+	ContextConfig map[string]contextWindowEntry `json:"context_config"`
+}
+
+// parseQworkModels maps the raw qwork-scene JSON array onto host ModelInfo
+// entries. Extracted from callModelsAPI so the mapping is testable against a
+// recorded fixture without touching the network or COSY signing.
+func parseQworkModels(rawList json.RawMessage) ([]pluginapi.ModelInfo, error) {
+	var models []qworkModelEntry
 	if err := json.Unmarshal(rawList, &models); err != nil {
 		return nil, fmt.Errorf("qwork scene parse: %w", err)
 	}
@@ -148,13 +177,20 @@ func callModelsAPI(sa *storedAuth) ([]pluginapi.ModelInfo, error) {
 		if !m.Enable {
 			continue
 		}
-		ctx2 := int64(180000)
-		if m.MaxInputTokens > 0 {
+		// Context window: the desktop client derives it from context_config's
+		// is_default entry (currently 1M), NOT max_input_tokens (180k). Mirror
+		// that so /v1/models advertises the same window the client shows.
+		ctx2 := defaultContextWindow(m.ContextConfig)
+		if ctx2 <= 0 && m.MaxInputTokens > 0 {
 			ctx2 = m.MaxInputTokens
+		}
+		if ctx2 <= 0 {
+			ctx2 = 180000
 		}
 		out = append(out, pluginapi.ModelInfo{
 			ID:                         m.Key,
 			Name:                       m.DisplayName,
+			DisplayName:                modelDisplayName(m.DisplayName, formatPriceFactor(m.PriceFactor)),
 			ContextLength:              ctx2,
 			MaxCompletionTokens:        8192,
 			OwnedBy:                    providerName,
@@ -164,7 +200,159 @@ func callModelsAPI(sa *storedAuth) ([]pluginapi.ModelInfo, error) {
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no enabled chat models")
 	}
+	storeModelMeta(models)
 	return out, nil
+}
+
+// modelMeta carries the server-driven fields the desktop client uses to build
+// the chat request's model_config (qoder-agent-sdk o9c). The plugin previously
+// hardcoded display_name=key, is_vl=true, is_reasoning=false; the client reads
+// ALL of these from the live model record. Mirroring that means a future
+// reasoning model lights up automatically (is_reasoning / thinking behaviour)
+// instead of being mislabelled.
+type modelMeta struct {
+	DisplayName    string
+	IsReasoning    bool
+	IsVL           bool
+	Format         string
+	Source         string
+	MaxInputTokens int64
+}
+
+// modelMetaCache maps upstream model key -> server metadata, refreshed by the
+// same dynamic catalog fetch that fills dynamicModelsCache. Keyed by upstream
+// key (pro/flash/qwen3.8-max-preview), which is what buildQwenBody receives.
+var modelMetaCache struct {
+	sync.RWMutex
+	byKey map[string]modelMeta
+}
+
+// defaultModelMeta is the fallback when the dynamic catalog has not been
+// fetched (no account, API down, TTL miss). It reproduces the values the plugin
+// hardcoded before this change so behaviour is unchanged without live metadata:
+// display_name falls back to the key (client: n?.display_name ?? r), is_vl
+// stays true, is_reasoning false, format openai, source system, max 180000.
+func defaultModelMeta(key string) modelMeta {
+	return modelMeta{DisplayName: key, IsVL: true, Format: "openai", Source: "system", MaxInputTokens: 180000}
+}
+
+func storeModelMeta(models []qworkModelEntry) {
+	byKey := make(map[string]modelMeta, len(models))
+	for _, m := range models {
+		if !m.Enable {
+			continue
+		}
+		byKey[m.Key] = modelMeta{
+			DisplayName:    m.DisplayName,
+			IsReasoning:    m.IsReasoning,
+			IsVL:           m.IsVL,
+			Format:         m.Format,
+			Source:         m.Source,
+			MaxInputTokens: m.MaxInputTokens,
+		}
+	}
+	modelMetaCache.Lock()
+	modelMetaCache.byKey = byKey
+	modelMetaCache.Unlock()
+}
+
+// lookupModelMeta returns the cached server metadata for an upstream key, or
+// defaultModelMeta when the dynamic catalog has not populated it. This is the
+// plugin analogue of the client's e.getModel(key) ?? defaults in o9c.
+func lookupModelMeta(key string) modelMeta {
+	modelMetaCache.RLock()
+	m, ok := modelMetaCache.byKey[key]
+	modelMetaCache.RUnlock()
+	if !ok {
+		return defaultModelMeta(key)
+	}
+	// Fill any field the server omitted with the same defaults the client uses,
+	// so a partially-populated record still produces a valid model_config.
+	if m.DisplayName == "" {
+		m.DisplayName = key
+	}
+	if m.Format == "" {
+		m.Format = "openai"
+	}
+	if m.Source == "" {
+		m.Source = "system"
+	}
+	if m.MaxInputTokens <= 0 {
+		m.MaxInputTokens = 200000 // client: n?.max_input_tokens ?? 2e5
+	}
+	return m
+}
+
+// buildModelConfig renders the chat body's model_config map exactly as the
+// desktop client does (qoder-agent-sdk o9c, system-model branch): every field
+// is server-driven, with the client's own fallbacks. The BYOK/custom-model
+// branch is unreachable here — QwenWork's qwork scene returns no
+// outer_provider/custom_provider_adapter, so source is always "system".
+func buildModelConfig(key string, meta modelMeta) map[string]any {
+	return map[string]any{
+		"key":              key,
+		"display_name":     meta.DisplayName,
+		"model":            "",
+		"format":           meta.Format,
+		"is_vl":            meta.IsVL,
+		"is_reasoning":     meta.IsReasoning,
+		"api_key":          "",
+		"url":              "",
+		"source":           meta.Source,
+		"max_input_tokens": meta.MaxInputTokens,
+	}
+}
+
+// contextWindowEntry is one entry of the upstream context_config map.
+type contextWindowEntry struct {
+	TokenCount int64 `json:"token_count"`
+	IsDefault  bool  `json:"is_default"`
+}
+
+// defaultContextWindow returns the token_count of the is_default entry in
+// context_config, matching the desktop client's getDefaultContextConfigTokenCount.
+// Returns 0 when the map is absent or has no usable default.
+func defaultContextWindow(cfg map[string]contextWindowEntry) int64 {
+	var best int64
+	for _, e := range cfg {
+		if e.TokenCount <= 0 {
+			continue
+		}
+		if e.IsDefault {
+			return e.TokenCount
+		}
+		if e.TokenCount > best {
+			best = e.TokenCount
+		}
+	}
+	return best
+}
+
+// modelDisplayName appends the upstream charge rate to the model name, same
+// shape as the WorkBuddy plugin ("名称 · x倍率"). Empty rate keeps the plain
+// name; the host falls back to the model ID only when DisplayName is empty,
+// so a nameless+rateless model intentionally returns "".
+func modelDisplayName(name, rate string) string {
+	name = strings.TrimSpace(name)
+	rate = strings.TrimSpace(rate)
+	if rate == "" {
+		return name
+	}
+	if name == "" {
+		return rate
+	}
+	return name + " · " + rate
+}
+
+// formatPriceFactor renders the upstream price_factor as "x1" / "x0.1" /
+// "x1.1" (trailing zeros trimmed). A factor <= 0 means "not published" and
+// renders as "" so the display name stays unadorned.
+func formatPriceFactor(f float64) string {
+	if f <= 0 {
+		return ""
+	}
+	s := strconv.FormatFloat(f, 'f', -1, 64)
+	return "x" + s
 }
 
 func cacheModelAliases(host pluginapi.HostConfigSummary) {
