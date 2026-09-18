@@ -27,9 +27,8 @@ func TestClassifyUpstreamError(t *testing.T) {
 		// 429 outranks the credit wording: upstream returns 429 bodies that
 		// carry quota/credit phrasing while meaning "throttled, retry later".
 		// Judging by the wording would park a healthy account in a ~12h hard
-		// cooldown for a condition that clears itself — measured on the
-		// reference gateway, which moved the 429 check above its credit rules
-		// for exactly this reason. The status code is the stronger signal.
+		// cooldown for a condition that clears itself — measured against the
+		// live service, which treats the status code as the stronger signal.
 		{"quota exceeded on 429 is throttle not hard", 429, `{"message":"quota exceeded"}`, upstreamErrSoftRate},
 		{"credit wording on 429 is throttle not hard", 429, `{"message":"积分不足"}`, upstreamErrSoftRate},
 		// 402 keeps its hard semantics regardless of any wording.

@@ -6,8 +6,7 @@
 // first conversation, five conversations, a night-owl chat, ...). A gateway
 // that only proxies chat completions never accepts any of them, so the credits
 // sit unclaimed for the life of the account. The endpoints, the reward shape
-// and the idempotency semantics below were measured against the live service
-// rather than inferred from the reference implementation.
+// and the idempotency semantics below were measured against the live service.
 //
 // Scope is deliberately narrow. Only tasks that complete through a
 // chat_request_send telemetry event are listed, because that event is exactly

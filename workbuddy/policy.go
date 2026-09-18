@@ -375,8 +375,7 @@ func parseSoftRateReset(body string) (time.Time, bool) {
 // Matched by code or by the narrow phrase, never by a whole-body substring
 // search: a body's requestId is a random hex string that can contain "11102",
 // and treating that as a model block would blacklist a perfectly usable model
-// for the rest of the session. The reference implementation learned this the
-// hard way, so the rule here only reads the structured fields.
+// for the rest of the session. Only the structured fields are read.
 var modelBlockedCodeRe = upstreamBizCodeRe("11102")
 
 var modelBlockedMsgRe = regexp.MustCompile(`(?i)"msg"\s*:\s*"[^"]*service info not found`)

@@ -1,5 +1,5 @@
 // retry_after_test.go pins the header parsing rules. The three header forms
-// below were observed on the reference gateway; the reject cases exist because
+// below were observed on the live service; the reject cases exist because
 // a wrong wait time is worse than no wait time — the operator reads these
 // numbers to decide whether to wait or re-login.
 package main

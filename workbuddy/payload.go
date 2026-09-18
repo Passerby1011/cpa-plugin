@@ -155,9 +155,9 @@ func requestWantsThinking(obj map[string]any) bool {
 //
 // The upstream request struct only reads max_tokens: an alias-only request is
 // accepted (200, normal stream) but silently capped at the upstream default
-// output limit — measured at 32000 on the reference gateway for a client that
-// asked for 128000. Nothing in the response says the cap was applied, so long
-// generations just stop early.
+// output limit — measured at 32000 for a client that asked for 128000. Nothing
+// in the response says the cap was applied, so long generations just stop
+// early.
 //
 // Rules, in the order they are applied:
 //   - explicit max_tokens present → keep it, the alias is dropped untranslated

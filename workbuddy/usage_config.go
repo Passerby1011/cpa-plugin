@@ -44,7 +44,7 @@ var (
 	// /v0/management/usage/import (only path that reaches request monitoring;
 	// c-shared plugins cannot use host usage.DefaultManager/redisqueue).
 	//
-	// Resolution order (community-style, like codex-auth-importer env injection):
+	// Resolution order (env-injection style):
 	//  1) plugins.configs.workbuddy.usage_report_* in config.yaml
 	//  2) env USAGE_REPORT_URL / USAGE_REPORT_KEY / CPAMP_ADMIN_KEY
 	//  3) secret files (docker secrets / bind-mount), e.g. /run/secrets/cpamp_admin_key
@@ -375,9 +375,9 @@ func parseProxyURLConfig(raw []byte) (string, error) {
 }
 
 // resolveUsageReport fills usageReportURL/key from config → env → secret files.
-// Mirrors community plugins that inject management keys via env/build (e.g.
-// codex-auth-importer CODEX_AUTH_IMPORTER_MANAGEMENT_KEY), not plaintext CPA
-// remote-management.secret-key (that field is bcrypt-hashed).
+// The env-var route exists because the management key is a plaintext secret the
+// host does not hand to plugins; CPA's own remote-management.secret-key field is
+// bcrypt-hashed and therefore unusable for signing management calls.
 func resolveUsageReport(cfgURL, cfgKey string) {
 	url := firstNonEmpty(
 		strings.TrimSpace(cfgURL),

@@ -3,10 +3,10 @@
 //
 // Why the translation exists: the upstream request struct only reads
 // max_tokens. A client that sends the newer OpenAI alias
-// (max_completion_tokens, used by DeepSeek Harness and others) gets it
-// silently ignored, the upstream falls back to its own default output cap, and
-// long generations are cut short with no error anywhere. Measured on the
-// reference gateway: a 128000 alias request was capped at the 32000 default.
+// (max_completion_tokens) gets it silently ignored, the upstream falls back to
+// its own default output cap, and long generations are cut short with no error
+// anywhere. Measured against the live service: a 128000 alias request was
+// capped at the 32000 default.
 package main
 
 import (

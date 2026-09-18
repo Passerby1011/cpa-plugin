@@ -1,6 +1,5 @@
 // effort.go downgrades a caller's reasoning_effort to one the target model
-// actually accepts, mirroring the reference implementation's
-// normalizeReasoningEffort.
+// actually accepts.
 //
 // Why the downgrade is necessary rather than optional: the upstream validates
 // the tier against the model's own list and answers 400 for a tier the model
