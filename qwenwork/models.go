@@ -61,7 +61,12 @@ func fetchDynamicModels() []pluginapi.ModelInfo {
 	}
 	models := wbModels()
 	files, err := hostAuthListFiles()
-	if err != nil || len(files) == 0 {
+	if err != nil {
+		modelLogf("auth_list", "auth list unavailable (%v) — serving static model table", err)
+		return models
+	}
+	if len(files) == 0 {
+		modelLogf("auth_empty", "no auth files visible via host bridge — serving static model table")
 		return models
 	}
 	// Strict filename-prefix match — same filter as host_auth.go hostAuthList.
@@ -75,10 +80,12 @@ func fetchDynamicModels() []pluginapi.ModelInfo {
 		}
 		raw, err := hostAuthGetByIndex(f.AuthIndex)
 		if err != nil {
+			modelLogf("auth_get", "auth %s unreadable (%v) — trying next", f.Name, err)
 			continue
 		}
 		sa, err := parseStored(raw)
 		if err != nil || sa == nil {
+			modelLogf("auth_parse", "auth %s unparseable (%v) — trying next", f.Name, err)
 			continue
 		}
 		dyn, err := callModelsAPI(sa)
@@ -86,6 +93,7 @@ func fetchDynamicModels() []pluginapi.ModelInfo {
 			storeDynamicModels(dyn)
 			return dyn
 		}
+		modelLogf("models_api", "models API via %s failed: %v", f.Name, err)
 	}
 	return models
 }
@@ -96,11 +104,14 @@ func fetchDynamicModelsFromStorage(storageJSON []byte) []pluginapi.ModelInfo {
 	}
 	sa, err := parseStored(storageJSON)
 	if err != nil || sa == nil {
+		modelLogf("storage_parse", "for_auth storage JSON unparseable (%v) — serving static model table", err)
 		return fetchDynamicModels()
 	}
 	if dyn, err := callModelsAPI(sa); err == nil && len(dyn) > 0 {
 		storeDynamicModels(dyn)
 		return dyn
+	} else if err != nil {
+		modelLogf("models_api", "for_auth models API failed: %v", err)
 	}
 	return fetchDynamicModels()
 }
@@ -125,7 +136,13 @@ func callModelsAPI(sa *storedAuth) ([]pluginapi.ModelInfo, error) {
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", clientUA)
-	resp, err := hostHTTPDo(req)
+	// Direct HTTP, not hostHTTPDo: this runs inside synchronous model.static /
+	// model.for_auth RPCs, where nested host-bridge calls fail at the transport
+	// layer (observed "models API status 0" on linux, matching the stack-move
+	// mitigation Windows already bypasses below). The models API is an idempotent
+	// GET with no payload to audit, so the plugin's own client is fine here —
+	// the chat executor still routes through the bridge for request logging.
+	resp, err := hostHTTPDoDirect(req, nil)
 	if err != nil {
 		return nil, err
 	}
