@@ -105,18 +105,24 @@ func fetchDynamicModelsFromStorage(storageJSON []byte) []pluginapi.ModelInfo {
 // with COSY signing (same as inference). Returns plain JSON (not QoderEncoding).
 // Falls back to wbModels() on any error.
 func callModelsAPI(sa *storedAuth) ([]pluginapi.ModelInfo, error) {
+	return fetchModelListFrom(sa, endpointModels)
+}
+
+// fetchModelListFrom requests one catalog URL with COSY signing. Split out from
+// callModelsAPI so tests can point it at a stub server.
+func fetchModelListFrom(sa *storedAuth, rawURL string) ([]pluginapi.ModelInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	// model/list needs no body but COSY still requires a body string for signing.
-	// An empty JSON object works (verified in reference_impl.py).
-	encodedBody := qoderEncode([]byte("{}"))
-	rawURL := endpointModels // includes ?Encode=1
+	// The COSY signature covers the request body, so what is signed must be what
+	// is sent. This GET carries no body: signing qoderEncode("{}") while sending
+	// nothing made the gateway reject every refresh with 403 "Signature invalid",
+	// which the plugin silently turned into a permanent fallback to the static
+	// list (new upstream models never appeared).
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	// COSY signing needs the encoded body even for GET (signature includes body).
-	if err := applyCosyHeaders(req, sa, encodedBody, rawURL, "", false); err != nil {
+	if err := applyCosyHeaders(req, sa, "", rawURL, "", false); err != nil {
 		return nil, fmt.Errorf("cosy sign: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
