@@ -78,7 +78,7 @@
       "name": "QoderWork",
       "description": "QoderWork CN (qoder.com.cn) provider for CLIProxyAPI: dual login (OAuth device authorization with auto pro-pack claim + PAT import), COSY-signed chat executor, dynamic model list, daily check-in with credit snapshot, token keepalive (deviceToken/jobToken prefix-routed, PAT fallback), accounts panel.",
       "author": "Hex",
-      "version": "0.4.6",
+      "version": "0.4.7",
       "repository": "https://github.com/hex-ci/cpa-plugin",
       "logo": "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/QoderWork.png",
       "homepage": "https://github.com/hex-ci/cpa-plugin/tree/main/qoderwork",
@@ -96,51 +96,51 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.6/qoderwork_0.4.6_linux_amd64.zip",
-            "sha256": "1761abe1a107cd82c3592c8c43ddcdd273c6da15ee009a20e536f104c6452715",
-            "size": 3120769
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.7/qoderwork_0.4.7_linux_amd64.zip",
+            "sha256": "0fbe4810ebda42ad1607df5fd922e5daa4abf8ff98e09dc1981af3713c0685dc",
+            "size": 3120956
           },
           {
             "goos": "linux",
             "goarch": "arm64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.6/qoderwork_0.4.6_linux_arm64.zip",
-            "sha256": "697fac086d7f05a8966d8cd0061bc700640f1747a6197820e05c8e86bc08e7c6",
-            "size": 2837051
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.7/qoderwork_0.4.7_linux_arm64.zip",
+            "sha256": "31a8b454b7339b6d2e18cc026137c7ab1f00a87f2a51182055f13789d918b84e",
+            "size": 2837089
           },
           {
             "goos": "darwin",
             "goarch": "amd64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.6/qoderwork_0.4.6_darwin_amd64.zip",
-            "sha256": "f556319eef4df22c6098ca184948d6a59919a2c48868af0b93a37a16aa351515",
-            "size": 2972389
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.7/qoderwork_0.4.7_darwin_amd64.zip",
+            "sha256": "84970abca0535e1fdc43d4e9418998b110279063a60fab66c1dc2ff85900f73a",
+            "size": 2972532
           },
           {
             "goos": "darwin",
             "goarch": "arm64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.6/qoderwork_0.4.6_darwin_arm64.zip",
-            "sha256": "9d4ca3ded1b42f56bf91aa9486632913b40abab4ccd4cf41e46f8d036cf35a90",
-            "size": 2746268
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.7/qoderwork_0.4.7_darwin_arm64.zip",
+            "sha256": "48bab4e2c9300a2bc454c5697dc0e6353ba83e96e31a51431d58642a530496aa",
+            "size": 2746280
           },
           {
             "goos": "windows",
             "goarch": "amd64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.6/qoderwork_0.4.6_windows_amd64.zip",
-            "sha256": "aadc2a1eeede07191303006a1f3728e01add82da33517588fbcf7d608ee2f779",
-            "size": 3053986
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.7/qoderwork_0.4.7_windows_amd64.zip",
+            "sha256": "a20f98e6bb99a3326c1d2032705bb23fa7f85110b97d3dda2844d71ac28e98e6",
+            "size": 3053919
           },
           {
             "goos": "windows",
             "goarch": "arm64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.6/qoderwork_0.4.6_windows_arm64.zip",
-            "sha256": "7ecc92a80f90ed292879c9ca815800721c6f0fd3ed9b41e0fa3da0ad9178a661",
-            "size": 2818801
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.7/qoderwork_0.4.7_windows_arm64.zip",
+            "sha256": "9b2f52efd5d7bdda32302369a96cbbee4d7cf494c5f90d44fa84600f7ba1ad40",
+            "size": 2818793
           },
           {
             "goos": "freebsd",
             "goarch": "amd64",
-            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.6/qoderwork_0.4.6_freebsd_amd64.zip",
-            "sha256": "9422503ae0e9047001e770bf3c8eb81d1c46fd9528172a154aa025f91fa67e39",
-            "size": 3041990
+            "url": "https://github.com/hex-ci/cpa-plugin/releases/download/qoderwork-v0.4.7/qoderwork_0.4.7_freebsd_amd64.zip",
+            "sha256": "c5a3e6522bdfd8254022ca76c492f575931bb830828ccf47c1be1dfd94b0e2df",
+            "size": 3042030
           }
         ]
       }
