@@ -215,6 +215,28 @@
           }
         ]
       }
+    },
+    {
+      "id": "workbuddy-global",
+      "name": "WorkBuddy Global",
+      "description": "Tencent WorkBuddy international (Global / www.workbuddy.ai) OAuth provider for CLIProxyAPI: multi-account login, dynamic models, chat executor, credit lifecycle, credits panel. CN credentials are detected and routed correctly, but this plugin targets the international service.",
+      "author": "Hex",
+      "version": "0.11.0",
+      "repository": "https://github.com/hex-ci/cpa-plugin",
+      "logo": "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/WorkBuddy.png",
+      "homepage": "https://github.com/hex-ci/cpa-plugin/tree/main/workbuddy-global",
+      "license": "MIT",
+      "tags": [
+        "Provider",
+        "OAuth",
+        "WorkBuddy",
+        "Global",
+        "Management"
+      ],
+      "install": {
+        "type": "direct",
+        "artifacts": []
+      }
     }
   ]
 }

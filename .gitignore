@@ -10,5 +10,6 @@ dist/
 # bare `go build` binaries (no extension, one per plugin dir)
 workbuddy/workbuddy
 workbuddy/workbuddy-plus
+workbuddy-global/workbuddy-global
 qoderwork/qoderwork
 qwenwork/qwenwork
