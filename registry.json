@@ -20,7 +20,57 @@
       ],
       "install": {
         "type": "direct",
-        "artifacts": []
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-global-v0.11.0/workbuddy-global_0.11.0_linux_amd64.zip",
+            "sha256": "a7c94e934e9e155fca24a262ec6a21979f67070037896c458cf859db804e6c56",
+            "size": 3424162
+          },
+          {
+            "goos": "linux",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-global-v0.11.0/workbuddy-global_0.11.0_linux_arm64.zip",
+            "sha256": "95a8d264e55fd7e43a5c4eb5b5d9b54da432e2dd8bd4c5ac708f1f2b2f394a67",
+            "size": 3105013
+          },
+          {
+            "goos": "darwin",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-global-v0.11.0/workbuddy-global_0.11.0_darwin_amd64.zip",
+            "sha256": "bcdc6ce658b18ef9c58e2770bd3556baa19aede64dbf34f3236c965d2374857d",
+            "size": 3256709
+          },
+          {
+            "goos": "darwin",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-global-v0.11.0/workbuddy-global_0.11.0_darwin_arm64.zip",
+            "sha256": "abda270a905400afae6e18424395f25f523ca9e00666a843e44b94bca27ef001",
+            "size": 3003601
+          },
+          {
+            "goos": "windows",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-global-v0.11.0/workbuddy-global_0.11.0_windows_amd64.zip",
+            "sha256": "89ea6c77c1a03b4ce2a656209b59f7dfb217e23d02406e8f9a01909d6d31b16f",
+            "size": 3340481
+          },
+          {
+            "goos": "windows",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-global-v0.11.0/workbuddy-global_0.11.0_windows_arm64.zip",
+            "sha256": "d0dbf63e1509470eab56b1afcb0dac034539a2e3dd9a9c934af214f1b32e2dac",
+            "size": 3069538
+          },
+          {
+            "goos": "freebsd",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-global-v0.11.0/workbuddy-global_0.11.0_freebsd_amd64.zip",
+            "sha256": "c9d9d5bcdbeb8a6b8f7c940458a9aa4b250b35f28135d46985c75fd18c400ded",
+            "size": 3339729
+          }
+        ]
       }
     }
   ]
