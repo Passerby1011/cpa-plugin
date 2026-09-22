@@ -97,7 +97,11 @@ func parseFeatureRuntime(raw []byte) (*featureRuntimeConfig, error) {
 
 	mode := strings.ToLower(strings.TrimSpace(doc.OAuthClientMode))
 	if mode == "" {
-		mode = oauthClientModeCLI
+		// This plugin serves the international service, so an unset channel
+		// must default to the international desktop profile. Leaving the
+		// upstream CN default ("cli") would make an unconfigured install send
+		// logins to copilot.tencent.com, which is the opposite of the intent.
+		mode = oauthClientModeWorkBuddyAI
 	}
 	if mode != oauthClientModeCLI && mode != oauthClientModeWorkBuddy && mode != oauthClientModeWorkBuddyAI {
 		return nil, errors.New("oauth_client_mode must be cli, workbuddy or workbuddy-ai")

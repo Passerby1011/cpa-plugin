@@ -81,7 +81,7 @@ const (
 	providerName = "workbuddy-global"
 	// displayName is the human-readable plugin title shown by management clients;
 	// providerName stays the stable identifier (config keys, routes, auth files).
-	displayName  = "WorkBuddy"
+	displayName  = "WorkBuddy Global"
 	authFileName = "workbuddy-global.json"
 	// legacyAuthFileName / legacyAuthPrefix are the naming used by the upstream
 	// combined workbuddy plugin. They are accepted (not written) so an existing

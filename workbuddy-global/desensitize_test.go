@@ -40,8 +40,8 @@ func TestDefaultDesensitizeTermsAreComplete(t *testing.T) {
 	if cfg.desensitizeSource != "default" {
 		t.Fatalf("source = %q, want default", cfg.desensitizeSource)
 	}
-	if cfg.oauthClientMode != oauthClientModeCLI || cfg.enterpriseCredits {
-		t.Fatalf("unsafe defaults: mode=%q enterprise=%v", cfg.oauthClientMode, cfg.enterpriseCredits)
+	if cfg.oauthClientMode != oauthClientModeWorkBuddyAI || cfg.enterpriseCredits {
+		t.Fatalf("unsafe defaults: mode=%q enterprise=%v (国际版插件默认必须走 workbuddy-ai)", cfg.oauthClientMode, cfg.enterpriseCredits)
 	}
 }
 

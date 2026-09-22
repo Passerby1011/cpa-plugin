@@ -192,14 +192,16 @@ func TestPanelManualRefreshAuthenticatesBeforeEgressIP(t *testing.T) {
 	if start < 0 {
 		t.Fatal("load function not found")
 	}
-	end := strings.Index(html[start:], "\nfunction checkinResultToast")
+	end := strings.Index(html[start:], "\nasync function selectAuth")
 	if end < 0 {
 		t.Fatal("load function end not found")
 	}
 	body := html[start : start+end]
 	refresh := strings.Index(body, `await api("/refresh"`)
 	egress := strings.Index(body, `if(force&&manualRefresh) loadEgressIP();`)
-	render := strings.Index(body, `document.getElementById("autoToggle")`)
+	// 国际版移除了签到 UI：原先靠 autoToggle 断言"渲染发生在 egress 之后"，
+	// 现改用账号渲染入口作为同义锚点。
+	render := strings.Index(body, `const accounts=d.accounts||[];`)
 	if refresh < 0 || egress < 0 || render < 0 {
 		t.Fatalf("manual refresh sequence is incomplete: refresh=%d egress=%d render=%d", refresh, egress, render)
 	}
@@ -220,7 +222,7 @@ func TestPanelProgrammaticForcedLoadDoesNotRefreshEgressIP(t *testing.T) {
 	if start < 0 {
 		t.Fatal("load function not found")
 	}
-	end := strings.Index(html[start:], "\nfunction checkinResultToast")
+	end := strings.Index(html[start:], "\nasync function selectAuth")
 	if end < 0 {
 		t.Fatal("load function end not found")
 	}
