@@ -87,24 +87,64 @@
 | 证据 | 结果 |
 |---|---|
 | 宿主日志 | `[host.go:232] pluginhost: plugin loaded` |
+| 宿主日志 | `[server.go:596] management routes registered after secret key configuration` |
 | `/v0/resource/plugins/workbuddy-global/panel` | **200**，返回插件自身 HTML（`<title>WorkBuddy 面板</title>`） |
 | 对照组 `/v0/resource/plugins/does-not-exist/panel` | 404 |
+
+### 4.1 宿主自报的插件状态（`GET /v0/management/plugins`）
+
+```json
+{"id":"workbuddy-global","path":"plugins/workbuddy-global.so",
+ "configured":true,"registered":true,"enabled":true,
+ "effective_enabled":true,"supports_oauth":true}
+```
+
+四个标志位同时为真，且 **17 个配置字段完整下发**：
+
+| 字段 | 实测值 |
+|---|---|
+| `oauth_client_mode` | enum `['cli','workbuddy','workbuddy-ai']` |
+| `scheduler_mode` | enum `['off','credits']` |
+| `models` / `desensitize_terms` | array |
+| 其余 13 项 | boolean / integer / string |
+
+`oauth_client_mode` 的枚举值正确，直接验证了本轮修掉的第 4 个缺陷（改造前被
+改名误伤成 `workbuddy-global`，会导致宿主侧配置校验失败）。
+
+### 4.2 端点与鉴权矩阵
+
+| 端点 | 结果 |
+|---|---|
+| `/v0/resource/plugins/workbuddy-global/panel` | **200** |
+| `/v0/management/plugins/workbuddy-global/config` | **200** `{"enabled":true,"priority":1}` |
+| `/v0/management/plugins` | **200** |
+| 无 `Authorization` | **401** |
+| 错误 Bearer key | **401** |
 
 **这些证据证明了什么**：
 
 1. `.so` 的 C ABI 被宿主接受（ABI 匹配，无版本冲突）
-2. `Register` 被真实调用，插件被登记进路由表
+2. `Register` 被真实调用，插件被登记并置为 `effective_enabled`
 3. 路由名 `workbuddy-global` 与 `registry.json` / CI tag / `Makefile` 的标识符派生链路一致
 4. `panel.html` 经 `go:embed` 正确嵌入并被宿主取回
+5. 配置契约（字段名/类型/枚举）与宿主解析一致
+6. 管理鉴权边界正确（无密钥/错密钥均 401）
 
 **没有证明什么**：OAuth 登录、模型目录拉取、计费路径、积分面板数据 —— 这些
 需要真实国际版账号，仍列在下面的待实测清单里。
 
-> 说明：`/v0/management/plugins/*` 在本环境返回 404，原因是测试配置设了
-> `remote-management.allow-remote: false` 且未配置 api-keys，宿主**未挂载**
-> management 路由；这是配置使然，不是插件缺陷。插件只注册
-> `/v0/resource/plugins/` 与 `/v0/management` 两类路由，`panel.go` 仅接受
-> `""` / `/` / `/panel` / `/panel.html`。
+> **关于 management 端点 404 的原因（修正）**：早期一版记录把它归因于
+> `remote-management.allow-remote: false` 且未配 api-keys，**这个归因不准确**。
+> 读 `internal/api/server.go:366` 确认，管理路由是**懒注册**的：
+>
+> ```go
+> hasManagementSecret := cfg.RemoteManagement.SecretKey != "" || envManagementSecret || s.localPassword != ""
+> if hasManagementSecret { s.registerManagementRoutes() }
+> ```
+>
+> 真正缺的是 `secret-key`；`allow-remote: false` 不阻止本地挂载。补上密钥后
+> 管理端点即返回 200。插件本身只注册 `/v0/resource/plugins/` 与
+> `/v0/management` 两类路由，`panel.go` 仅接受 `""` / `/` / `/panel` / `/panel.html`。
 
 ## 五、待实测清单（需真实国际版账号）
 
