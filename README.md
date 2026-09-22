@@ -1,14 +1,13 @@
 # CPA 插件仓库
 
-[CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) 插件集合。当前提供 **WorkBuddy / CodeBuddy**、**QoderWork (CN)** 与 **QwenWork (CN)** 三个 OAuth Provider。
+[CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) 插件集合。当前提供 **WorkBuddy Global**
+一个 OAuth Provider。
 
 ## 插件
 
 | ID | 说明 | 源码 |
 |---|---|---|
-| `workbuddy` | Tencent CodeBuddy OAuth、动态模型、executor、CN 每日签到、Global 专家包、积分面板、可选积分调度 | [workbuddy/](workbuddy/) |
-| `qoderwork` | QoderWork CN（qoder.com.cn）：OAuth 设备授权 + PAT 双登录（可共存）、COSY 签名推理、动态模型、每日签到、积分面板、token 保活 | [qoderwork/](qoderwork/) |
-| `qwenwork` | QwenWork CN（gateway.qwenwork.cn）：OAuth 设备授权登录、COSY 签名推理、动态模型、积分/套餐面板、token 保活（无签到/无 PAT） | [qwenwork/](qwenwork/) |
+| `workbuddy-global` | WorkBuddy 国际版（`workbuddy.ai`）OAuth、动态模型、executor、积分生命周期、积分面板 | [workbuddy-global/](workbuddy-global/) |
 
 ## 多架构 Release
 
@@ -28,40 +27,47 @@ checksums.txt
 命名规则与官方一致：`ArchiveName(id, version, goos, goarch) = {id}_{version}_{goos}_{goarch}.zip`
 （见 CLIProxyAPI `internal/pluginstore`）。
 
-CI：push / PR 全量构建（只出 artifacts）；tag `<id>-v*`（如 `qoderwork-v0.4.1`）或 dispatch 触发**该插件独立版本**的 Release。
+CI：push / PR 全量构建（只出 artifacts）；tag `<id>-v*`（如 `workbuddy-global-v0.11.0`）
+或 dispatch 触发**该插件独立版本**的 Release。
 
 ## 安装（linux/amd64 示例）
 
 ```bash
 # 从 Release 下载
-unzip qoderwork_0.4.1_linux_amd64.zip
+unzip workbuddy-global_0.11.0_linux_amd64.zip
 # 扁平 plugins 目录（常见 docker 挂载）
-cp qoderwork.so /path/to/cliproxyapi/plugins/qoderwork.so
+cp workbuddy-global.so /path/to/cliproxyapi/plugins/workbuddy-global.so
 # 或平台子目录布局
-# mkdir -p plugins/linux/amd64 && cp qoderwork.so plugins/linux/amd64/
+# mkdir -p plugins/linux/amd64 && cp workbuddy-global.so plugins/linux/amd64/
 ```
 
 ```yaml
 plugins:
   enabled: true
-  dir: "plugins"
+  # 必须写绝对路径：相对路径按「进程工作目录」解析（官方镜像里是 /CLIProxyAPI），
+  # 写 "plugins" 会解析成 /CLIProxyAPI/plugins 从而找不到 .so
+  dir: "/path/to/cliproxyapi/plugins"
   configs:
-    workbuddy:
-      enabled: true
-    qoderwork:
-      enabled: true
-    qwenwork:
+    workbuddy-global:
       enabled: true
 ```
 
 ## 通过插件商店安装 / 更新
 
-本仓库的 `registry.json` 可直接作为 CPA 插件商店的自定义源使用。三个插件以
+本仓库的 `registry.json` 可直接作为 CPA 插件商店的自定义源使用。插件以
 `direct`（schema_version 2）方式声明各平台产物直链与 sha256——每次 Release 由
-CI 自动刷新，用户在商店 UI 即可一键安装/更新，无需手工下载。
+CI 自动刷新（`.github/scripts/sync-registry.py`），用户在商店 UI 即可一键安装/更新，
+无需手工下载。
 
 ```text
-https://raw.githubusercontent.com/hex-ci/cpa-plugin/main/registry.json
+https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/registry.json
 ```
 
-添加后在商店 UI 安装/更新 **WorkBuddy**、**QoderWork** 和 **QwenWork**。
+添加后在商店 UI 安装/更新 **WorkBuddy Global**。
+
+> **首次使用注意**：`registry.json` 里的 `artifacts` 由发版 CI 回填。在
+> `workbuddy-global-v*` 首个 Release 产出之前，该字段为空数组，而 CPA 对
+> `direct` 类型强制要求至少一个 artifact（`pluginstore/registry.go` 的
+> `ValidateInstallPlan`），此时整个源会被判为无效并报
+> `plugins[0]: direct install requires at least one artifact`。
+> 先跑一次 Release（tag 或 workflow_dispatch）即可解除。

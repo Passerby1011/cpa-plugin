@@ -1,23 +1,28 @@
-# WorkBuddy Plugin for CLIProxyAPI
+# WorkBuddy Global Plugin for CLIProxyAPI
 
 A [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) plugin that
-provides **Tencent CodeBuddy** (`copilot.tencent.com` CN and `workbuddy.ai`
-Global) as a native OAuth provider: per-account dynamic model discovery,
-streaming execution, credit-aware scheduling, daily check-in automation, and a
+provides **Tencent WorkBuddy international** (`www.workbuddy.ai`, the Global
+realm) as a native OAuth provider: per-account dynamic model discovery,
+streaming execution, credit-aware scheduling, one-shot trial claim, and a
 built-in management dashboard.
+
+This plugin targets the international service only. Credentials that turn out
+to belong to the CN realm are still detected and routed to the right gateway,
+so importing one will not break anything — but the plugin's defaults, panel and
+activities are all shaped for `workbuddy.ai`.
 
 [中文文档 → README_CN.md](README_CN.md)
 
 ## Features
 
 - **OAuth login** — multi-account `workbuddy-global-<uid>.json` auth files via the
-  host's auth store. CN and Global realms share one plugin, one config block.
-  `oauth_client_mode` picks the login channel: `cli` (default), `workbuddy`
-  (CN desktop: `platform=workbuddy` on `copilot.tencent.com`), or
+  host's auth store. `oauth_client_mode` picks the login channel and defaults to
   `workbuddy-ai` (international desktop: `platform=workbuddy-ai` on
-  `www.workbuddy.ai`). The mode only shapes the login flow — the issued token's
-  domain decides routing afterwards, so no extra config is needed to run both
-  realms side by side.
+  `www.workbuddy.ai`); `workbuddy` (CN desktop: `platform=workbuddy` on
+  `copilot.tencent.com`) and `cli` remain available for CN accounts. The mode
+  only shapes the login flow — the issued token's domain decides routing
+  afterwards, so a CN credential still reaches the CN gateway without extra
+  config.
 - **Model catalog**: by default the plugin discovers and caches each
   authenticated account's model entitlements. An optional authoritative YAML
   list can replace WorkBuddy discovery. Every model field comes from the
@@ -28,13 +33,10 @@ built-in management dashboard.
   via `host.stream.emit`) and non-streaming (SSE folded into a single
   completion). `tool_choice` normalization, Claude Code template sanitization,
   and per-realm system-message injection are built in.
-- **Credit lifecycle** — CN accounts auto-`disabled` when credits run out and
-  re-enabled when a check-in restores them. Global accounts are deleted on
-  exhaustion (one-shot trial quota). Hard credit errors from the executor
-  trigger an immediate reconcile.
-- **Daily check-in** — CN accounts are checked in at 09:00 and 21:00 local
-  time (configurable). Manual "check in all" from the panel. Per-account
-  mutex prevents duplicate claims from racing browser tabs.
+- **Credit lifecycle** — Global accounts are deleted when their credits are
+  known to be exhausted (one-shot trial quota). A CN account that ends up in
+  the store is `disabled` instead and re-enabled once its credits recover.
+  Hard credit errors from the executor trigger an immediate reconcile.
 - **Trial claim** — Global accounts can claim the one-time 250-credit expert
   trial pack from the panel.
 - **Dashboard** — embedded panel at `/v0/resource/plugins/workbuddy-global/panel`
@@ -122,17 +124,18 @@ plugins:
       # proxy failures fail closed and never fall back to CPA or a direct route.
       proxy-url: ""
 
-      # OAuth login channel (default "cli"):
-      #   cli         → CLI client profile on copilot.tencent.com (platform=CLI)
-      #   workbuddy   → CN desktop profile (platform=workbuddy)
+      # OAuth login channel (default "workbuddy-ai"):
       #   workbuddy-ai → international desktop profile: platform=workbuddy-ai on
-      #                  www.workbuddy.ai. Required to log in an international
-      #                  account; the issued token's domain then routes the
-      #                  account to the Global gateway automatically.
-      oauth_client_mode: "cli"
+      #                  www.workbuddy.ai. The default, and what an
+      #                  international account needs; the issued token's domain
+      #                  then routes the account to the Global gateway.
+      #   workbuddy   → CN desktop profile (platform=workbuddy)
+      #   cli         → CLI client profile on copilot.tencent.com (platform=CLI)
+      oauth_client_mode: "workbuddy-ai"
 
-      # Daily check-in automation for CN accounts (default true).
-      # Runs at 09:00 and 21:00 local time.
+      # Daily check-in automation. Check-in is a CN-realm mechanic and is
+      # skipped entirely for Global accounts, so this has no effect on a
+      # Global-only store; it is kept for imported CN credentials.
       checkin_auto: true
 
       # Credit lifecycle: disable CN on exhaust, delete Global on exhaust,
@@ -232,12 +235,12 @@ plugin-config generation change supplies the next bootstrap opportunity.
 
 ## Lifecycle
 
-| State | CN account | Global account |
+| State | Global account (this plugin's target) | CN account (imported credential) |
 |---|---|---|
 | Credits > 0 | active | active |
-| Credits = 0 | `disabled: true` (auth file kept) | auth file **deleted** |
-| Check-in restores credits | re-enabled | n/a (already deleted) |
-| Trial available | n/a | claimable once per account |
+| Credits = 0 | auth file **deleted** | `disabled: true` (auth file kept) |
+| Check-in restores credits | n/a (already deleted) | re-enabled |
+| Trial available | claimable once per account | n/a |
 | Unknown credits | untouched (never mis-kill) | untouched |
 
 Hard credit errors from the executor (status 402, "insufficient credits",
@@ -259,14 +262,23 @@ gofmt -l .
 go vet ./...
 ```
 
+> **Cross-compiling**: `-buildmode=c-shared` needs CGO, so each target needs its
+> own C toolchain (windows-arm64 and freebsd-amd64 in particular). A plain
+> `GOOS/GOARCH` env pair on a Linux host only produces `linux/amd64`. Use the
+> repository's CI (`build` + `build-cross` jobs) or the `Makefile`'s `release`
+> target with the matching toolchains; see
+> [docs/development.md](docs/development.md).
+
 With `proxy-url` empty, the shared request helpers preserve their existing
 routing: host-bridged requests use CPA's request-log and transport policy,
 while the established OAuth, usage-probe, Windows, and old-host direct paths
 remain unchanged. With `proxy-url` set, every plugin-initiated HTTP request
 uses the plugin proxy instead and never falls back.
 
-See [docs/development.md](docs/development.md) for the full workflow and
-[docs/architecture.md](docs/architecture.md) for the module map.
+See [docs/development.md](docs/development.md) for the full workflow,
+[docs/architecture.md](docs/architecture.md) for the module map, and
+[docs/PROVENANCE.md](docs/PROVENANCE.md) for what is verified against the
+international service versus what still needs a live account.
 
 ## License
 

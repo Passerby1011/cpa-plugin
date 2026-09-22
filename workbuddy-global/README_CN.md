@@ -1,19 +1,23 @@
-# WorkBuddy 插件（CLIProxyAPI）
+# WorkBuddy Global 插件（CLIProxyAPI）
 
-[CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) 的 **腾讯 CodeBuddy**
-（国内版 `copilot.tencent.com` + 国际版 `workbuddy.ai`）原生 OAuth 提供商插件：
-按账号动态发现模型、流式执行、积分感知调度、每日自动签到、内置管理面板。
+[CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) 的 **腾讯 WorkBuddy
+国际版**（`www.workbuddy.ai`，即 Global 区域）原生 OAuth 提供商插件：
+按账号动态发现模型、流式执行、积分感知调度、一次性专家包领取、内置管理面板。
+
+本插件只面向国际版服务。若导入的凭证实际属于 CN 区域，插件仍会正确识别并把
+它路由到对应网关（导入不会出问题），但插件的默认值、面板与活动都是按
+`workbuddy.ai` 设计的。
 
 [English → README.md](README.md)
 
 ## 功能
 
-- **OAuth 登录** — 通过宿主 auth store 管理多账号 `workbuddy-global-<uid>.json`，
-  CN 和 Global 共用一个插件、一份配置。`oauth_client_mode` 选择登录通道：
-  `cli`（默认）、`workbuddy`（国内桌面版，`platform=workbuddy` 走
-  `copilot.tencent.com`）、`workbuddy-ai`（国际桌面版，`platform=workbuddy-ai`
-  走 `www.workbuddy.ai`）。该配置只影响登录流程，登录拿到的 token 由 domain
-  字段决定后续路由，所以两个区域可以同时用，不需要额外配置。
+- **OAuth 登录** — 通过宿主 auth store 管理多账号 `workbuddy-global-<uid>.json`。
+  `oauth_client_mode` 选择登录通道，默认为 `workbuddy-ai`（国际桌面版，
+  `platform=workbuddy-ai` 走 `www.workbuddy.ai`）；`workbuddy`（国内桌面版，
+  `platform=workbuddy` 走 `copilot.tencent.com`）与 `cli` 保留给 CN 账号使用。
+  该配置只影响登录流程，登录拿到的 token 由 domain 字段决定后续路由，
+  所以 CN 凭证不需要额外配置也能走对网关。
 - **模型目录**：默认按已认证账号发现并缓存可用模型，也可以用 YAML 中的完整
   列表替代 WorkBuddy discovery。全部模型字段都来自 WorkBuddy 自己的模型目录
   （`/v3/config`），插件不访问任何第三方网站。宿主侧 `oauth-model-alias` /
@@ -21,14 +25,12 @@
 - **执行器** — OpenAI 兼容 chat completions，流式（真 SSE，走 `host.stream.emit`）
   和非流式（SSE 折叠成单个 completion）都支持。内置 `tool_choice` 归一、
   Claude Code 模板清洗、按区域注入 system message。
-- **积分生命周期** — CN 账号耗尽自动 `disabled`，签到回血后自动恢复；
-  Global 账号耗尽**删除** auth 文件（一次性 trial 额度）。Executor 遇到硬
-  积分错误立即触发 reconcile。
-- **每日签到** — CN 账号每天 09:00 和 21:00 自动签到（可配置）。面板可手动
-  全部签到。Per-account 互斥锁防止多浏览器标签并发重复签到。
+- **积分生命周期** — Global 账号在积分确认耗尽时**删除** auth 文件（一次性
+  trial 额度）；落入 store 的 CN 账号则标 `disabled`，积分回血后自动恢复。
+  Executor 遇到硬积分错误立即触发 reconcile。
 - **Trial 领取** — Global 账号可在面板领取一次性 250 积分专家加油包。
 - **积分面板** — 内嵌面板 `/v0/resource/plugins/workbuddy-global/panel`，含积分
-  进度条、套餐徽章、耗尽/禁用标记、CN/Global 筛选、凭证导入。
+  进度条、套餐徽章、耗尽/禁用标记、区域筛选、凭证导入。
 - **调度器**（可选） — `scheduler_mode: credits` 让插件选中面板选中的账号；
   `off`（默认）完全交给 CPA 内置调度。
 - **Usage 上报** — 实现 `UsagePlugin` 能力，每条请求的 usage record 转发到
@@ -106,15 +108,17 @@ plugins:
       # fail closed，不会回退到 CPA 全局代理或直连。
       proxy-url: ""
 
-      # OAuth 登录通道（默认 "cli"）：
-      #   cli          → CLI 客户端 profile，走 copilot.tencent.com（platform=CLI）
-      #   workbuddy    → 国内桌面版 profile（platform=workbuddy）
+      # OAuth 登录通道（默认 "workbuddy-ai"）：
       #   workbuddy-ai → 国际桌面版 profile：platform=workbuddy-ai 走
-      #                  www.workbuddy.ai。登录国际版账号需要它；拿到的 token
-      #                  由 domain 字段决定后续路由，自动走 Global 网关。
-      oauth_client_mode: "cli"
+      #                  www.workbuddy.ai。默认值，登录国际版账号需要它；
+      #                  拿到的 token 由 domain 字段决定后续路由，
+      #                  自动走 Global 网关。
+      #   workbuddy    → 国内桌面版 profile（platform=workbuddy）
+      #   cli          → CLI 客户端 profile（platform=CLI，copilot.tencent.com）
+      oauth_client_mode: "workbuddy-ai"
 
-      # CN 账号每日自动签到（默认 true），09:00 和 21:00 本地时间。
+      # 每日自动签到。签到是 CN 区域机制，Global 账号一律跳过；对纯
+      # Global 账号库没有实际作用，仅为导入的 CN 凭证保留。
       checkin_auto: true
 
       # 积分生命周期：CN 耗尽禁用 / Global 耗尽删除 / CN 回血恢复（默认 true）。
@@ -198,12 +202,12 @@ custom model source。新进程启动或 auth、token、plugin config generation
 
 ## 生命周期
 
-| 状态 | CN 账号 | Global 账号 |
+| 状态 | Global 账号（本插件目标） | CN 账号（导入的凭证） |
 |---|---|---|
 | 积分 > 0 | active | active |
-| 积分 = 0 | `disabled: true`（auth 文件保留） | auth 文件**删除** |
-| 签到回血 | 自动恢复 | n/a（已删） |
-| Trial 可领 | n/a | 每账号一次 |
+| 积分 = 0 | auth 文件**删除** | `disabled: true`（auth 文件保留） |
+| 签到回血 | n/a（已删） | 自动恢复 |
+| Trial 可领 | 每账号一次 | n/a |
 | 积分未知 | 不动（永不误杀） | 不动 |
 
 Executor 遇到硬积分错误（402、"insufficient credits"、"积分不足" 等）
@@ -224,6 +228,12 @@ go test -race ./...
 gofmt -l .
 go vet ./...
 ```
+
+> **交叉编译**：`-buildmode=c-shared` 依赖 CGO，每个目标平台都需要各自的 C
+> 工具链（windows-arm64 与 freebsd-amd64 尤其如此）。在 Linux 上仅设
+> `GOOS/GOARCH` 只能产出 `linux/amd64`。请用仓库 CI（`build` + `build-cross`
+> 两个 job）或 `Makefile` 的 `release` 目标配好对应工具链后编译；详见
+> [docs/development.md](docs/development.md)。
 
 `proxy-url` 为空时，共享请求 helper 保持现有路由：使用宿主桥的请求继续进入
 CPA request-log 并应用宿主 transport 策略；既有 OAuth、usage probe、Windows
