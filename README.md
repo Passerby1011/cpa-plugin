@@ -74,18 +74,20 @@ https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/registry.json
 > `plugins[0]: direct install requires at least one artifact`。
 > 先跑一次 Release（tag 或 workflow_dispatch）即可解除。
 >
-> 新增插件同理：`commandcode-go-cliproxyapi` 的 `artifacts` 在
-> `commandcode-go-cliproxyapi-v0.1.1` 首个 Release 产出后由 CI 自动回填。
+> 新增插件同理：`commandcode-go-cliproxyapi` 的 `artifacts` 已由本地构建 + Release
+> 上传后回填（三平台：linux/amd64、linux/arm64、windows/amd64）。该插件尚未纳入
+> 本仓库 CI matrix——接线补丁见 `scripts/ci-wiring-commandcode.patch`。
 
 ## 插件维护要点
 
 - **每个插件完全自包含**：独立 `go.mod`（go 1.26）、`go.sum`、`VERSION`、
   `Makefile`、`README.md`/`README_CN.md`、`LICENSE`。
 - **module 路径**统一为 `github.com/hex-ci/cpa-plugin/<id>`。
-- **版本注入**：CI 用 `-ldflags "-X main.version=<version>"` 注入版本，插件在
+- **版本注入**：构建用 `-ldflags "-X main.version=<version>"` 注入版本，插件在
   `main.go` 的 `version` 变量 + `init()` 里转发给内部包；`<id>/VERSION` 是版本源。
-- **发版**：`make -C <id> tag`（读 `<id>/VERSION`）→ 推 tag → CI 出 7 平台产物 +
-  回填 `registry.json`。
+- **发版**：`make -C <id> tag`（读 `<id>/VERSION`）→ 推 tag → CI 出多平台产物 +
+  回填 `registry.json`。`workbuddy-global` 走 CI 矩阵；`commandcode-go-cliproxyapi`
+  本版为本地构建 + Release 上传（见 `scripts/release-commandcode.py`）。
 - **`commandcode-go-cliproxyapi` 的 `api-keys` 为必填**：缺失时宿主报
   `plugin.register failed: api-keys: at least one key is required`，面板显示
   **未注册 / 未生效**——这是配置错误，不是加载或版本错误。

@@ -1,0 +1,91 @@
+diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
+index 07516fe..d2eb5a2 100644
+--- a/.github/workflows/build.yml
++++ b/.github/workflows/build.yml
+@@ -18,14 +18,14 @@ on:
+   pull_request:
+   push:
+     branches: [main]
+-    tags: ["workbuddy-global-v*"]
++    tags: ["workbuddy-global-v*", "commandcode-go-cliproxyapi-v*"]
+   workflow_dispatch:
+     inputs:
+       plugin:
+         description: "Plugin to release"
+         required: true
+         type: choice
+-        options: [workbuddy-global]
++        options: [workbuddy-global, commandcode-go-cliproxyapi]
+       version:
+         description: "Version without v (empty = plugin's VERSION file)"
+         required: false
+@@ -44,6 +44,8 @@ jobs:
+         include:
+           - dir: workbuddy-global
+             node: true
++          - dir: commandcode-go-cliproxyapi
++            node: false
+     defaults:
+       run:
+         working-directory: ${{ matrix.dir }}
+@@ -102,6 +104,32 @@ jobs:
+             goarch: amd64
+             runner: windows-2025
+             ext: dll
++          # CommandCode Go/GOAT/Pro/Max native
++          - id: commandcode-go-cliproxyapi
++            goos: linux
++            goarch: amd64
++            runner: ubuntu-24.04
++            ext: so
++          - id: commandcode-go-cliproxyapi
++            goos: linux
++            goarch: arm64
++            runner: ubuntu-24.04-arm
++            ext: so
++          - id: commandcode-go-cliproxyapi
++            goos: darwin
++            goarch: amd64
++            runner: macos-15-intel
++            ext: dylib
++          - id: commandcode-go-cliproxyapi
++            goos: darwin
++            goarch: arm64
++            runner: macos-15
++            ext: dylib
++          - id: commandcode-go-cliproxyapi
++            goos: windows
++            goarch: amd64
++            runner: windows-2025
++            ext: dll
+     defaults:
+       run:
+         shell: bash
+@@ -192,6 +220,12 @@ jobs:
+           - id: workbuddy-global
+             target: freebsd-amd64
+             ext: so
++          - id: commandcode-go-cliproxyapi
++            target: windows-arm64
++            ext: dll
++          - id: commandcode-go-cliproxyapi
++            target: freebsd-amd64
++            ext: so
+     defaults:
+       run:
+         shell: bash
+@@ -335,12 +369,14 @@ jobs:
+           fi
+           case "$P" in
+             workbuddy-global) ;;
++            commandcode-go-cliproxyapi) ;;
+             *) echo "unsupported plugin $P"; exit 1 ;;
+           esac
+           V="${V#v}"
+           # Display name for release titles/notes; the plugin id stays lowercase.
+           case "$P" in
+             workbuddy-global) NAME="WorkBuddy Global" ;;
++            commandcode-go-cliproxyapi) NAME="CommandCode Go/GOAT/Pro/Max" ;;
+           esac
+           {
+             echo "plugin=$P"

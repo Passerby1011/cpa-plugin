@@ -72,6 +72,49 @@
           }
         ]
       }
+    },
+    {
+      "id": "commandcode-go-cliproxyapi",
+      "name": "CommandCode Go/GOAT/Pro/Max",
+      "description": "CommandCode Go/GOAT/Pro/Max plan as a single CLIProxyAPI provider (commandcode/ prefix): OpenAI, Anthropic and Responses clients off one API-key pool, reasoning/thinking preservation, chat-completions-only catalog routing, host-scheduled key pool and a CommandCode quota page. Repackaged from mczhoucn/commandcode-go-cliproxyapi (MIT).",
+      "author": "mczhoucn",
+      "version": "0.1.1",
+      "repository": "https://github.com/Passerby1011/cpa-plugin",
+      "homepage": "https://github.com/Passerby1011/cpa-plugin/tree/main/commandcode-go-cliproxyapi",
+      "license": "MIT",
+      "tags": [
+        "Provider",
+        "Executor",
+        "CommandCode",
+        "Quota",
+        "Management"
+      ],
+      "install": {
+        "type": "direct",
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-go-cliproxyapi-v0.1.1/commandcode-go-cliproxyapi_0.1.1_linux_amd64.zip",
+            "sha256": "10d4b04dac9e629c496048f8fdbd29b1d4dfdde32f1a7d3a00c8974e56ee2a49",
+            "size": 2330769
+          },
+          {
+            "goos": "linux",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-go-cliproxyapi-v0.1.1/commandcode-go-cliproxyapi_0.1.1_linux_arm64.zip",
+            "sha256": "96ce3420bca280e52fc5e74e1693358458eb79a11f34fb6cf8ee3a1add3f29c6",
+            "size": 2113912
+          },
+          {
+            "goos": "windows",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-go-cliproxyapi-v0.1.1/commandcode-go-cliproxyapi_0.1.1_windows_amd64.zip",
+            "sha256": "ce938f9e3509c17b15b927d4934c6da1e3b5d9c96104d5e0d88ae98d4e7598cf",
+            "size": 2295185
+          }
+        ]
+      }
     }
   ]
 }
