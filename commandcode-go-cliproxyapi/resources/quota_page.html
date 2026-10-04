@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CommandCode Quota</title>
+<style>
+:root {
+  --bg-primary: #f0eee8;
+  --bg-secondary: #faf9f5;
+  --bg-tertiary: #e9e6df;
+  --text-primary: #2d2a26;
+  --text-secondary: #6d6760;
+  --text-tertiary: #a29c95;
+  --border-color: #e3e1db;
+  --primary-color: #8b8680;
+  --primary-hover: #7f7a74;
+  --success-color: #188038;
+  --warning-color: #b06000;
+  --error-color: #b3261e;
+  --radius-md: 8px;
+  --shadow: 0 1px 3px rgba(45, 42, 38, .12);
+}
+[data-theme="white"] {
+  --bg-primary: #f0eee8;
+  --bg-secondary: #faf9f5;
+  --bg-tertiary: #e9e6df;
+  --text-primary: #2d2a26;
+  --text-secondary: #6d6760;
+  --text-tertiary: #a29c95;
+  --border-color: #e3e1db;
+}
+[data-theme="dark"] {
+  --bg-primary: #1d1b18;
+  --bg-secondary: #151412;
+  --bg-tertiary: #262320;
+  --text-primary: #f0eee8;
+  --text-secondary: #b8b1a8;
+  --text-tertiary: #8d867e;
+  --border-color: #3c3833;
+  --primary-color: #8f8981;
+  --primary-hover: #a29b92;
+  --shadow: 0 1px 3px rgba(0, 0, 0, .35);
+}
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--bg-secondary); font: 14px/1.45 system-ui, sans-serif; }
+.quota-page { max-width: 1160px; margin: 0 auto; }
+.quota-header { margin-bottom: 24px; }
+.quota-title { margin: 0; font-size: 28px; font-weight: 700; line-height: 1.2; }
+.quota-description { margin: 8px 0 0; color: var(--text-secondary); }
+.quota-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; }
+.quota-card { padding: 20px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-primary); box-shadow: var(--shadow); }
+.quota-card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.credential-badge { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; color: #fff; background: var(--primary-color); font-size: 12px; font-weight: 700; }
+.credential-name { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 16px; font-weight: 600; }
+.quota-row { padding: 14px 0; border-top: 1px solid var(--border-color); }
+.quota-row-header, .quota-meta { display: flex; justify-content: space-between; gap: 12px; }
+.quota-label { font-weight: 600; text-transform: capitalize; }
+.quota-percent { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.quota-track { height: 8px; margin: 8px 0 6px; overflow: hidden; border-radius: 999px; background: var(--bg-tertiary); }
+.quota-fill { height: 100%; border-radius: inherit; background: var(--success-color); transition: width .2s ease; }
+.quota-fill.is-exceeded { background: var(--error-color); }
+.quota-meta.is-exceeded { color: var(--error-color); }
+.quota-meta { color: var(--text-secondary); font-size: 12px; }
+.quota-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+.quota-refresh { border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 10px; color: var(--text-primary); background: var(--bg-tertiary); font: inherit; font-size: 12px; cursor: pointer; }
+.quota-refresh:hover { border-color: var(--primary-color); background: var(--bg-primary); }
+.quota-refresh:disabled { cursor: not-allowed; opacity: .6; }
+.quota-error { color: var(--error-color); }
+.quota-warning { color: var(--warning-color); }
+.quota-muted { color: var(--text-secondary); }
+@media (max-width: 768px) {
+  body { padding: 20px 16px; }
+  .quota-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="quota-page">
+  <header class="quota-header"><h1 class="quota-title">CommandCode Quota</h1><p class="quota-description">Usage for each configured credential. New accounts refresh automatically.</p></header>
+  <main id="app"><p class="quota-muted">Loading credentials...</p></main>
+</div>
+<script>
+(() => {
+  try {
+    const parentDocument = window.parent && window.parent !== window ? window.parent.document : null;
+    const parentRoot = parentDocument && parentDocument.documentElement;
+    const syncTheme = () => {
+      if (!parentRoot) return;
+      const theme = parentRoot.getAttribute("data-theme");
+      if (theme === "white" || theme === "dark") document.documentElement.setAttribute("data-theme", theme);
+      else document.documentElement.removeAttribute("data-theme");
+      const secondary = getComputedStyle(parentRoot).getPropertyValue("--bg-secondary").trim();
+      if (secondary) document.documentElement.style.setProperty("--bg-secondary", secondary);
+      document.body.style.backgroundColor = secondary || "var(--bg-secondary)";
+      if (window.frameElement) {
+        window.frameElement.style.backgroundColor = secondary || "transparent";
+        if (window.frameElement.parentElement) window.frameElement.parentElement.style.backgroundColor = secondary || "transparent";
+      }
+    };
+    syncTheme();
+    if (parentRoot) new MutationObserver(syncTheme).observe(parentRoot, {attributes: true, attributeFilter: ["data-theme"]});
+  } catch (_) {}
+})();
+</script>
+<script>
+(() => {
+  const app = document.getElementById("app");
+  const endpoint = "/v0/management/plugins/commandcode-go-cliproxyapi/quota-usage";
+  const storageKey = "commandcode-go-cliproxyapi:quota";
+  const values = new Map();
+  const labels = new Map();
+  const fetchedAt = new Map();
+  const errors = new Map();
+  const inFlight = new Set();
+  let cache = {};
+  try {
+    const stored = sessionStorage.getItem(storageKey);
+    const parsed = stored ? JSON.parse(stored) : {};
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) cache = parsed;
+  } catch (_) {}
+  Object.entries(cache).forEach(([keyID, entry]) => {
+    if (!entry || typeof entry !== "object" || !entry.usage || typeof entry.usage !== "object") return;
+    values.set(keyID, entry.usage);
+    if (typeof entry.label === "string" && entry.label) labels.set(keyID, entry.label);
+    if (typeof entry.fetched_at === "string") fetchedAt.set(keyID, entry.fetched_at);
+  });
+  function saveCache() {
+    try { sessionStorage.setItem(storageKey, JSON.stringify(cache)); } catch (_) {}
+  }
+  function applyUsage(keyID, usage, label) {
+    const timestamp = new Date().toISOString();
+    values.set(keyID, usage);
+    if (label) labels.set(keyID, label);
+    fetchedAt.set(keyID, timestamp);
+    cache[keyID] = {usage, fetched_at: timestamp, label: labels.get(keyID) || ""};
+    saveCache();
+  }
+  function refreshCard(card, cards, alreadyQueued) {
+    if (!alreadyQueued) {
+      if (inFlight.has(card.key_id)) return Promise.resolve();
+      inFlight.add(card.key_id);
+      errors.delete(card.key_id);
+      render(cards);
+    }
+    return request({key_id: card.key_id}).then(result => {
+      inFlight.delete(card.key_id);
+      if (result.error) {
+        errors.set(card.key_id, result.error);
+        render(cards);
+        return;
+      }
+      if (result.email) card.email = result.email;
+      applyUsage(card.key_id, result.usage, result.label);
+      render(cards);
+    }).catch(err => {
+      inFlight.delete(card.key_id);
+      errors.set(card.key_id, err.message || "Refresh failed");
+      render(cards);
+    });
+  }
+  function auth() {
+    const raw = localStorage.getItem("cli-proxy-auth");
+    if (!raw) return "";
+    try {
+      let decoded = raw;
+      if (raw.startsWith("enc::v1::")) {
+        const bytes = Uint8Array.from(atob(raw.slice(9)), char => char.charCodeAt(0));
+        const seed = new TextEncoder().encode("cli-proxy-api-webui::secure-storage|" + location.host + "|" + navigator.userAgent);
+        for (let i = 0; i < bytes.length; i++) bytes[i] ^= seed[i % seed.length];
+        decoded = new TextDecoder().decode(bytes);
+      }
+      const parsed = JSON.parse(decoded);
+      if (parsed && parsed.state && parsed.state.managementKey) return typeof parsed.state.managementKey === "string" ? parsed.state.managementKey : "";
+      return "";
+    } catch (_) { return ""; }
+  }
+  function request(body) {
+    const headers = {"Content-Type": "application/json"};
+    const key = auth();
+    if (key) headers.Authorization = "Bearer " + key;
+    return fetch(endpoint, {method: "POST", headers, body: JSON.stringify(body)}).then(async response => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Request failed");
+      return data;
+    });
+  }
+  function text(parent, value) { const node = document.createElement("span"); node.textContent = value == null || value === "" ? "-" : value; parent.appendChild(node); }
+  function renderUsage(row, usage, extraParts, withDaysLeft) {
+    const value = document.createElement("div"); value.className = "quota-percent";
+    const track = document.createElement("div"); track.className = "quota-track";
+    const fill = document.createElement("div"); fill.className = usage.status === "exceeded" ? "quota-fill is-exceeded" : "quota-fill";
+    const percent = Math.max(0, Math.min(100, Number(usage.percent) || 0));
+    fill.style.width = percent + "%";
+    track.setAttribute("role", "progressbar"); track.setAttribute("aria-valuemin", "0"); track.setAttribute("aria-valuemax", "100"); track.setAttribute("aria-valuenow", String(percent)); track.setAttribute("aria-label", "Quota used"); track.appendChild(fill);
+    value.textContent = percent + "%";
+    const meta = document.createElement("div"); meta.className = usage.status === "exceeded" ? "quota-meta is-exceeded" : "quota-meta";
+    const parts = [usage.status || "ok"];
+    if (Number(usage.cap) > 0) parts.push((Number(usage.used) || 0).toFixed(2) + " / " + Number(usage.cap).toFixed(2) + " credits");
+    (extraParts || []).forEach(part => parts.push(part));
+    if (usage.resets_at) {
+      const reset = new Date(usage.resets_at);
+      parts.push("resets " + reset.toLocaleString());
+      if (withDaysLeft && !Number.isNaN(reset.getTime())) {
+        const days = Math.max(0, Math.ceil((reset.getTime() - Date.now()) / 864e5));
+        parts.push(days === 1 ? "1 day left" : days + " days left");
+      }
+    }
+    text(meta, parts.join(" · "));
+    row.append(value, track, meta);
+  }
+  function render(cards) {
+    app.textContent = "";
+    if (!cards.length) { const p = document.createElement("p"); p.className = "quota-muted"; p.setAttribute("role", "status"); p.textContent = "No configured credentials."; app.appendChild(p); return; }
+    const grid = document.createElement("div"); grid.className = "quota-grid";
+    cards.forEach(card => {
+      const section = document.createElement("section"); section.className = "quota-card";
+      const header = document.createElement("div"); header.className = "quota-card-header";
+      const cached = values.get(card.key_id);
+      const badge = document.createElement("span"); badge.className = "credential-badge"; badge.textContent = (cached && cached.plan) || "CC"; badge.setAttribute("aria-hidden", "true");
+      const title = document.createElement("h2"); title.className = "credential-name"; title.textContent = labels.get(card.key_id) || card.label; header.append(badge, title); section.appendChild(header);
+      [["five_hour", "5-hour window"], ["weekly", "Weekly window"]].forEach(entry => {
+        const name = entry[0];
+        const row = document.createElement("div"); row.className = "quota-row";
+        const rowHeader = document.createElement("div"); rowHeader.className = "quota-row-header"; const label = document.createElement("span"); label.className = "quota-label"; label.textContent = entry[1]; rowHeader.appendChild(label); row.appendChild(rowHeader);
+        const usage = values.get(card.key_id) && values.get(card.key_id)[name];
+        if (usage) renderUsage(row, usage, null, name === "weekly"); else { const pending = document.createElement("div"); pending.className = "quota-meta"; pending.textContent = "Not refreshed"; row.appendChild(pending); }
+        section.appendChild(row);
+      });
+      if (cached) {
+        const row = document.createElement("div"); row.className = "quota-row";
+        const rowHeader = document.createElement("div"); rowHeader.className = "quota-row-header"; const label = document.createElement("span"); label.className = "quota-label"; label.textContent = "Monthly credits"; rowHeader.appendChild(label); row.appendChild(rowHeader);
+        const left = Number(cached.credits_left) || 0;
+        const month = cached.month;
+        if (month) { renderUsage(row, month, [left.toFixed(2) + " credits left"], true); } else { const meta = document.createElement("div"); meta.className = "quota-meta"; text(meta, left.toFixed(2) + " credits left (plan unknown)"); row.appendChild(meta); }
+        section.appendChild(row);
+      }
+      const updated = fetchedAt.get(card.key_id);
+      if (updated) { const timestamp = document.createElement("div"); timestamp.className = "quota-meta"; timestamp.textContent = "Updated " + new Date(updated).toLocaleString(); section.appendChild(timestamp); }
+      const actions = document.createElement("div"); actions.className = "quota-actions";
+      const button = document.createElement("button"); button.className = "quota-refresh"; button.textContent = inFlight.has(card.key_id) ? "Refreshing..." : "Refresh"; button.disabled = inFlight.has(card.key_id); button.setAttribute("aria-label", "Refresh " + card.label);
+      const error = document.createElement("span"); error.className = "quota-error"; error.setAttribute("role", "status"); error.textContent = errors.get(card.key_id) || "";
+      button.onclick = () => { refreshCard(card, cards); };
+      actions.append(button, error); section.appendChild(actions); grid.appendChild(section);
+    });
+    app.appendChild(grid);
+  }
+  if (!auth()) { app.textContent = ""; const p = document.createElement("p"); p.className = "quota-error"; p.setAttribute("role", "status"); p.textContent = "Enable Remember password in Management Center to use this page."; app.appendChild(p); return; }
+  request({}).then(result => {
+    const cards = result.cards || [];
+    const configured = new Set(cards.map(card => card.key_id));
+    Object.keys(cache).forEach(keyID => {
+      if (!configured.has(keyID)) { delete cache[keyID]; values.delete(keyID); labels.delete(keyID); fetchedAt.delete(keyID); }
+    });
+    cards.forEach(card => {
+      if (card.email && !labels.has(card.key_id)) labels.set(card.key_id, card.label);
+    });
+    saveCache();
+    const missing = cards.filter(card => !card.email);
+    missing.forEach(card => inFlight.add(card.key_id));
+    render(cards);
+    missing.forEach(card => refreshCard(card, cards, true));
+  }).catch(err => { app.textContent = ""; const p = document.createElement("p"); p.className = "quota-error"; p.setAttribute("role", "status"); p.textContent = err.message || "Unable to load credentials."; app.appendChild(p); });
+})();
+</script>
+</body>
+</html>

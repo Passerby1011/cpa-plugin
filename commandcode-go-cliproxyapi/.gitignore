@@ -1,0 +1,23 @@
+# Build artifacts
+*.so
+*.dylib
+*.dll
+*.h
+bin/
+dist/
+
+# Bare `go build` binary (no extension)
+commandcode-go-cliproxyapi
+
+# Test artifacts
+*.test
+coverage.out
+coverage.html
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
