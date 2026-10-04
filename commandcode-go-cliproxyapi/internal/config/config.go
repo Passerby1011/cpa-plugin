@@ -47,6 +47,55 @@ type RouteOverride struct {
 	Endpoint string `yaml:"endpoint"`
 }
 
+// ModelFilter restricts which discovered models are published and routable.
+//
+// Semantics (deliberately simple, exact-match only):
+//   - Allow empty  -> every discovered model is eligible.
+//   - Allow set    -> only listed models are eligible.
+//   - Deny         -> always wins: a denied model is excluded even if allowed.
+//
+// Entries match either the upstream id ("deepseek/deepseek-v4.1-flash") or
+// the client-facing id with the prefix applied
+// ("commandcode/deepseek/deepseek-v4.1-flash"), so an operator can copy
+// whichever id they see in the panel or in /v1/models.
+//
+// Filtering happens while the catalog snapshot is built, so the excluded
+// models disappear everywhere at once: /v1/models, model.static,
+// model.for_auth, the host model registry, and executor lookup.
+type ModelFilter struct {
+	Allow []string
+	Deny  []string
+}
+
+// IsEmpty reports whether the filter would keep every model.
+func (f ModelFilter) IsEmpty() bool {
+	return len(f.Allow) == 0 && len(f.Deny) == 0
+}
+
+// Excludes reports whether a model identified by upstreamID and publicID is
+// filtered out by this config.
+func (f ModelFilter) Excludes(upstreamID, publicID string) bool {
+	if f.matches(f.Deny, upstreamID, publicID) {
+		return true
+	}
+	if len(f.Allow) == 0 {
+		return false
+	}
+	return !f.matches(f.Allow, upstreamID, publicID)
+}
+
+func (f ModelFilter) matches(list []string, upstreamID, publicID string) bool {
+	for _, want := range list {
+		if want == "" {
+			continue
+		}
+		if want == upstreamID || want == publicID {
+			return true
+		}
+	}
+	return false
+}
+
 type Config struct {
 	BaseURL          string
 	CatalogURL       string
@@ -55,6 +104,7 @@ type Config struct {
 	Catalog          Catalog
 	Protocols        Protocols
 	RouteOverrides   map[string]RouteOverride
+	Models           ModelFilter
 	AllowHTTP        bool
 	RequestTimeout   time.Duration
 	MaxResponseBytes int64
@@ -65,6 +115,11 @@ type Config struct {
 	// Load still rejects an empty key list, so a plugin that IS configured
 	// keeps every existing validation guarantee.
 	Pending bool
+}
+
+type rawModelFilter struct {
+	Allow []string `yaml:"allow"`
+	Deny  []string `yaml:"deny"`
 }
 
 // rawConfig mirrors the YAML shape; pointer fields distinguish "unset"
@@ -78,6 +133,7 @@ type rawConfig struct {
 	Catalog          rawCatalog               `yaml:"catalog"`
 	Protocols        rawProtocols             `yaml:"protocols"`
 	RouteOverrides   map[string]RouteOverride `yaml:"route-overrides"`
+	Models           rawModelFilter           `yaml:"models"`
 	AllowHTTP        bool                     `yaml:"allow-http"`
 	RequestTimeout   *string                  `yaml:"request-timeout"`
 	MaxResponseBytes *int64                   `yaml:"max-response-bytes"`
@@ -167,7 +223,11 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 			Messages:        orDefault(raw.Protocols.Messages, true),
 			Responses:       orDefault(raw.Protocols.Responses, true),
 		},
-		RouteOverrides:   raw.RouteOverrides,
+		RouteOverrides: raw.RouteOverrides,
+		Models: ModelFilter{
+			Allow: normalizeModelList(raw.Models.Allow),
+			Deny:  normalizeModelList(raw.Models.Deny),
+		},
 		AllowHTTP:        raw.AllowHTTP,
 		RequestTimeout:   requestTimeout,
 		MaxResponseBytes: orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),
@@ -262,6 +322,19 @@ func (c Config) validateCommon() error {
 	if c.ModelPrefix.Enabled && !validPrefix(c.ModelPrefix.Value) {
 		return fmt.Errorf("model-prefix.value: invalid provider-ID characters %q", c.ModelPrefix.Value)
 	}
+	// A model id listed in a filter must at least look like an id; an entry
+	// containing whitespace or a slash-only value is a typo that would
+	// silently exclude everything under an allow list.
+	for _, group := range []struct {
+		name   string
+		values []string
+	}{{"models.allow", c.Models.Allow}, {"models.deny", c.Models.Deny}} {
+		for _, id := range group.values {
+			if strings.ContainsAny(id, " 	\n") {
+				return fmt.Errorf("%s: entry %q must not contain whitespace", group.name, id)
+			}
+		}
+	}
 	return nil
 }
 
@@ -328,4 +401,26 @@ func orDefault[T any](p *T, def T) T {
 		return *p
 	}
 	return def
+}
+
+// normalizeModelList trims entries, drops empties and exact duplicates, and
+// keeps first-seen order so a saved config round-trips predictably.
+func normalizeModelList(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, raw := range in {
+		v := strings.TrimSpace(raw)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

@@ -1142,3 +1142,91 @@ func TestRefreshDataKeyAbsentVsEmpty(t *testing.T) {
 		t.Fatalf("intended clear must stay silent, got %v", got)
 	}
 }
+
+// ---- models.allow / models.deny ---------------------------------------
+
+func TestModelFilterAllowAndDenyAtSnapshotBuild(t *testing.T) {
+	catalogBody := `{"data":[
+		{"id":"deepseek/deepseek-v4.1-flash"},
+		{"id":"Qwen/qwen3-max"},
+		{"id":"z-ai/glm-5.3-flash"}
+	]}`
+	cfg := testCfg()
+	cfg.Models = config.ModelFilter{
+		Allow: []string{"deepseek/deepseek-v4.1-flash", "Qwen/qwen3-max"},
+		Deny:  []string{"Qwen/qwen3-max"},
+	}
+	m := newManager(cfg, &fakeClient{resp: pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(catalogBody)}})
+	mustRefresh(t, m)
+
+	got := map[string]bool{}
+	for _, mo := range m.Models() {
+		got[mo.UpstreamID] = true
+	}
+	if !got["deepseek/deepseek-v4.1-flash"] {
+		t.Errorf("allowed model missing: %+v", got)
+	}
+	if got["z-ai/glm-5.3-flash"] {
+		t.Errorf("model absent from allow list must be excluded: %+v", got)
+	}
+	if got["Qwen/qwen3-max"] {
+		t.Errorf("deny must win over allow: %+v", got)
+	}
+
+	// A filtered model must not resolve, by either id spelling, or the
+	// executor would still be able to route it.
+	for _, id := range []string{"Qwen/qwen3-max", "commandcode/Qwen/qwen3-max"} {
+		if _, ok := m.Lookup(id); ok {
+			t.Errorf("Lookup(%q) succeeded for a filtered model", id)
+		}
+	}
+	if _, ok := m.Lookup("commandcode/deepseek/deepseek-v4.1-flash"); !ok {
+		t.Error("Lookup of an allowed model failed (public id)")
+	}
+
+	// The exclusion is diagnosed rather than silent.
+	var diagnosed int
+	for _, u := range m.Unsupported() {
+		if u.Reason == "excluded by models.allow/deny" {
+			diagnosed++
+		}
+	}
+	if diagnosed != 2 {
+		t.Errorf("filtered diagnostics = %d, want 2; unsupported=%+v", diagnosed, m.Unsupported())
+	}
+}
+
+func TestModelFilterEmptyKeepsEveryModel(t *testing.T) {
+	catalogBody := `{"data":[{"id":"a/one"},{"id":"b/two"}]}`
+	cfg := testCfg()
+	m := newManager(cfg, &fakeClient{resp: pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(catalogBody)}})
+	mustRefresh(t, m)
+	if got := len(m.Models()); got != 2 {
+		t.Errorf("models = %d, want 2 with an empty filter", got)
+	}
+}
+
+func TestModelFilterDenyOnly(t *testing.T) {
+	catalogBody := `{"data":[{"id":"a/one"},{"id":"b/two"}]}`
+	cfg := testCfg()
+	cfg.Models = config.ModelFilter{Deny: []string{"b/two"}}
+	m := newManager(cfg, &fakeClient{resp: pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(catalogBody)}})
+	mustRefresh(t, m)
+	if got := len(m.Models()); got != 1 {
+		t.Fatalf("models = %d, want 1 with deny-only", got)
+	}
+	if m.Models()[0].UpstreamID != "a/one" {
+		t.Errorf("surviving model = %q", m.Models()[0].UpstreamID)
+	}
+}
+
+func TestModelFilterMatchesPublicIDInAllow(t *testing.T) {
+	catalogBody := `{"data":[{"id":"a/one"},{"id":"b/two"}]}`
+	cfg := testCfg()
+	cfg.Models = config.ModelFilter{Allow: []string{"commandcode/a/one"}}
+	m := newManager(cfg, &fakeClient{resp: pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(catalogBody)}})
+	mustRefresh(t, m)
+	if got := len(m.Models()); got != 1 {
+		t.Fatalf("models = %d, want 1; a prefixed allow entry must match its upstream id", got)
+	}
+}

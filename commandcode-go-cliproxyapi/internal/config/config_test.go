@@ -336,3 +336,72 @@ func TestValidateURLRejectsQueryFragmentUserinfo(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadModelsFilterParsesAndNormalizes(t *testing.T) {
+	c, err := Load([]byte(withKey +
+		"models:\n" +
+		"  allow:\n" +
+		"    - deepseek/deepseek-v4.1-flash\n" +
+		"    - \"  z-ai/glm-5.3-flash  \"\n" +
+		"    - deepseek/deepseek-v4.1-flash\n" +
+		"    - \"\"\n" +
+		"  deny:\n" +
+		"    - Qwen/qwen3-max\n"))
+	if err != nil {
+		t.Fatalf("Load(models) failed: %v", err)
+	}
+	wantAllow := []string{"deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3-flash"}
+	if len(c.Models.Allow) != len(wantAllow) {
+		t.Fatalf("Allow = %v, want %v (trimmed, deduped, empties dropped)", c.Models.Allow, wantAllow)
+	}
+	for i, want := range wantAllow {
+		if c.Models.Allow[i] != want {
+			t.Errorf("Allow[%d] = %q, want %q", i, c.Models.Allow[i], want)
+		}
+	}
+	if len(c.Models.Deny) != 1 || c.Models.Deny[0] != "Qwen/qwen3-max" {
+		t.Errorf("Deny = %v", c.Models.Deny)
+	}
+}
+
+func TestLoadModelsFilterDefaultsEmpty(t *testing.T) {
+	c, err := Load([]byte(withKey))
+	if err != nil {
+		t.Fatalf("Load(minimal): %v", err)
+	}
+	if !c.Models.IsEmpty() {
+		t.Errorf("Models = %+v, want empty filter", c.Models)
+	}
+	if c.Models.Excludes("anything", "commandcode/anything") {
+		t.Error("empty filter must not exclude any model")
+	}
+}
+
+func TestLoadModelsFilterRejectsWhitespaceEntry(t *testing.T) {
+	_, err := Load([]byte(withKey + "models:\n  deny:\n    - \"two words\"\n"))
+	requireErrContains(t, err, "models.deny")
+}
+
+func TestModelFilterDenyWinsOverAllow(t *testing.T) {
+	f := ModelFilter{Allow: []string{"a", "b"}, Deny: []string{"b"}}
+	if f.Excludes("a", "commandcode/a") {
+		t.Error("allowed model excluded")
+	}
+	if !f.Excludes("b", "commandcode/b") {
+		t.Error("deny must win over allow")
+	}
+	if !f.Excludes("c", "commandcode/c") {
+		t.Error("model absent from a non-empty allow list must be excluded")
+	}
+}
+
+func TestModelFilterMatchesPrefixedAndBareIDs(t *testing.T) {
+	f := ModelFilter{Allow: []string{"commandcode/deepseek/x"}}
+	if f.Excludes("deepseek/x", "commandcode/deepseek/x") {
+		t.Error("public id in allow must match")
+	}
+	g := ModelFilter{Deny: []string{"deepseek/x"}}
+	if !g.Excludes("deepseek/x", "commandcode/deepseek/x") {
+		t.Error("upstream id in deny must match")
+	}
+}

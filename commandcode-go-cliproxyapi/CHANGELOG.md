@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.3
+
+### 修复
+
+- **插件被错挂到 OAuth 登录页**：注册时声明的新能力字段 `interactive_login`
+  现在为 `false`。CommandCode 用 API Key 认证，没有 OAuth/设备码流程，
+  因此登录页上那个按钮点下去必然报 `failed to generate authorization url`。
+  插件仍保留 `auth_provider`（宿主靠它解析 auth 记录、把 `api_key` 交给
+  executor），只是不再被当作可交互登录的 provider。
+  > **此修复需要宿主支持 `interactive_login` 字段。** 旧宿主会忽略该字段，
+  > OAuth 入口仍会显示。宿主补丁见仓库 `scripts/host-interactive-login.patch`。
+
+### 新增
+
+- **`models.allow` / `models.deny` 模型过滤**：可只发布指定模型、屏蔽指定模型。
+  语义：`allow` 为空=全部放行；`allow` 非空=仅放行列出项；`deny` 永远优先。
+  条目可写上游 id（`deepseek/deepseek-v4.1-flash`）或带前缀的公开 id
+  （`commandcode/deepseek/deepseek-v4.1-flash`）。过滤在 catalog 快照构建时执行，
+  被排除的模型同时从 `/v1/models`、`model.static`、`model.for_auth`、
+  宿主模型注册表和 executor 查找中消失，并给出 `excluded by models.allow/deny` 诊断。
+- **WebUI 新增 `models` 字段**（object/JSON），可直接在插件管理页配置。
+
+## 0.1.2
 ## 0.1.2
 
 ### 修复

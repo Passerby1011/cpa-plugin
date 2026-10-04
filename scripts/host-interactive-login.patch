@@ -1,0 +1,71 @@
+# Host patch: separate "auth parsing" from "interactive OAuth login".
+#
+# Required for commandcode-go-cliproxyapi >= 0.1.3 to be hidden from the
+# OAuth login page. Auth parsing (ParseAuths / authProviderRecord) keeps
+# keying off AuthProvider alone, so credentials still resolve and the
+# executor still receives api_key; only the login page stops offering it.
+#
+# Backward compatible: plugins that omit interactive_login are treated as
+# true (historic behaviour), so existing plugins are unaffected.
+#
+# Apply against router-for-me/CLIProxyAPI v8.0.13 from the repo root:
+#   git apply scripts/host-interactive-login.patch
+#
+--- a/sdk/pluginapi/types.go
++++ b/sdk/pluginapi/types.go
+@@ -76,6 +76,12 @@
+ 	ModelProvider ModelProvider
+ 	// AuthProvider lets the host parse, login, poll, and refresh plugin provider auths.
+ 	AuthProvider AuthProvider
++	// InteractiveLogin tells the host whether AuthProvider can drive an
++	// interactive login (OAuth/device) flow, so the login page only offers
++	// providers that can actually complete one. Providers that authenticate
++	// with a manually-supplied key keep AuthProvider (the host still needs it
++	// to parse their auth records) but set this false.
++	InteractiveLogin bool
+ 	// FrontendAuthProvider authenticates frontend requests before proxy handling.
+ 	FrontendAuthProvider FrontendAuthProvider
+ 	// FrontendAuthProviderExclusive makes this frontend auth provider the only active request auth provider when selected.
+--- a/internal/pluginhost/rpc_schema.go
++++ b/internal/pluginhost/rpc_schema.go
+@@ -22,6 +22,10 @@
+ 	ModelRegistrar                bool                         `json:"model_registrar"`
+ 	ModelProvider                 bool                         `json:"model_provider"`
+ 	AuthProvider                  bool                         `json:"auth_provider"`
++	// InteractiveLogin reports whether AuthProvider can complete an
++	// interactive login flow. Pointer so an older plugin that omits the
++	// field keeps the historic behaviour (treated as true).
++	InteractiveLogin              *bool                        `json:"interactive_login,omitempty"`
+ 	FrontendAuthProvider          bool                         `json:"frontend_auth_provider"`
+ 	FrontendAuthProviderExclusive bool                         `json:"frontend_auth_provider_exclusive"`
+ 	Scheduler                     bool                         `json:"scheduler"`
+--- a/internal/pluginhost/rpc_client.go
++++ b/internal/pluginhost/rpc_client.go
+@@ -110,6 +110,13 @@
+ 			rpcPluginAdapter: adapter,
+ 			identifier:       identifier,
+ 		}
++		// A plugin that omits interactive_login predates the field, so keep
++		// its historic behaviour (shown on the login page).
++		interactiveLogin := true
++		if resp.Capabilities.InteractiveLogin != nil {
++			interactiveLogin = *resp.Capabilities.InteractiveLogin
++		}
++		plugin.Capabilities.InteractiveLogin = interactiveLogin
+ 	}
+ 	if resp.Capabilities.FrontendAuthProvider {
+ 		plugin.Capabilities.FrontendAuthProvider = rpcFrontendAuthProvider{rpcPluginAdapter: adapter}
+--- a/internal/pluginhost/snapshot.go
++++ b/internal/pluginhost/snapshot.go
+@@ -93,7 +93,10 @@
+ 			ID:            record.id,
+ 			Priority:      record.priority,
+ 			Metadata:      clonePluginMetadata(record.meta),
+-			SupportsOAuth: authProvider != nil,
++			// SupportsOAuth drives the login page. ParseAuths/authProviderRecord
++			// still key off AuthProvider alone, so a provider that only parses
++			// manually-supplied keys keeps working while staying off the login page.
++			SupportsOAuth: authProvider != nil && record.plugin.Capabilities.InteractiveLogin,
+ 			OAuthProvider: oauthProvider,
+ 			SupportsQuota: quotaProvider != nil,
+ 			QuotaProvider: quotaIdentifier,

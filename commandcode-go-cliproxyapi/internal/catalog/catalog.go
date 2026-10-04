@@ -264,6 +264,21 @@ func (m *Manager) swap(entries []rawModel, extraWarns ...string) {
 			unsup = append(unsup, UnsupportedModel{UpstreamID: e.ID, Reason: "no route determined"})
 			continue
 		}
+		// models.allow/deny runs at snapshot build so an excluded model is
+		// absent from every surface at once (model list, model.static,
+		// model.for_auth, the host registry, and executor lookup). It is
+		// checked after route resolution so a demoted model still reports
+		// the more specific route/protocol diagnostic above when both apply.
+		if !m.cfg.Models.IsEmpty() {
+			publicID := config.PublicID(m.cfg, e.ID)
+			if m.cfg.Models.Excludes(e.ID, publicID) {
+				unsup = append(unsup, UnsupportedModel{
+					UpstreamID: e.ID,
+					Reason:     "excluded by models.allow/deny",
+				})
+				continue
+			}
+		}
 		if !m.protocolEnabled(route) {
 			// Flags apply at snapshot build; a stale snapshot kept per
 			// FR-002 reflects the flags it was built with until the next

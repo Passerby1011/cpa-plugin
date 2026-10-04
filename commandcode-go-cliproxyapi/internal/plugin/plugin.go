@@ -28,7 +28,7 @@ const ProviderID = "commandcode"
 // -ldflags "-X .../internal/plugin.pluginVersion=<version>".
 const pluginName = "commandcode-go-cliproxyapi"
 
-var pluginVersion = "0.1.2"
+var pluginVersion = "0.1.3"
 
 // SetVersion overrides the reported plugin version; the build injects it via
 // main.version (-ldflags). An empty value keeps the vendored default.
@@ -167,8 +167,24 @@ type lifecycleRequest struct {
 }
 
 type capabilities struct {
-	ModelProvider         bool                         `json:"model_provider"`
-	AuthProvider          bool                         `json:"auth_provider"`
+	ModelProvider bool `json:"model_provider"`
+	AuthProvider  bool `json:"auth_provider"`
+	// InteractiveLogin tells the host whether this provider can drive an
+	// interactive OAuth/device login flow. CommandCode authenticates with a
+	// manually-supplied API key, so its StartLogin/PollLogin always fail;
+	// advertising it on the OAuth login page would only offer a button that
+	// cannot work.
+	//
+	// true  -> the plugin appears in the OAuth login page (default, so a
+	//          host that predates this field keeps its current behaviour).
+	// false -> the plugin still parses/refreshes its own auth records (and
+	//          the executor still receives the selected api_key), but the
+	//          host hides it from the OAuth login page.
+	//
+	// There is deliberately no "AuthProvider off" fallback: that capability
+	// is what lets the host parse our auth files, so turning it off would
+	// break execution rather than just hide a button.
+	InteractiveLogin      bool                         `json:"interactive_login"`
 	Executor              bool                         `json:"executor"`
 	ExecutorModelScope    pluginapi.ExecutorModelScope `json:"executor_model_scope,omitempty"`
 	ExecutorInputFormats  []string                     `json:"executor_input_formats,omitempty"`
@@ -208,8 +224,8 @@ func configFields() []pluginapi.ConfigField {
 				"https only unless allow-http is enabled; no query, fragment, or userinfo.",
 		},
 		{
-			Name: "catalog-url",
-			Type: pluginapi.ConfigFieldTypeString,
+			Name:        "catalog-url",
+			Type:        pluginapi.ConfigFieldTypeString,
 			Description: "Model catalog URL. Default {base-url}/models.",
 		},
 		{
@@ -231,6 +247,14 @@ func configFields() []pluginapi.ConfigField {
 				"Disabling one excludes its models with a diagnostic.",
 		},
 		{
+			Name: "models",
+			Type: pluginapi.ConfigFieldTypeObject,
+			Description: `Restrict which discovered models are published, e.g. ` +
+				`{"allow":["deepseek/deepseek-v4.1-flash"],"deny":["Qwen/qwen3-max"]}. ` +
+				"Empty allow publishes every discovered model; deny always wins. " +
+				"Ids match either the upstream id or the prefixed public id.",
+		},
+		{
 			Name: "route-overrides",
 			Type: pluginapi.ConfigFieldTypeObject,
 			Description: `Pin a model onto another upstream route, e.g. ` +
@@ -238,18 +262,18 @@ func configFields() []pluginapi.ConfigField {
 				"Both protocol and endpoint are required.",
 		},
 		{
-			Name: "request-timeout",
-			Type: pluginapi.ConfigFieldTypeString,
+			Name:        "request-timeout",
+			Type:        pluginapi.ConfigFieldTypeString,
 			Description: "Upstream HTTP timeout, e.g. 5m. Also bounds account/quota calls to 30s.",
 		},
 		{
-			Name: "max-response-bytes",
-			Type: pluginapi.ConfigFieldTypeInteger,
+			Name:        "max-response-bytes",
+			Type:        pluginapi.ConfigFieldTypeInteger,
 			Description: "Maximum non-streaming response body size in bytes. Default 67108864 (64 MiB).",
 		},
 		{
-			Name: "allow-http",
-			Type: pluginapi.ConfigFieldTypeBoolean,
+			Name:        "allow-http",
+			Type:        pluginapi.ConfigFieldTypeBoolean,
 			Description: "Permit http:// upstreams and catalog URLs. For local testing only.",
 		},
 	}
@@ -267,8 +291,14 @@ func registrationEnvelope() []byte {
 			ConfigFields:     configFields(),
 		},
 		Capabilities: capabilities{
-			ModelProvider:         true,
-			AuthProvider:          true,
+			ModelProvider: true,
+			AuthProvider:  true,
+			// CommandCode has no OAuth/device flow: the credential is a
+			// manually-supplied API key. Keep AuthProvider on (the host
+			// needs it to parse our auth records and hand api_key to the
+			// executor) but declare that there is no interactive login, so
+			// a host that understands this field hides the dead OAuth entry.
+			InteractiveLogin:      false,
 			Executor:              true,
 			ExecutorModelScope:    pluginapi.ExecutorModelScopeOAuth,
 			ExecutorInputFormats:  formats,
