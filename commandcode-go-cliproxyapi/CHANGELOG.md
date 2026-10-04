@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.1.4
+
+### 修复
+
+- **WebUI 里保存 API Key 会导致插件失效（严重）**：管理面板把 `api-keys` 渲染成
+  通用 JSON 数组，用户按界面提示填进去的是**裸字符串**：
+
+  ```yaml
+  api-keys:
+    - cc_xxx          # ← 面板实际写入的形态
+  ```
+
+  而插件此前只认对象形态 `- value: cc_xxx`，于是保存时 `plugin.reconfigure`
+  报 `decode config: invalid YAML structure near line 4`，宿主随即把插件撤销注册，
+  面板显示 **未注册 / 未生效**——用户完全按 UI 操作，插件却挂了。
+  现在 `api-keys` **两种形态都接受**：裸字符串、`{value: ...}`（并兼容 `{key: ...}`）；
+  `${ENV_VAR}` 展开对两种形态都生效。
+
+  严格校验保持不变：空值拒绝、重复值拒绝、非字符串/非对象条目拒绝。
+
+### 说明
+
+- 已在**未修改的官方 CLIProxyAPI v8.0.13** 上实测：初始无 key 时注册成功；
+  通过管理 API 保存裸字符串 key 后仍为 `registered=true / effective_enabled=true`；
+  `/v1/models` 返回 `commandcode/*`；非流式与流式调用正常；切回对象形态同样正常。
+- **`interactive_login` 需要宿主支持**：原版 CPA 会忽略该字段，因此仅升级插件
+  **不能**隐藏 OAuth 登录入口。彻底解决需要 0.2.0 架构调整（不再声明 `AuthProvider`），
+  见下个版本。
+
+## 0.1.3
 ## 0.1.3
 
 ### 修复

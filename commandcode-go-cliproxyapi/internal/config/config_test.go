@@ -209,7 +209,7 @@ func TestLoadRejections(t *testing.T) {
 	}{
 		{"invalid yaml syntax", "[unclosed", "decode config"},
 		{"unknown anchor has no line info", "request-timeout: *nope\n", "decode config: invalid YAML structure"},
-		{"bare-scalar api key never leaks", "api-keys:\n  - sk-live-secret-123\n", "decode config: invalid YAML structure"},
+		{"duplicate api key never leaks", "api-keys:\n  - sk-dup-value\n  - sk-dup-value\n", "api-keys: duplicate key values are not allowed"},
 		{"keyless config rejected", "", "api-keys: at least one key is required"},
 		{"request-timeout zero rejected", "request-timeout: 0s\n" + withKey, "request-timeout: must be positive"},
 		{
@@ -288,7 +288,7 @@ func TestLoadErrorsNeverLeakDecodedValues(t *testing.T) {
 		yaml   string
 		secret string
 	}{
-		{"bare-scalar api key", "api-keys:\n  - sk-live-supersecret-42\n", "sk-live-supersecret-42"},
+		{"nested-sequence api key", "api-keys:\n  - [sk-nested-value]\n", "sk-nested-value"},
 		{"duplicate api key values", "api-keys:\n  - value: sk-live-dupsecret-7\n  - value: sk-live-dupsecret-7\n", "sk-live-dupsecret-7"},
 		{"userinfo credentials", "base-url: https://admin:p4ssw0rd@/v1\n", "p4ssw0rd"},
 	}
@@ -403,5 +403,98 @@ func TestModelFilterMatchesPrefixedAndBareIDs(t *testing.T) {
 	g := ModelFilter{Deny: []string{"deepseek/x"}}
 	if !g.Excludes("deepseek/x", "commandcode/deepseek/x") {
 		t.Error("upstream id in deny must match")
+	}
+}
+
+// ---- api-keys entry shapes (WebUI vs documented) ----------------------
+
+// The Management Center renders api-keys as a generic JSON array, so the
+// natural thing to type is a bare string. Only accepting {value: ...} made
+// saving a key fail reconfigure with "invalid YAML structure", which the host
+// shows as "not registered / not effective".
+func TestLoadAPIKeyBareScalar(t *testing.T) {
+	c, err := Load([]byte("api-keys:\n  - sk-bare-key\n"))
+	if err != nil {
+		t.Fatalf("Load(bare scalar key) failed: %v", err)
+	}
+	if len(c.APIKeys) != 1 || c.APIKeys[0].Value != "sk-bare-key" {
+		t.Fatalf("APIKeys = %+v, want one bare key", c.APIKeys)
+	}
+}
+
+func TestLoadAPIKeyObjectStillWorks(t *testing.T) {
+	c, err := Load([]byte("api-keys:\n  - value: sk-object-key\n"))
+	if err != nil {
+		t.Fatalf("Load(object key) failed: %v", err)
+	}
+	if len(c.APIKeys) != 1 || c.APIKeys[0].Value != "sk-object-key" {
+		t.Fatalf("APIKeys = %+v", c.APIKeys)
+	}
+}
+
+func TestLoadAPIKeyMixedShapes(t *testing.T) {
+	c, err := Load([]byte("api-keys:\n  - sk-bare\n  - value: sk-obj\n  - \"sk-quoted\"\n"))
+	if err != nil {
+		t.Fatalf("Load(mixed) failed: %v", err)
+	}
+	want := []string{"sk-bare", "sk-obj", "sk-quoted"}
+	if len(c.APIKeys) != len(want) {
+		t.Fatalf("APIKeys = %+v, want %v", c.APIKeys, want)
+	}
+	for i, w := range want {
+		if c.APIKeys[i].Value != w {
+			t.Errorf("APIKeys[%d] = %q, want %q", i, c.APIKeys[i].Value, w)
+		}
+	}
+}
+
+func TestLoadAPIKeyBareScalarEnvExpansion(t *testing.T) {
+	t.Setenv("CC_TEST_KEY", "sk-from-env")
+	c, err := Load([]byte("api-keys:\n  - ${CC_TEST_KEY}\n"))
+	if err != nil {
+		t.Fatalf("Load(env scalar) failed: %v", err)
+	}
+	if len(c.APIKeys) != 1 || c.APIKeys[0].Value != "sk-from-env" {
+		t.Fatalf("APIKeys = %+v, want the expanded value", c.APIKeys)
+	}
+}
+
+func TestLoadAPIKeyEmptyScalarRejected(t *testing.T) {
+	_, err := Load([]byte("api-keys:\n  - \"\"\n"))
+	requireErrContains(t, err, "api-keys")
+}
+
+func TestLoadAPIKeyDuplicateAcrossShapesRejected(t *testing.T) {
+	_, err := Load([]byte("api-keys:\n  - sk-dup\n  - value: sk-dup\n"))
+	requireErrContains(t, err, "duplicate")
+}
+
+func TestLoadAPIKeyNonScalarNonMappingRejected(t *testing.T) {
+	_, err := Load([]byte("api-keys:\n  -\n    - nested\n"))
+	if err == nil {
+		t.Fatal("expected an error for a sequence-valued api-keys entry")
+	}
+}
+
+// The exact YAML the Management Center writes after typing a bare key.
+func TestLoadWebUIStyleReconfigurePayload(t *testing.T) {
+	body := "base-url: \"https://api.commandcode.ai/provider/v1\"\n" +
+		"allow-http: false\n" +
+		"api-keys:\n" +
+		"  - cc_live_abc123\n" +
+		"model-prefix:\n  enabled: true\n  value: commandcode\n" +
+		"catalog:\n  refresh-interval: 15m\n  stale-while-unavailable: true\n" +
+		"protocols:\n  chat-completions: true\n  messages: true\n  responses: true\n" +
+		"request-timeout: 5m\n" +
+		"max-response-bytes: 67108864\n"
+	c, err := Load([]byte(body))
+	if err != nil {
+		t.Fatalf("WebUI-style config must load: %v", err)
+	}
+	if len(c.APIKeys) != 1 || c.APIKeys[0].Value != "cc_live_abc123" {
+		t.Fatalf("APIKeys = %+v", c.APIKeys)
+	}
+	if c.Pending {
+		t.Error("a configured key must not be Pending")
 	}
 }

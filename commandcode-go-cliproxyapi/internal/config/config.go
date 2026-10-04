@@ -144,8 +144,49 @@ type rawPrefix struct {
 	Value   *string `yaml:"value"`
 }
 
+// rawKey tolerates both shapes a key entry can arrive in:
+//
+//	api-keys:
+//	  - value: "cc_xxx"     # the documented object form
+//	  - "cc_xxx"            # the bare string the Management Center's array
+//	                        # field actually produces when you type a key
+//
+// The panel renders api-keys as a generic JSON array, so the natural thing to
+// type is a plain string. Accepting only the object form made saving a key
+// fail reconfigure with "invalid YAML structure", which the host renders as
+// "not registered / not effective" — i.e. the plugin looked broken right after
+// the user did exactly what the UI asked.
 type rawKey struct {
 	Value string `yaml:"value"`
+}
+
+// UnmarshalYAML accepts a scalar (the key itself) or a mapping with a value
+// field, and also tolerates the other common spellings for that field.
+func (k *rawKey) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag != "!!str" {
+			return fmt.Errorf("api-keys entry must be a string or a {value: ...} object")
+		}
+		k.Value = node.Value
+		return nil
+	case yaml.MappingNode:
+		var obj struct {
+			Value string `yaml:"value"`
+			Key   string `yaml:"key"`
+		}
+		if err := node.Decode(&obj); err != nil {
+			return fmt.Errorf("api-keys entry must be a string or a {value: ...} object")
+		}
+		if strings.TrimSpace(obj.Value) != "" {
+			k.Value = obj.Value
+			return nil
+		}
+		k.Value = obj.Key
+		return nil
+	default:
+		return fmt.Errorf("api-keys entry must be a string or a {value: ...} object")
+	}
 }
 
 type rawCatalog struct {
