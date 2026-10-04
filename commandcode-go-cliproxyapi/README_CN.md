@@ -71,6 +71,43 @@ go build -buildmode=c-shared -o plugins/windows/amd64/commandcode-go-cliproxyapi
 
 把产物放到宿主的插件目录（例如 `<cliproxyapi_root>/plugins/<os>/<arch>/`）。
 
+## 配置要点
+
+> **`api-keys` 是运行必需，但不再阻断注册。** 没有 key 时插件以**待配置（pending）**
+> 状态正常注册：管理面板显示"已注册"，并渲染出完整配置表单，可以直接在
+> WebUI 里填 key。在保存 key 之前，插件不发布任何模型，调用会返回明确错误
+> `commandcode plugin is registered but not configured: set api-keys in the plugin configuration`。
+>
+> 这修掉了之前的死循环：注册本身失败（报 `api-keys: at least one key is required`）、
+> 面板显示 **未注册 / 未生效**，而插件又没有声明任何配置字段，
+> 导致 UI 里根本没有地方填 key。
+
+## 在管理面板中配置
+
+所有配置项都已声明为插件配置字段，可直接在插件管理页设置，无需手改 `config.yaml`：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `api-keys` | array（JSON） | `[{"value":"cc_..."}]`；支持 `${ENV_VAR}` |
+| `base-url` | string | 默认 `https://api.commandcode.ai/provider/v1` |
+| `catalog-url` | string | 默认 `{base-url}/models` |
+| `model-prefix` | object（JSON） | `{"enabled":true,"value":"commandcode"}` |
+| `catalog` | object（JSON） | `{"refresh-interval":"15m","stale-while-unavailable":true}` |
+| `protocols` | object（JSON） | `{"chat-completions":true,"messages":true,"responses":true}` |
+| `route-overrides` | object（JSON） | `{"<模型>":{"protocol":"...","endpoint":"..."}}` |
+| `request-timeout` | string | 如 `5m` |
+| `max-response-bytes` | integer | 默认 `67108864` |
+| `allow-http` | boolean | 允许 http:// 上游，仅测试用 |
+
+嵌套配置以 **object** 字段（填 JSON）暴露，**不**写成 `model-prefix.enabled` 这类点号键：
+宿主对插件配置做浅合并，点号键会落成字面量键 `model-prefix.enabled`，插件读不到。
+
+> **模型列表**：由 `{base-url}/models` 自动发现，无需手工添加。
+> 对单个模型的控制通过 `model-prefix`、`protocols`、`route-overrides` 表达。
+
+> **关于 key 的可见性**：CPA 配置表单没有 secret 类型，API key 会以明文显示并写入
+> CPA 配置文件。请勿截图或分享配置页面。插件自身不输出 key 内容，只记录 key 数量和截断 hash。
+
 ## 配置
 
 ```yaml

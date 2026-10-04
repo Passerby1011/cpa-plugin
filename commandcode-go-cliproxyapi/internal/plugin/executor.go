@@ -57,6 +57,15 @@ func (m *Manager) resolveExecution(req executorRequest) (*resolvedExecution, []b
 	if req.AuthProvider != ProviderID {
 		return nil, classEnvelope(&errclass.Error{Class: errclass.ClassAuth, Message: "selected auth provider is not commandcode"})
 	}
+	if cfg.Pending || len(cfg.APIKeys) == 0 {
+		// Registered but not configured. Say so plainly instead of failing
+		// with a confusing "no routable catalog" further down.
+		return nil, classEnvelope(&errclass.Error{
+			Class:      errclass.ClassAuth,
+			Message:    "commandcode plugin is registered but not configured: set api-keys in the plugin configuration",
+			StatusCode: http.StatusUnauthorized,
+		})
+	}
 	key := strings.TrimSpace(req.AuthAttributes["api_key"])
 	debugTrace("executor auth model=%s auth_id=%s provider=%s attr_api_key_present=%t attr_count=%d storage_json_bytes=%d", req.Model, req.AuthID, req.AuthProvider, key != "", len(req.AuthAttributes), len(req.StorageJSON))
 	if key == "" {

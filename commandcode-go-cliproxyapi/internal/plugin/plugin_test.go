@@ -431,9 +431,30 @@ func TestRegisterSuccessPublishesModels(t *testing.T) {
 	if reg.SchemaVersion != pluginabi.SchemaVersion {
 		t.Fatalf("schema_version = %d, want %d", reg.SchemaVersion, pluginabi.SchemaVersion)
 	}
-	if reg.Metadata.Name != pluginName || reg.Metadata.Version != pluginVersion ||
-		len(reg.Metadata.ConfigFields) != 0 {
+	if reg.Metadata.Name != pluginName || reg.Metadata.Version != pluginVersion {
 		t.Fatalf("metadata wrong: %+v", reg.Metadata)
+	}
+	// The Management Center renders plugins.configs.<id> from these
+	// declarations, so an empty list means the operator has no way to set
+	// api-keys from the UI (the original "registered but not effective"
+	// dead end). Assert the key field is advertised.
+	if len(reg.Metadata.ConfigFields) == 0 {
+		t.Fatalf("no config fields declared: %+v", reg.Metadata)
+	}
+	var hasKeys bool
+	for _, f := range reg.Metadata.ConfigFields {
+		if f.Name == "api-keys" {
+			hasKeys = true
+			if f.Type != pluginapi.ConfigFieldTypeArray {
+				t.Fatalf("api-keys field type = %q, want array", f.Type)
+			}
+			if strings.TrimSpace(f.Description) == "" {
+				t.Fatal("api-keys field has no description")
+			}
+		}
+	}
+	if !hasKeys {
+		t.Fatalf("api-keys config field not declared: %+v", reg.Metadata.ConfigFields)
 	}
 	if !reg.Capabilities.ModelProvider || !reg.Capabilities.AuthProvider {
 		t.Fatalf("capabilities wrong: %+v", reg.Capabilities)
@@ -475,6 +496,87 @@ func TestRegisterSuccessPublishesModels(t *testing.T) {
 	decodeResult(t, mustHandle(t, m, "model.for_auth", []byte("{}")), &forAuth)
 	if forAuth.Provider != ProviderID || len(forAuth.Models) != 1 || forAuth.Models[0].ID != got.ID {
 		t.Fatalf("for_auth = %+v", forAuth)
+	}
+}
+
+// ---- pending (unconfigured) registration -------------------------------
+
+// TestRegisterWithoutKeysSucceedsInPendingState pins the fix for the
+// store-install dead end: with no api-keys the plugin must still register
+// (so the Management Center publishes metadata + config fields and the
+// operator can enter a key), must NOT call the upstream, and must report a
+// clear error if a request is attempted before configuration.
+func TestRegisterWithoutKeysSucceedsInPendingState(t *testing.T) {
+	m, f := newTestManager(catalogResponder(true, testCatalogJSON))
+	t.Cleanup(func() { _, _ = m.HandleCall("plugin.shutdown", nil) })
+
+	resp, err := m.HandleCall("plugin.register", lifecycleRequestBody("plugins:\n  enabled: true\n"))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	var reg registrationResult
+	decodeResult(t, resp, &reg)
+	if len(reg.Metadata.ConfigFields) == 0 {
+		t.Fatalf("pending register returned no config fields: %+v", reg.Metadata)
+	}
+
+	// Nothing may have been fetched: there is no credential to fetch with.
+	if calls := f.callsOf(pluginabi.MethodHostHTTPDo); len(calls) != 0 {
+		t.Fatalf("host.http.do calls = %d, want 0 while unconfigured", len(calls))
+	}
+
+	// The catalog stays empty, so no model is routable yet.
+	var static pluginapi.ModelResponse
+	decodeResult(t, mustHandle(t, m, "model.static", []byte("{}")), &static)
+	if len(static.Models) != 0 {
+		t.Fatalf("models published while unconfigured: %+v", static.Models)
+	}
+
+	// A request must fail with a configuration error, not a panic.
+	req, _ := json.Marshal(struct {
+		pluginapi.ExecutorRequest
+	}{
+		ExecutorRequest: pluginapi.ExecutorRequest{
+			AuthProvider:   ProviderID,
+			AuthAttributes: map[string]string{"api_key": "whatever"},
+			Model:          "commandcode/anything",
+			SourceFormat:   "openai",
+		},
+	})
+	env := decodeEnv(t, mustHandle(t, m, "executor.execute", req))
+	if env.OK || env.Error == nil {
+		t.Fatalf("executor succeeded while unconfigured: %s", env.Result)
+	}
+	if !strings.Contains(env.Error.Message, "not configured") {
+		t.Fatalf("unexpected error message: %q", env.Error.Message)
+	}
+}
+
+// TestReconfigureWithKeysActivatesPlugin covers the second half of the fix:
+// saving api-keys through the Management Center reconfigures the plugin,
+// which fetches the catalog and publishes models.
+func TestReconfigureWithKeysActivatesPlugin(t *testing.T) {
+	m, f := newTestManager(catalogResponder(true, testCatalogJSON))
+	t.Cleanup(func() { _, _ = m.HandleCall("plugin.shutdown", nil) })
+
+	if _, err := m.HandleCall("plugin.register", lifecycleRequestBody("plugins: {}\n")); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if calls := f.callsOf(pluginabi.MethodHostHTTPDo); len(calls) != 0 {
+		t.Fatalf("unexpected upstream call before configure: %d", len(calls))
+	}
+
+	if _, err := m.HandleCall("plugin.reconfigure", lifecycleRequestBody(testValidYAML)); err != nil {
+		t.Fatalf("reconfigure: %v", err)
+	}
+
+	var static pluginapi.ModelResponse
+	decodeResult(t, mustHandle(t, m, "model.static", []byte("{}")), &static)
+	if len(static.Models) == 0 {
+		t.Fatal("no models published after configuring api-keys")
+	}
+	if calls := f.callsOf(pluginabi.MethodHostHTTPDo); len(calls) == 0 {
+		t.Fatal("catalog was never fetched after keys were configured")
 	}
 }
 

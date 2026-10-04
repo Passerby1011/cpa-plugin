@@ -28,7 +28,7 @@ const ProviderID = "commandcode"
 // -ldflags "-X .../internal/plugin.pluginVersion=<version>".
 const pluginName = "commandcode-go-cliproxyapi"
 
-var pluginVersion = "0.1.1"
+var pluginVersion = "0.1.2"
 
 // SetVersion overrides the reported plugin version; the build injects it via
 // main.version (-ldflags). An empty value keeps the vendored default.
@@ -182,6 +182,79 @@ type registrationResult struct {
 	Capabilities  capabilities       `json:"capabilities"`
 }
 
+// configFields declares the plugin's configuration knobs for the host's
+// Management Center, so every supported option can be set from the UI
+// instead of hand-editing plugins.configs.<id> in config.yaml.
+//
+// Field names map 1:1 to top-level keys under plugins.configs.<id>. Nested
+// options are declared as object fields (JSON-edited) rather than dotted
+// names like "model-prefix.enabled": the host shallow-merges the submitted
+// object into the plugin config node, so a dotted key would be written as
+// the literal key "model-prefix.enabled" instead of nesting under
+// "model-prefix", producing YAML the plugin does not read.
+func configFields() []pluginapi.ConfigField {
+	return []pluginapi.ConfigField{
+		{
+			Name: "api-keys",
+			Type: pluginapi.ConfigFieldTypeArray,
+			Description: "Required. JSON array of CommandCode API keys, e.g. " +
+				`[{"value":"cc_..."}]. Supports ${ENV_VAR} expansion (resolved inside the CPA process). ` +
+				"The value is stored in the CPA config file and shown in plain text here, so avoid sharing the config page.",
+		},
+		{
+			Name: "base-url",
+			Type: pluginapi.ConfigFieldTypeString,
+			Description: "Upstream provider base URL. Default https://api.commandcode.ai/provider/v1. " +
+				"https only unless allow-http is enabled; no query, fragment, or userinfo.",
+		},
+		{
+			Name: "catalog-url",
+			Type: pluginapi.ConfigFieldTypeString,
+			Description: "Model catalog URL. Default {base-url}/models.",
+		},
+		{
+			Name: "model-prefix",
+			Type: pluginapi.ConfigFieldTypeObject,
+			Description: `Client-facing model id prefix, e.g. {"enabled":true,"value":"commandcode"}. ` +
+				"When enabled, ids are published as <value>/<model>; when disabled, bare upstream ids.",
+		},
+		{
+			Name: "catalog",
+			Type: pluginapi.ConfigFieldTypeObject,
+			Description: `Catalog refresh behaviour, e.g. {"refresh-interval":"15m","stale-while-unavailable":true}. ` +
+				"refresh-interval minimum is 1m.",
+		},
+		{
+			Name: "protocols",
+			Type: pluginapi.ConfigFieldTypeObject,
+			Description: `Route kill switches, e.g. {"chat-completions":true,"messages":true,"responses":true}. ` +
+				"Disabling one excludes its models with a diagnostic.",
+		},
+		{
+			Name: "route-overrides",
+			Type: pluginapi.ConfigFieldTypeObject,
+			Description: `Pin a model onto another upstream route, e.g. ` +
+				`{"deepseek/deepseek-v4.1-flash":{"protocol":"messages","endpoint":"/v1/messages"}}. ` +
+				"Both protocol and endpoint are required.",
+		},
+		{
+			Name: "request-timeout",
+			Type: pluginapi.ConfigFieldTypeString,
+			Description: "Upstream HTTP timeout, e.g. 5m. Also bounds account/quota calls to 30s.",
+		},
+		{
+			Name: "max-response-bytes",
+			Type: pluginapi.ConfigFieldTypeInteger,
+			Description: "Maximum non-streaming response body size in bytes. Default 67108864 (64 MiB).",
+		},
+		{
+			Name: "allow-http",
+			Type: pluginapi.ConfigFieldTypeBoolean,
+			Description: "Permit http:// upstreams and catalog URLs. For local testing only.",
+		},
+	}
+}
+
 func registrationEnvelope() []byte {
 	formats := []string{"openai", "claude", "openai-response"}
 	return okEnvelope(registrationResult{
@@ -191,7 +264,7 @@ func registrationEnvelope() []byte {
 			Version:          pluginVersion,
 			Author:           pluginName,
 			GitHubRepository: githubRepoURL,
-			ConfigFields:     []pluginapi.ConfigField{},
+			ConfigFields:     configFields(),
 		},
 		Capabilities: capabilities{
 			ModelProvider:         true,
@@ -260,7 +333,7 @@ func (m *Manager) handleLifecycle(request []byte) ([]byte, error) {
 	if err := json.Unmarshal(request, &req); err != nil {
 		return ErrEnvelope("invalid_request", "malformed lifecycle request body"), nil
 	}
-	cfg, err := config.Load(req.ConfigYAML)
+	cfg, err := config.LoadForRegistration(req.ConfigYAML)
 	if err != nil {
 		debugTrace("lifecycle config_error=%s", err.Error())
 		return ErrEnvelope("invalid_config", err.Error()), nil
@@ -273,6 +346,11 @@ func (m *Manager) handleLifecycle(request []byte) ([]byte, error) {
 	if err := m.materializeAuthRecords(ctx, cfg); err != nil {
 		return ErrEnvelope("auth_materialization_failed", err.Error()), nil
 	}
+	// A pending registration (no api-keys yet) must not touch the network:
+	// there is no credential to fetch a catalog with, and the /models call
+	// would just fail. Register successfully with an empty catalog so the
+	// Management Center can render the config form; the reconfigure that
+	// follows a saved key performs the real refresh.
 	// A nil *HostBridge must not enter the interface as a typed nil, or
 	// catalog's nil-client guard never fires and Refresh panics inside Do.
 	var client catalog.HostClient
@@ -280,9 +358,15 @@ func (m *Manager) handleLifecycle(request []byte) ([]byte, error) {
 		client = m.bridge
 	}
 	mgr := catalog.New(cfg, client)
-	refreshErr := refreshOnce(context.Background(), mgr, m.bridge, registerRefreshTimeout, cfg)
-	debugTrace("lifecycle refresh_complete model_count=%d refresh_error=%t", len(mgr.Models()), refreshErr != nil)
-
+	var refreshErr error
+	if cfg.Pending {
+		if m.bridge != nil {
+			_ = m.bridge.Log("info", "commandcode plugin registered without api-keys; configure it in the Management Center", nil)
+		}
+	} else {
+		refreshErr = refreshOnce(context.Background(), mgr, m.bridge, registerRefreshTimeout, cfg)
+	}
+	debugTrace("lifecycle refresh_complete model_count=%d refresh_error=%t pending=%t", len(mgr.Models()), refreshErr != nil, cfg.Pending)
 	// Retire any running loop and wait for its exit outside m.mu: a mid-refresh
 	// tick must never stall readers holding RLock (F4). lifeMu keeps the
 	// stop-wait-install sequence atomic against other lifecycles.
@@ -505,6 +589,12 @@ func (m *Manager) closeStop() chan struct{} {
 func refreshOnce(parent context.Context, mgr *catalog.Manager, bridge *HostBridge, timeout time.Duration, cfg config.Config) error {
 	// Fallback: configured materialization input is catalog-only; CPA client
 	// authentication remains owned by its AuthProvider and CPA.
+	if len(cfg.APIKeys) == 0 {
+		// Pending registration: nothing to authenticate a catalog fetch
+		// with, and indexing APIKeys[0] below would panic. Serving stays
+		// empty until a key is saved and a reconfigure runs.
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	err := mgr.Refresh(ctx, cfg.APIKeys[0].Value)

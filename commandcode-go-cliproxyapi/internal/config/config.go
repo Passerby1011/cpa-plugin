@@ -58,6 +58,13 @@ type Config struct {
 	AllowHTTP        bool
 	RequestTimeout   time.Duration
 	MaxResponseBytes int64
+	// Pending is true when api-keys is still empty. Such a config is
+	// VALID to register with (so the host publishes the metadata and the
+	// Management Center can show its config form), but the plugin serves
+	// no models and refuses execution until keys are supplied. The strict
+	// Load still rejects an empty key list, so a plugin that IS configured
+	// keeps every existing validation guarantee.
+	Pending bool
 }
 
 // rawConfig mirrors the YAML shape; pointer fields distinguish "unset"
@@ -105,6 +112,23 @@ var (
 // decoded node values — a malformed entry (e.g. a bare-scalar API key)
 // must not leak into the invalid_config envelope the host logs.
 func Load(yamlBytes []byte) (Config, error) {
+	return load(yamlBytes, false)
+}
+
+// LoadForRegistration is Load for the plugin.register path: an EMPTY
+// api-keys list is accepted and marked Config.Pending instead of failing
+// registration. Without this the host rejects plugin.register with
+// "api-keys: at least one key is required", the plugin never appears as
+// registered, and the Management Center therefore never renders its
+// config form — leaving no way to enter a key from the UI. Every other
+// validation (URLs, durations, duplicates among the keys that ARE
+// present, route overrides, prefix) still applies, so a misconfigured
+// submission is still surfaced as soon as it is saved.
+func LoadForRegistration(yamlBytes []byte) (Config, error) {
+	return load(yamlBytes, true)
+}
+
+func load(yamlBytes []byte, allowPending bool) (Config, error) {
 	var raw rawConfig
 	if err := yaml.Unmarshal(yamlBytes, &raw); err != nil {
 		if n := regexp.MustCompile(`line (\d+)`).FindStringSubmatch(err.Error()); n != nil {
@@ -147,6 +171,7 @@ func Load(yamlBytes []byte) (Config, error) {
 		AllowHTTP:        raw.AllowHTTP,
 		RequestTimeout:   requestTimeout,
 		MaxResponseBytes: orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),
+		Pending:          allowPending && len(keys) == 0,
 	}
 	if raw.CatalogURL != nil {
 		// Mirror the derived-default trim so an explicit trailing-slash
@@ -155,10 +180,19 @@ func Load(yamlBytes []byte) (Config, error) {
 	} else {
 		c.CatalogURL = strings.TrimRight(c.BaseURL, "/") + "/models"
 	}
-	if err := c.validate(); err != nil {
+	if err := c.validateForLoad(allowPending); err != nil {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// validateForLoad runs the strict validation, or the pending-tolerant one
+// when the caller allowed an empty api-keys list.
+func (c Config) validateForLoad(allowPending bool) error {
+	if allowPending && len(c.APIKeys) == 0 {
+		return c.validateWithoutKeys()
+	}
+	return c.validate()
 }
 
 // PublicID returns the client-facing model ID (FR-003).
@@ -179,6 +213,23 @@ func (c Config) validate() error {
 	if len(c.APIKeys) == 0 {
 		return fmt.Errorf("api-keys: at least one key is required")
 	}
+	return c.validateCommon()
+}
+
+// validateWithoutKeys runs every check except "at least one key", for the
+// pending-registration path where keys are not yet supplied.
+func (c Config) validateWithoutKeys() error {
+	if err := validateURL("base-url", c.BaseURL, c.AllowHTTP); err != nil {
+		return err
+	}
+	if err := validateURL("catalog-url", c.CatalogURL, c.AllowHTTP); err != nil {
+		return err
+	}
+	return c.validateCommon()
+}
+
+// validateCommon holds the checks shared by both validation modes.
+func (c Config) validateCommon() error {
 	for i, k := range c.APIKeys {
 		if k.Value == "" {
 			return fmt.Errorf("api-keys[%d].value: expanded to empty", i)

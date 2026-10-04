@@ -65,11 +65,49 @@ Without this plugin, using a CommandCode Go/GOAT/Pro/Max plan in CLIProxyAPI req
 
 ## Configuration essentials
 
-> **`api-keys` is REQUIRED.** With no key configured, the library loads but
-> `plugin.register` is rejected with `api-keys: at least one key is required`,
-> and the Management Center then shows the plugin as **未注册 / 未生效**
-> (not registered / not effective). This is a configuration error, not a load or
-> version error. See the full example below.
+> **`api-keys` is REQUIRED to serve models**, but it is no longer required to
+> *register*. With no keys the plugin registers in a **pending** state: the
+> Management Center shows it as registered and renders the full config form, so
+> the key can be entered right there in the UI. Until a key is saved the plugin
+> advertises no models and refuses execution with
+> `commandcode plugin is registered but not configured: set api-keys in the plugin configuration`.
+>
+> This replaces the earlier dead end where registration itself failed
+> (`api-keys: at least one key is required`), the panel showed **未注册 / 未生效**,
+> and — because the plugin declared no config fields — there was no place in the
+> UI to enter a key at all.
+
+## Configuring from the Management Center
+
+Every supported option is declared as a plugin config field, so it can be set
+in the plugin management page without hand-editing `config.yaml`:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `api-keys` | array (JSON) | `[{"value":"cc_..."}]`; supports `${ENV_VAR}` |
+| `base-url` | string | default `https://api.commandcode.ai/provider/v1` |
+| `catalog-url` | string | default `{base-url}/models` |
+| `model-prefix` | object (JSON) | `{"enabled":true,"value":"commandcode"}` |
+| `catalog` | object (JSON) | `{"refresh-interval":"15m","stale-while-unavailable":true}` |
+| `protocols` | object (JSON) | `{"chat-completions":true,"messages":true,"responses":true}` |
+| `route-overrides` | object (JSON) | `{"<model>":{"protocol":"...","endpoint":"..."}}` |
+| `request-timeout` | string | e.g. `5m` |
+| `max-response-bytes` | integer | default `67108864` |
+| `allow-http` | boolean | http:// upstreams, testing only |
+
+Nested options are declared as **object** fields holding JSON, not as dotted
+names like `model-prefix.enabled`: the host shallow-merges the submitted object
+into the plugin config node, so a dotted key would be written as a literal
+`model-prefix.enabled` key and the plugin would never read it.
+
+> **Model list.** Models are discovered from `{base-url}/models` automatically —
+> there is nothing to add by hand. Per-model control is expressed through
+> `model-prefix`, `protocols`, and `route-overrides`.
+
+> **Key visibility.** CPA's config form has no secret field type, so the API key
+> is displayed in plain text and stored in the CPA config file. Avoid
+> screenshotting or sharing the config page. The plugin itself never logs key
+> material — only key counts and truncated hashes.
 
 ## Build
 
