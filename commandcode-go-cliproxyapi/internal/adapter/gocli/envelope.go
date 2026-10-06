@@ -56,6 +56,16 @@ type Options struct {
 // DefaultVersion is the protocol shape this package implements.
 const DefaultVersion = "1.53.1"
 
+// legacyWorkingDir / legacyEnvironment are the envelope defaults used when the
+// caller supplies no device (the identity layer is off). They are the values
+// this plugin sent before the device layer existed, kept separate from
+// DefaultProjectDir so "identity off" is a real fallback rather than a silent
+// re-introduction of the fabricated machine.
+const (
+	legacyWorkingDir  = `C:\Users\dev\projects\app`
+	legacyEnvironment = "linux-x64"
+)
+
 // BuildEnvelope converts an OpenAI chat-completions body (the shape our other
 // adapters already produce) into the /alpha/generate envelope.
 //
@@ -119,9 +129,9 @@ func BuildEnvelope(openAIBody []byte, opts Options) ([]byte, error) {
 	}
 	envelope := map[string]any{
 		"config": map[string]any{
-			"workingDir":    orDefault(opts.WorkingDir, DefaultProjectDir),
+			"workingDir":    orDefault(opts.WorkingDir, legacyWorkingDir),
 			"date":          time.Now().Format("2006-01-02"),
-			"environment":   orDefault(opts.Environment, DeviceEnvironment()),
+			"environment":   orDefault(opts.Environment, legacyEnvironment),
 			"structure":     []any{},
 			"isGitRepo":     false,
 			"currentBranch": "",

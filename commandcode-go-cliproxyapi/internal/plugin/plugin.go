@@ -60,6 +60,9 @@ type Manager struct {
 	// pool owns per-credential selection and cooldowns.
 	pool *poolState
 
+	// device throttles the per-credential fingerprint/lifecycle announcement.
+	device *deviceAnnouncer
+
 	// lifeMu serializes whole register/reconfigure/shutdown sequences so
 	// their stop-wait-install steps cannot interleave into orphaned tickers.
 	lifeMu sync.Mutex
@@ -75,7 +78,7 @@ type Manager struct {
 
 // NewManager returns a dispatcher whose outbound traffic flows through bridge.
 func NewManager(bridge *HostBridge) *Manager {
-	return &Manager{bridge: bridge, pool: newPoolState()}
+	return &Manager{bridge: bridge, pool: newPoolState(), device: newDeviceAnnouncer()}
 }
 
 // HandleCall dispatches one RPC method and returns envelope bytes. Handler

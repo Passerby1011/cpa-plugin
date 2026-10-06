@@ -52,6 +52,13 @@ func TestExecuteGoCliAccountRoutesToAlphaGenerate(t *testing.T) {
 				Body:       []byte(cliGoStream),
 			}), nil
 		}
+		// The device identity layer announces itself on the account surface
+		// before the first generate. Those calls are their own endpoints, not
+		// go-cli turns, so this responder accepts them without touching the
+		// /alpha/generate expectations below.
+		if isDeviceAnnounceURL(url) {
+			return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(`{}`)}), nil
+		}
 		t.Errorf("go-cli account hit unexpected upstream url %q", url)
 		return hostErr("test", "unrouted"), nil
 	})

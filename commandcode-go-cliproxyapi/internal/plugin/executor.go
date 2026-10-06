@@ -161,6 +161,7 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	}
 	debugTrace("executor session mode=%s source_format=%s x_commandcode_session=%s fallback=%t", "non-stream", req.SourceFormat, sessionID, sessionID == emptyCommandCodeSessionID)
 	if res.goCli {
+		m.announceDeviceIfDue(context.Background(), res.cfg.Device, res.cfg.BaseURL, res.account.Credential)
 		return m.handleExecuteGoCLI(req, res, sessionID)
 	}
 	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking)
@@ -298,7 +299,7 @@ func (m *Manager) handleExecuteGoCLI(req executorRequest, res *resolvedExecution
 	m.releaseAccount(res, resp.StatusCode)
 	debugTrace("executor go-cli received non-stream status=%d body_len=%d", resp.StatusCode, len(resp.Body))
 	if resp.StatusCode >= 400 {
-		return classEnvelope(shared.UpstreamStatusError(resp.StatusCode, resp.Body)), nil
+		return classEnvelope(goCLIUpstreamError(resp.StatusCode, resp.Body)), nil
 	}
 	if int64(len(resp.Body)) > res.cfg.MaxResponseBytes {
 		return classEnvelope(errclass.Translation("response exceeds max-response-bytes")), nil
@@ -324,6 +325,18 @@ func (m *Manager) handleExecuteGoCLI(req executorRequest, res *resolvedExecution
 		debugTrace("executor go-cli non-stream truncated body_len=%d", len(resp.Body))
 		return classEnvelope(errclass.UpstreamFallback("upstream CLI stream ended without a finish event")), nil
 	}
+	// A completed stream that carried nothing visible is a silent failure: the
+	// client would cache an empty answer as a successful one. Reported as a
+	// rate-limit so a retrying SDK backs off and re-asks instead of treating it
+	// as the model's answer.
+	//
+	// Order matters: truncation is checked first, because when the upstream
+	// never sent its finish event the missing finish is the root cause and the
+	// empty output is only a symptom.
+	if reason := gocli.ZeroOutputReason(resp.Body); reason != "" {
+		debugTrace("executor go-cli non-stream zero output body_len=%d", len(resp.Body))
+		return classEnvelope(errclass.FromStatus(http.StatusTooManyRequests, reason)), nil
+	}
 	converted, eErr := chatcompletions.ConvertNonStreamResponse(req.SourceFormat, http.StatusOK, assembled)
 	if eErr != nil {
 		return classEnvelope(eErr), nil
@@ -339,6 +352,22 @@ func generateURL(baseURL string) (string, *errclass.Error) {
 		return "", errclass.Translation(err.Error())
 	}
 	return url, nil
+}
+
+// goCLIUpstreamError classifies an upstream CLI-transport error response.
+//
+// The CLI surface has its own status vocabulary: a quota wall arrives as 402,
+// an overloaded backend as 503. Passing those straight to a client SDK means a
+// payment wall reads as "bad request" and a retryable overload reads as a
+// generic 502, so the SDK neither backs off nor retries. The reference
+// translates them (402 -> 429, 403 -> 401, 422 -> 400, 500 -> 502, ...); this
+// applies the same translation BEFORE classification, so both the client-facing
+// status and the error class agree with what the client will actually observe.
+//
+// The provider transport keeps calling shared.UpstreamStatusError directly: it
+// already speaks the client's status vocabulary.
+func goCLIUpstreamError(status int, body []byte) *errclass.Error {
+	return shared.UpstreamStatusError(gocli.MapUpstreamStatus(status).Status, body)
 }
 
 func upstreamAuthHeaders(route catalog.Route, key, sessionID string) http.Header {
@@ -566,6 +595,7 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 	}
 	debugTrace("executor session mode=%s source_format=%s x_commandcode_session=%s fallback=%t", "stream", req.SourceFormat, sessionID, sessionID == emptyCommandCodeSessionID)
 	if res.goCli {
+		m.announceDeviceIfDue(context.Background(), res.cfg.Device, res.cfg.BaseURL, res.account.Credential)
 		return m.executeStreamGoCLI(req, res, sessionID)
 	}
 	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking)
@@ -666,7 +696,7 @@ func (m *Manager) executeStreamGoCLI(req executorRequest, res *resolvedExecution
 			}
 			_ = m.bridge.StreamClose(id)
 		}
-		return classEnvelope(shared.UpstreamStatusError(st, body)), nil
+		return classEnvelope(goCLIUpstreamError(st, body)), nil
 	}
 	// Success: the account stays in-flight for the whole stream (see
 	// executeStream); the pump releases it exactly once at the end.

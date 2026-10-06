@@ -176,6 +176,11 @@ func TestGoCliOnlyPoolServesStaticCatalog(t *testing.T) {
 				Body:       []byte(cliGoStream),
 			}), nil
 		}
+		// Device announcements have their own account-surface endpoints; they
+		// are not go-cli turns and must not trip the routing assertion below.
+		if url, _ := wire["url"].(string); isDeviceAnnounceURL(url) {
+			return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(`{}`)}), nil
+		}
 		t.Errorf("unexpected upstream url %v", wire["url"])
 		return hostErr("test", "unrouted"), nil
 	}

@@ -151,12 +151,6 @@ type Device struct {
 	// device has been flagged: changing the salt is allowed, but it is
 	// deliberately a separate knob from the API key.
 	IdentitySalt string
-	// ProjectSlugOverrides pins x-project-slug per credential. Rare; mostly
-	// useful for reproducing a specific client.
-	//
-	// (Left as a plain map rather than a richer type: the slug is derived
-	// from ProjectDir in every normal deployment.)
-	ProjectSlugOverrides map[string]string
 }
 
 // EffectiveProjectDir returns the fabricated project directory, falling back to
@@ -272,10 +266,9 @@ type rawModelFilter struct {
 // rawDevice mirrors the device config block. Enabled is a pointer so "unset"
 // (apply the default, which is on) is distinguishable from an explicit false.
 type rawDevice struct {
-	Enabled              *bool             `yaml:"enabled"`
-	ProjectDir           *string           `yaml:"project-dir"`
-	IdentitySalt         *string           `yaml:"identity-salt"`
-	ProjectSlugOverrides map[string]string `yaml:"project-slug-overrides"`
+	Enabled      *bool   `yaml:"enabled"`
+	ProjectDir   *string `yaml:"project-dir"`
+	IdentitySalt *string `yaml:"identity-salt"`
 }
 
 // rawConfig mirrors the YAML shape; pointer fields distinguish "unset"
@@ -519,10 +512,9 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 			Deny:  normalizeModelList(raw.Models.Deny),
 		},
 		Device: Device{
-			Enabled:              orDefault(raw.Device.Enabled, true),
-			ProjectDir:           strings.TrimSpace(orDefault(raw.Device.ProjectDir, "")),
-			IdentitySalt:         orDefault(raw.Device.IdentitySalt, ""),
-			ProjectSlugOverrides: raw.Device.ProjectSlugOverrides,
+			Enabled:      orDefault(raw.Device.Enabled, true),
+			ProjectDir:   strings.TrimSpace(orDefault(raw.Device.ProjectDir, "")),
+			IdentitySalt: orDefault(raw.Device.IdentitySalt, ""),
 		},
 		AllowHTTP:        raw.AllowHTTP,
 		RequestTimeout:   requestTimeout,
