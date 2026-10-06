@@ -175,13 +175,17 @@ plugins:
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `api-keys` | `[]object` | *(Required)* | List of API keys (`- value: "..."`). Supports `${ENV_VAR}` expansion. Duplicates and empty values are rejected. |
+| `api-keys` | `[]object` | *(legacy)* | List of API keys (`- value: "..."`). Supports `${ENV_VAR}` expansion. Duplicates and empty values are rejected. Folded in as `provider` accounts; kept for backward compatibility. |
+| `accounts` | `[]object` | `[]` | Account pool. Each entry: `label` (display), `mode` (`provider` default / `go-cli`), `credential` (supports `${ENV_VAR}`), `disabled`. **A Go-plan key MUST use `mode: go-cli`**, otherwise it is sent to the Provider API that refuses it. |
+| `pool.strategy` | `string` | `sticky` | `sticky` (prefer the credential used last) or `round-robin`. Stickiness is process-scoped, not session-scoped. |
+| `pool.max-concurrency-per-account` | `int` | `0` | In-flight request cap per credential; `0` means unlimited. The reference implementations default to 1, which also keeps one credential from looking like a burst. |
 | `base-url` | `string` | `https://api.commandcode.ai/provider/v1` | Upstream provider base URL. Valid HTTPS (or HTTP with `allow-http: true`), no query, fragment, or userinfo. |
 | `catalog-url` | `string` | `{base-url}/models` | Catalog discovery URL. |
 | `model-prefix.enabled` | `bool` | `true` | Client-facing ids use `<prefix>/<model>`; `false` publishes bare upstream ids. |
 | `model-prefix.value` | `string` | `commandcode` | Provider prefix. |
 | `catalog.refresh-interval` | `duration` | `15m` | Catalog polling cadence (minimum `1m`). |
 | `catalog.stale-while-unavailable` | `bool` | `true` | Keep serving the last good snapshot when a refresh fails. |
+| `catalog.static` | `[]string` | `[]` | Static model-id list used when the live `{base-url}/models` cannot be fetched — most often a pool with **no provider-mode account**, since `/models` belongs to the Provider API, which refuses Go-plan keys. On a failed refresh it is used only after `stale-while-unavailable` has had its chance, so a coarser static table never overwrites a good snapshot. |
 | `protocols.*` | `bool` | `true` | Route kill switches. A disabled protocol excludes its models with a diagnostic. |
 | `route-overrides` | `map` | `{}` | `{ model: { protocol, endpoint } }` pins a model onto another upstream route. `endpoint` is required. |
 | `request-timeout` | `duration` | `5m` | Upstream HTTP timeout (also bounds account/quota calls to 30s). |

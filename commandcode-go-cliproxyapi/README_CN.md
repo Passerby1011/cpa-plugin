@@ -88,11 +88,13 @@ go build -buildmode=c-shared -o plugins/windows/amd64/commandcode-go-cliproxyapi
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `api-keys` | array（JSON） | `[{"value":"cc_..."}]`；支持 `${ENV_VAR}` |
+| `api-keys` | array（JSON） | `[{"value":"cc_..."}]`；支持 `${ENV_VAR}`；旧写法，等价于 provider 账号 |
+| `accounts` | object（JSON 数组） | `[{"label":"go","mode":"go-cli","credential":"user_..."},{"credential":"user_..."}]`；`mode` 默认 `provider`，Go 套餐**必须**用 `go-cli` |
+| `pool` | object（JSON） | `{"strategy":"sticky","max-concurrency-per-account":1}`；`strategy` 取 `sticky` 或 `round-robin` |
 | `base-url` | string | 默认 `https://api.commandcode.ai/provider/v1` |
 | `catalog-url` | string | 默认 `{base-url}/models` |
 | `model-prefix` | object（JSON） | `{"enabled":true,"value":"commandcode"}` |
-| `catalog` | object（JSON） | `{"refresh-interval":"15m","stale-while-unavailable":true}` |
+| `catalog` | object（JSON） | `{"refresh-interval":"15m","stale-while-unavailable":true,"static":["claude-sonnet-4-6"]}`；`static` 为纯 go-cli 池提供模型来源 |
 | `protocols` | object（JSON） | `{"chat-completions":true,"messages":true,"responses":true}` |
 | `route-overrides` | object（JSON） | `{"<模型>":{"protocol":"...","endpoint":"..."}}` |
 | `request-timeout` | string | 如 `5m` |
@@ -127,15 +129,36 @@ plugins:
         enabled: true              # true -> "commandcode/<model>"（默认 true）
         value: "commandcode"
 
-      # CommandCode API key（至少一个）；支持 ${ENV_VAR}
-      api-keys:
-        - value: "user_xxx"
-        - value: "${COMMANDCODE_API_KEY}"
+      # CommandCode 凭据：推荐用账号池（accounts）。
+      # 每个账号声明它走哪个上游面：provider（默认，Provider API）或
+      # go-cli（Go 套餐专用，走 /alpha/generate，因为 Provider API 会拒绝 Go 套餐）。
+      accounts:
+        - label: "go"
+          mode: "go-cli"
+          credential: "user_xxx"
+        - label: "pro"
+          credential: "user_yyy"
+          # disabled: true            # 保留配置但不参与轮换
+        - credential: "${COMMANDCODE_API_KEY}"   # 支持 ${ENV_VAR}
+
+      # 账号选择策略
+      pool:
+        strategy: "sticky"              # sticky | round-robin
+        max-concurrency-per-account: 1  # 0 = 不限
+
+      # 旧写法：扁平 key 列表，会被折叠为 provider 账号
+      # api-keys:
+      #   - value: "user_xxx"
 
       # 目录发现
       catalog:
         refresh-interval: "15m"           # 最小 "1m"
         stale-while-unavailable: true
+        # 可选：静态模型表。当池里没有 provider 账号（例如只配了 Go 套餐）时，
+        # 上游 /models 属于 Provider API、会拒绝 Go key，此时用这份列表发布模型。
+        static:
+          - "claude-sonnet-4-6"
+          - "deepseek/deepseek-v4-pro"
 
       # 协议开关：关掉某个协议会移除路由到它的全部模型
       protocols:
@@ -159,13 +182,17 @@ plugins:
 
 | 配置 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `api-keys` | `[]object` | *(必填)* | 形如 `- value: "..."` 的密钥列表；支持 `${ENV_VAR}`；重复值和空值会被拒绝。 |
+| `api-keys` | `[]object` | *(旧写法)* | 形如 `- value: "..."` 的密钥列表；支持 `${ENV_VAR}`；重复值和空值会被拒绝。会折叠为 `provider` 账号，保留以兼容旧配置。 |
+| `accounts` | `[]object` | `[]` | 账号池。每项：`label`（显示用）、`mode`（`provider` 默认 / `go-cli`）、`credential`（支持 `${ENV_VAR}`）、`disabled`。**Go 套餐必须写 `mode: go-cli`**，否则会被发往拒绝它的 Provider API。 |
+| `pool.strategy` | `string` | `sticky` | `sticky`（优先最近的健康账号）或 `round-robin`。 |
+| `pool.max-concurrency-per-account` | `int` | `0` | 每个账号的在途请求上限；`0` 为不限。参考实现默认 1，可避免单账号看起来像突发流量。 |
 | `base-url` | `string` | `https://api.commandcode.ai/provider/v1` | 上游 provider 地址。必须是合法 HTTPS（`allow-http: true` 时可用 HTTP），不能带 query、fragment 或 userinfo。 |
 | `catalog-url` | `string` | `{base-url}/models` | 目录发现地址。 |
 | `model-prefix.enabled` | `bool` | `true` | `true` 时客户端用 `<prefix>/<model>`，`false` 时直接暴露上游裸 id。 |
 | `model-prefix.value` | `string` | `commandcode` | provider 前缀。 |
 | `catalog.refresh-interval` | `duration` | `15m` | 目录轮询周期（最小 `1m`）。 |
 | `catalog.stale-while-unavailable` | `bool` | `true` | 刷新失败时继续提供上一份有效目录。 |
+| `catalog.static` | `[]string` | `[]` | 静态模型 id 表。仅在拿不到实时 `/models` 时启用——最常见的是**池里没有 provider 账号**（`/models` 属于 Provider API，会拒绝 Go 套餐 key）。填了它，纯 `go-cli` 单账号也能发布 `/v1/models`。 |
 | `protocols.*` | `bool` | `true` | 路由总开关；关闭的协议会带着诊断信息排除其模型。 |
 | `route-overrides` | `map` | `{}` | `{ 模型: { protocol, endpoint } }`，把某个模型钉到别的上游路由；`endpoint` 必填。 |
 | `request-timeout` | `duration` | `5m` | 上游 HTTP 超时（配额/账号请求另按 30s 上限）。 |

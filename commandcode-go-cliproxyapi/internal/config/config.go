@@ -34,6 +34,11 @@ type APIKey struct {
 type Catalog struct {
 	RefreshInterval       time.Duration
 	StaleWhileUnavailable bool
+	// Static is a model-id list served when the live /models catalog cannot
+	// be fetched — notably when the pool has no provider-mode account, since
+	// the Provider API (and therefore /models) refuses Go-plan keys. Empty
+	// means no static fallback.
+	Static []string
 }
 
 type Protocols struct {
@@ -101,6 +106,8 @@ type Config struct {
 	CatalogURL       string
 	ModelPrefix      ModelPrefix
 	APIKeys          []APIKey
+	Accounts         []Account
+	Pool             Pool
 	Catalog          Catalog
 	Protocols        Protocols
 	RouteOverrides   map[string]RouteOverride
@@ -108,13 +115,106 @@ type Config struct {
 	AllowHTTP        bool
 	RequestTimeout   time.Duration
 	MaxResponseBytes int64
-	// Pending is true when api-keys is still empty. Such a config is
-	// VALID to register with (so the host publishes the metadata and the
-	// Management Center can show its config form), but the plugin serves
-	// no models and refuses execution until keys are supplied. The strict
-	// Load still rejects an empty key list, so a plugin that IS configured
-	// keeps every existing validation guarantee.
+	// Pending is true when no usable credential is configured. Such a config
+	// is VALID to register with (so the host publishes the metadata and the
+	// Management Center can show its config form), but the plugin serves no
+	// models and refuses execution until a key is supplied.
 	Pending bool
+}
+
+// TransportMode selects which upstream surface an account talks to.
+//
+//	provider -> {base-url}/chat/completions etc. Documented Provider API.
+//	            Available to GOAT / Pro / Max / Team / Provider plans.
+//	go-cli   -> {base-url-root}/alpha/generate, the CLI's own envelope.
+//	            The only surface a Go-plan credential can use, because Go is
+//	            the one plan the Provider API refuses ("upgrade_required").
+type TransportMode string
+
+const (
+	// TransportProvider is the documented OpenAI/Anthropic-compatible surface.
+	TransportProvider TransportMode = "provider"
+	// TransportGoCLI is the CLI transport used by Go-plan credentials.
+	TransportGoCLI TransportMode = "go-cli"
+)
+
+// Valid reports whether the mode is one this plugin implements.
+func (m TransportMode) Valid() bool {
+	return m == TransportProvider || m == TransportGoCLI
+}
+
+// Account is one credential plus the surface it must be sent to. A pool of
+// these replaces the old flat api-keys list: Go and Provider credentials need
+// different upstream envelopes, so the mode cannot be inferred from the key
+// alone and has to be declared.
+type Account struct {
+	// Label is display-only, shown on the quota page and in logs.
+	Label string
+	// Mode selects the upstream transport. Empty defaults to provider.
+	Mode TransportMode
+	// Credential is the CommandCode API key (a "user_..." string).
+	Credential string
+	// Disabled keeps the entry in config but out of rotation.
+	Disabled bool
+}
+
+// Pool controls how accounts are chosen per request.
+type Pool struct {
+	// Strategy is "sticky" (prefer the last healthy account) or
+	// "round-robin". Empty defaults to sticky.
+	Strategy string
+	// MaxConcurrencyPerAccount caps in-flight requests per credential.
+	// Zero means unlimited. The reference implementations default to one
+	// in-flight request per account, which also keeps a single credential
+	// from looking like a burst to upstream risk controls.
+	MaxConcurrencyPerAccount int
+}
+
+const (
+	PoolStrategySticky     = "sticky"
+	PoolStrategyRoundRobin = "round-robin"
+)
+
+// EffectiveAccounts returns the accounts eligible for selection.
+//
+// This is the single normalization point for credentials: explicit accounts
+// come first, then any legacy flat api-keys entries are folded in as
+// provider-mode accounts. Doing it here (rather than only at parse time) keeps
+// the runtime correct for a Config built programmatically — tests, or a future
+// caller that constructs one directly.
+func (c Config) EffectiveAccounts() []Account {
+	out := make([]Account, 0, len(c.Accounts)+len(c.APIKeys))
+	seen := make(map[string]struct{}, len(c.Accounts)+len(c.APIKeys))
+
+	for _, a := range c.Accounts {
+		cred := strings.TrimSpace(a.Credential)
+		if cred == "" {
+			continue
+		}
+		// A disabled entry is remembered so the same credential cannot sneak
+		// back in through the legacy api-keys list.
+		seen[cred] = struct{}{}
+		if a.Disabled {
+			continue
+		}
+		if a.Mode == "" {
+			a.Mode = TransportProvider
+		}
+		a.Credential = cred
+		out = append(out, a)
+	}
+	for _, k := range c.APIKeys {
+		cred := strings.TrimSpace(k.Value)
+		if cred == "" {
+			continue
+		}
+		if _, dup := seen[cred]; dup {
+			continue
+		}
+		seen[cred] = struct{}{}
+		out = append(out, Account{Mode: TransportProvider, Credential: cred})
+	}
+	return out
 }
 
 type rawModelFilter struct {
@@ -130,6 +230,8 @@ type rawConfig struct {
 	CatalogURL       *string                  `yaml:"catalog-url"`
 	ModelPrefix      rawPrefix                `yaml:"model-prefix"`
 	APIKeys          []rawKey                 `yaml:"api-keys"`
+	Accounts         []rawAccount             `yaml:"accounts"`
+	Pool             rawPool                  `yaml:"pool"`
 	Catalog          rawCatalog               `yaml:"catalog"`
 	Protocols        rawProtocols             `yaml:"protocols"`
 	RouteOverrides   map[string]RouteOverride `yaml:"route-overrides"`
@@ -137,6 +239,55 @@ type rawConfig struct {
 	AllowHTTP        bool                     `yaml:"allow-http"`
 	RequestTimeout   *string                  `yaml:"request-timeout"`
 	MaxResponseBytes *int64                   `yaml:"max-response-bytes"`
+}
+
+// rawAccount is one pool entry. Like rawKey it accepts a bare credential
+// string, so a hand-written `accounts: ["user_xxx"]` works as well as the
+// full object form the Management Center produces.
+type rawAccount struct {
+	Label      string        `yaml:"label"`
+	Mode       TransportMode `yaml:"mode"`
+	Credential string        `yaml:"credential"`
+	Value      string        `yaml:"value"`
+	Key        string        `yaml:"key"`
+	APIKey     string        `yaml:"api_key"`
+	Disabled   bool          `yaml:"disabled"`
+}
+
+// UnmarshalYAML accepts a scalar (the credential itself) or a mapping.
+func (a *rawAccount) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		if node.Tag != "!!str" {
+			return fmt.Errorf("accounts entry must be a string or an object")
+		}
+		a.Credential = node.Value
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("accounts entry must be a string or an object")
+	}
+	type plain rawAccount
+	var p plain
+	if err := node.Decode(&p); err != nil {
+		return fmt.Errorf("accounts entry must be a string or an object")
+	}
+	*a = rawAccount(p)
+	return nil
+}
+
+// credential resolves whichever key spelling was used, in a fixed precedence.
+func (a rawAccount) resolveCredential() string {
+	for _, candidate := range []string{a.Credential, a.Value, a.Key, a.APIKey} {
+		if strings.TrimSpace(candidate) != "" {
+			return strings.TrimSpace(candidate)
+		}
+	}
+	return ""
+}
+
+type rawPool struct {
+	Strategy                 string `yaml:"strategy"`
+	MaxConcurrencyPerAccount *int   `yaml:"max-concurrency-per-account"`
 }
 
 type rawPrefix struct {
@@ -190,8 +341,9 @@ func (k *rawKey) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type rawCatalog struct {
-	RefreshInterval       *string `yaml:"refresh-interval"`
-	StaleWhileUnavailable *bool   `yaml:"stale-while-unavailable"`
+	RefreshInterval       *string   `yaml:"refresh-interval"`
+	StaleWhileUnavailable *bool     `yaml:"stale-while-unavailable"`
+	Static                *[]string `yaml:"static"`
 }
 
 type rawProtocols struct {
@@ -237,6 +389,40 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 	for i, k := range raw.APIKeys {
 		keys[i] = APIKey{Value: os.ExpandEnv(k.Value)}
 	}
+	accounts := make([]Account, 0, len(raw.Accounts)+len(keys))
+	for _, a := range raw.Accounts {
+		credential := os.ExpandEnv(a.resolveCredential())
+		mode := a.Mode
+		if mode == "" {
+			mode = TransportProvider
+		}
+		accounts = append(accounts, Account{
+			Label:      strings.TrimSpace(a.Label),
+			Mode:       mode,
+			Credential: credential,
+			Disabled:   a.Disabled,
+		})
+	}
+	// Legacy flat api-keys entries fold into provider-mode accounts, so an
+	// existing config keeps working without being rewritten. They come after
+	// any explicit accounts, and a credential already listed as an account is
+	// not duplicated.
+	seenCredential := make(map[string]struct{}, len(accounts))
+	for _, a := range accounts {
+		if a.Credential != "" {
+			seenCredential[a.Credential] = struct{}{}
+		}
+	}
+	for _, k := range keys {
+		if k.Value == "" {
+			continue
+		}
+		if _, dup := seenCredential[k.Value]; dup {
+			continue
+		}
+		seenCredential[k.Value] = struct{}{}
+		accounts = append(accounts, Account{Mode: TransportProvider, Credential: k.Value})
+	}
 	refreshInterval, err := parseDuration("catalog.refresh-interval", raw.Catalog.RefreshInterval, DefaultRefreshInterval)
 	if err != nil {
 		return Config{}, err
@@ -254,10 +440,16 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 			Enabled: orDefault(raw.ModelPrefix.Enabled, true),
 			Value:   orDefault(raw.ModelPrefix.Value, DefaultModelPrefix),
 		},
-		APIKeys: keys,
+		APIKeys:  keys,
+		Accounts: accounts,
+		Pool: Pool{
+			Strategy:                 poolStrategy(raw.Pool.Strategy),
+			MaxConcurrencyPerAccount: orDefault(raw.Pool.MaxConcurrencyPerAccount, 0),
+		},
 		Catalog: Catalog{
 			RefreshInterval:       refreshInterval,
 			StaleWhileUnavailable: orDefault(raw.Catalog.StaleWhileUnavailable, true),
+			Static:                staticModelList(raw.Catalog.Static),
 		},
 		Protocols: Protocols{
 			ChatCompletions: orDefault(raw.Protocols.ChatCompletions, true),
@@ -272,8 +464,8 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 		AllowHTTP:        raw.AllowHTTP,
 		RequestTimeout:   requestTimeout,
 		MaxResponseBytes: orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),
-		Pending:          allowPending && len(keys) == 0,
 	}
+	c.Pending = allowPending && len(c.EffectiveAccounts()) == 0
 	if raw.CatalogURL != nil {
 		// Mirror the derived-default trim so an explicit trailing-slash
 		// catalog-url cannot double up separators downstream.
@@ -288,9 +480,9 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 }
 
 // validateForLoad runs the strict validation, or the pending-tolerant one
-// when the caller allowed an empty api-keys list.
+// when the caller allowed an empty credential list.
 func (c Config) validateForLoad(allowPending bool) error {
-	if allowPending && len(c.APIKeys) == 0 {
+	if allowPending && len(c.EffectiveAccounts()) == 0 {
 		return c.validateWithoutKeys()
 	}
 	return c.validate()
@@ -311,10 +503,16 @@ func (c Config) validate() error {
 	if err := validateURL("catalog-url", c.CatalogURL, c.AllowHTTP); err != nil {
 		return err
 	}
-	if len(c.APIKeys) == 0 {
-		return fmt.Errorf("api-keys: at least one key is required")
+	// Per-entry checks run BEFORE the presence check so a specific problem
+	// (a key that expanded to empty, a duplicate) reports its own message and
+	// index instead of the generic "no credential configured".
+	if err := c.validateCommon(); err != nil {
+		return err
 	}
-	return c.validateCommon()
+	if len(c.EffectiveAccounts()) == 0 {
+		return fmt.Errorf("accounts: at least one credential is required")
+	}
+	return nil
 }
 
 // validateWithoutKeys runs every check except "at least one key", for the
@@ -444,6 +642,16 @@ func orDefault[T any](p *T, def T) T {
 	return def
 }
 
+// poolStrategy normalizes the strategy name, defaulting to sticky.
+func poolStrategy(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case PoolStrategyRoundRobin:
+		return PoolStrategyRoundRobin
+	default:
+		return PoolStrategySticky
+	}
+}
+
 // normalizeModelList trims entries, drops empties and exact duplicates, and
 // keeps first-seen order so a saved config round-trips predictably.
 func normalizeModelList(in []string) []string {
@@ -464,4 +672,14 @@ func normalizeModelList(in []string) []string {
 		return nil
 	}
 	return out
+}
+
+// staticModelList normalizes the configured static catalog model ids: trims,
+// drops empties and exact duplicates, keeping first-seen order. Nil when the
+// list is unset, so the catalog falls back to the live fetch alone.
+func staticModelList(in *[]string) []string {
+	if in == nil {
+		return nil
+	}
+	return normalizeModelList(*in)
 }

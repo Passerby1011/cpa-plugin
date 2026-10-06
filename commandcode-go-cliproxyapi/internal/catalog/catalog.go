@@ -172,6 +172,24 @@ func (m *Manager) SeedFrom(prev *Manager) {
 	m.swap(raw)
 }
 
+// SeedStatic installs a snapshot built from a configured static model-id
+// list. It exists so a pool with no provider-mode account still serves a
+// usable model catalog: the live /models endpoint belongs to the Provider
+// API, which refuses Go-plan keys, so a go-cli-only deployment has no other
+// way to publish models.
+func (m *Manager) SeedStatic(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	entries := make([]rawModel, 0, len(ids))
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" {
+			entries = append(entries, rawModel{ID: id})
+		}
+	}
+	m.swap(entries, "catalog served from the configured static model list")
+}
+
 // Refresh fetches and swaps the catalog snapshot. On failure it returns a
 // classified, key-free error; the previous snapshot keeps serving while
 // catalog.stale-while-unavailable is enabled, otherwise the routable set

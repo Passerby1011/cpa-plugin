@@ -28,7 +28,7 @@ const ProviderID = "commandcode"
 // -ldflags "-X .../internal/plugin.pluginVersion=<version>".
 const pluginName = "commandcode-go-cliproxyapi"
 
-var pluginVersion = "0.1.4"
+var pluginVersion = "0.2.0"
 
 // SetVersion overrides the reported plugin version; the build injects it via
 // main.version (-ldflags). An empty value keeps the vendored default.
@@ -57,6 +57,9 @@ const registerRefreshTimeout = 10 * time.Second
 type Manager struct {
 	bridge *HostBridge // immutable after NewManager
 
+	// pool owns per-credential selection and cooldowns.
+	pool *poolState
+
 	// lifeMu serializes whole register/reconfigure/shutdown sequences so
 	// their stop-wait-install steps cannot interleave into orphaned tickers.
 	lifeMu sync.Mutex
@@ -72,7 +75,7 @@ type Manager struct {
 
 // NewManager returns a dispatcher whose outbound traffic flows through bridge.
 func NewManager(bridge *HostBridge) *Manager {
-	return &Manager{bridge: bridge}
+	return &Manager{bridge: bridge, pool: newPoolState()}
 }
 
 // HandleCall dispatches one RPC method and returns envelope bytes. Handler
@@ -99,45 +102,6 @@ func (m *Manager) HandleCall(method string, request []byte) (resp []byte, err er
 		return m.handleExecute(request)
 	case pluginabi.MethodExecutorExecuteStream:
 		return m.handleExecuteStream(request)
-	case pluginabi.MethodAuthIdentifier:
-		return okEnvelope(map[string]string{"identifier": ProviderID}), nil
-	case pluginabi.MethodAuthParse:
-		var req pluginapi.AuthParseRequest
-		if json.Unmarshal(request, &req) != nil {
-			return ErrEnvelope("invalid_request", "malformed auth parse request body"), nil
-		}
-		resp, err := (authProvider{}).ParseAuth(context.Background(), req)
-		if err != nil {
-			return ErrEnvelope("auth_failure", err.Error()), nil
-		}
-		debugTrace("auth parse response provider=%s id=%s attr_api_key_present=%t storage_json_bytes=%d", resp.Auth.Provider, resp.Auth.ID, strings.TrimSpace(resp.Auth.Attributes["api_key"]) != "", len(resp.Auth.StorageJSON))
-		return okEnvelope(resp), nil
-	case pluginabi.MethodAuthLoginStart:
-		var req struct {
-			pluginapi.AuthLoginStartRequest
-		}
-		if json.Unmarshal(request, &req) != nil {
-			return ErrEnvelope("invalid_request", "malformed auth login request body"), nil
-		}
-		_, err := (authProvider{}).StartLogin(context.Background(), req.AuthLoginStartRequest)
-		return ErrEnvelope("unsupported", err.Error()), nil
-	case pluginabi.MethodAuthLoginPoll:
-		var req struct{ pluginapi.AuthLoginPollRequest }
-		if json.Unmarshal(request, &req) != nil {
-			return ErrEnvelope("invalid_request", "malformed auth poll request body"), nil
-		}
-		_, err := (authProvider{}).PollLogin(context.Background(), req.AuthLoginPollRequest)
-		return ErrEnvelope("unsupported", err.Error()), nil
-	case pluginabi.MethodAuthRefresh:
-		var req struct{ pluginapi.AuthRefreshRequest }
-		if json.Unmarshal(request, &req) != nil {
-			return ErrEnvelope("invalid_request", "malformed auth refresh request body"), nil
-		}
-		resp, err := (authProvider{}).RefreshAuth(context.Background(), req.AuthRefreshRequest)
-		if err != nil {
-			return ErrEnvelope("auth_failure", err.Error()), nil
-		}
-		return okEnvelope(resp), nil
 	case pluginabi.MethodManagementRegister:
 		return m.registerManagement(request)
 	case pluginabi.MethodManagementHandle:
@@ -168,23 +132,12 @@ type lifecycleRequest struct {
 
 type capabilities struct {
 	ModelProvider bool `json:"model_provider"`
-	AuthProvider  bool `json:"auth_provider"`
-	// InteractiveLogin tells the host whether this provider can drive an
-	// interactive OAuth/device login flow. CommandCode authenticates with a
-	// manually-supplied API key, so its StartLogin/PollLogin always fail;
-	// advertising it on the OAuth login page would only offer a button that
-	// cannot work.
-	//
-	// true  -> the plugin appears in the OAuth login page (default, so a
-	//          host that predates this field keeps its current behaviour).
-	// false -> the plugin still parses/refreshes its own auth records (and
-	//          the executor still receives the selected api_key), but the
-	//          host hides it from the OAuth login page.
-	//
-	// There is deliberately no "AuthProvider off" fallback: that capability
-	// is what lets the host parse our auth files, so turning it off would
-	// break execution rather than just hide a button.
-	InteractiveLogin      bool                         `json:"interactive_login"`
+	// No auth_provider: CommandCode credentials are a plugin-owned pool, not
+	// CPA auth records. Declaring it made the host list us on the OAuth login
+	// page, where the only possible outcome was "failed to generate
+	// authorization url", and the capability cannot be split into "parse only".
+	// Dropping it removes the OAuth entry on an unmodified host and stops the
+	// plugin writing auth files into CPA.
 	Executor              bool                         `json:"executor"`
 	ExecutorModelScope    pluginapi.ExecutorModelScope `json:"executor_model_scope,omitempty"`
 	ExecutorInputFormats  []string                     `json:"executor_input_formats,omitempty"`
@@ -218,6 +171,40 @@ func configFields() []pluginapi.ConfigField {
 				"The value is stored in the CPA config file and shown in plain text here, so avoid sharing the config page.",
 		},
 		{
+			Name: "accounts",
+			// Array, not Object. The declared type is display metadata — the
+			// host's only reader is pluginConfigFields, which forwards it
+			// unchanged — so the WebUI picks the editor from it and the host
+			// coerces nothing: whatever the UI submits is stored as the YAML
+			// node management/plugins.go yamlNodeFromJSONValue builds (a JSON
+			// array -> yaml.SequenceNode) and read back by yamlNodeToJSONValue
+			// (SequenceNode -> JSON array). The plugin decodes that node into
+			// []rawAccount (config rawConfig.Accounts). An Object declaration
+			// would steer the UI toward an object-shaped submission the plugin
+			// cannot decode — the 0.1.4 "saved but not effective" failure.
+			// Sibling fields follow the same rule in the other direction:
+			// "pool"/"model-prefix" are Objects because the plugin decodes them
+			// into YAML mappings, and "api-keys" is an Array for the same reason
+			// "accounts" is.
+			Type: pluginapi.ConfigFieldTypeArray,
+			Description: `Account pool: JSON array of credentials and the surface each one uses, e.g. ` +
+				`[{"label":"go","mode":"go-cli","credential":"user_..."},{"credential":"user_..."}]. ` +
+				"Must be a JSON array; the host saves it as a YAML sequence. " +
+				"mode is provider (default) or go-cli; a Go-plan key MUST use go-cli, which talks to " +
+				"/alpha/generate because the Provider API refuses Go plans. credential supports " +
+				"${ENV_VAR} expansion; disabled keeps an entry in config but out of rotation. " +
+				"A bare credential string is accepted in place of the object form, and legacy " +
+				"api-keys entries are folded in as provider accounts.",
+		},
+		{
+			Name: "pool",
+			Type: pluginapi.ConfigFieldTypeObject,
+			Description: `How accounts are chosen per request, e.g. ` +
+				`{"strategy":"sticky","max-concurrency-per-account":1}. ` +
+				"strategy is sticky (default, prefer the last healthy account) or round-robin; " +
+				"max-concurrency-per-account 0 means unlimited.",
+		},
+		{
 			Name: "base-url",
 			Type: pluginapi.ConfigFieldTypeString,
 			Description: "Upstream provider base URL. Default https://api.commandcode.ai/provider/v1. " +
@@ -237,8 +224,11 @@ func configFields() []pluginapi.ConfigField {
 		{
 			Name: "catalog",
 			Type: pluginapi.ConfigFieldTypeObject,
-			Description: `Catalog refresh behaviour, e.g. {"refresh-interval":"15m","stale-while-unavailable":true}. ` +
-				"refresh-interval minimum is 1m.",
+			Description: `Catalog refresh behaviour, e.g. ` +
+				`{"refresh-interval":"15m","stale-while-unavailable":true,"static":["claude-sonnet-4-6","deepseek/deepseek-v4-pro"]}. ` +
+				"refresh-interval minimum is 1m. static is an optional model-id list served when the live " +
+				"{base-url}/models cannot be fetched — notably a go-cli-only pool, since the Provider API " +
+				"refuses Go-plan keys.",
 		},
 		{
 			Name: "protocols",
@@ -292,15 +282,22 @@ func registrationEnvelope() []byte {
 		},
 		Capabilities: capabilities{
 			ModelProvider: true,
-			AuthProvider:  true,
-			// CommandCode has no OAuth/device flow: the credential is a
-			// manually-supplied API key. Keep AuthProvider on (the host
-			// needs it to parse our auth records and hand api_key to the
-			// executor) but declare that there is no interactive login, so
-			// a host that understands this field hides the dead OAuth entry.
-			InteractiveLogin:      false,
+			// No AuthProvider on purpose.
+			//
+			// In CPA that capability means two things at once: "can parse
+			// auth files" AND "is an interactive login provider". CommandCode
+			// credentials are API keys managed by this plugin, so declaring it
+			// only bought us a dead OAuth button ("failed to generate
+			// authorization url") — and it cannot be turned off per-half.
+			// Dropping it removes the OAuth entry on an UNMODIFIED host, with
+			// no host patch and no auth files written into CPA.
+			//
+			// ExecutorModelScope becomes Static: our models are plugin-owned,
+			// not bound to a host auth record. The host still routes them to
+			// this executor because it only requires Executor + a static/both
+			// scope.
 			Executor:              true,
-			ExecutorModelScope:    pluginapi.ExecutorModelScopeOAuth,
+			ExecutorModelScope:    pluginapi.ExecutorModelScopeStatic,
 			ExecutorInputFormats:  formats,
 			ExecutorOutputFormats: formats,
 			ManagementAPI:         true,
@@ -370,12 +367,9 @@ func (m *Manager) handleLifecycle(request []byte) ([]byte, error) {
 	}
 	m.lifeMu.Lock()
 	defer m.lifeMu.Unlock()
-	debugTrace("lifecycle config_loaded key_count=%d prefix_enabled=%t prefix=%s", len(cfg.APIKeys), cfg.ModelPrefix.Enabled, cfg.ModelPrefix.Value)
-	ctx, cancel := context.WithTimeout(context.Background(), registerRefreshTimeout)
-	defer cancel()
-	if err := m.materializeAuthRecords(ctx, cfg); err != nil {
-		return ErrEnvelope("auth_materialization_failed", err.Error()), nil
-	}
+	debugTrace("lifecycle config_loaded accounts=%d prefix_enabled=%t prefix=%s", len(cfg.EffectiveAccounts()), cfg.ModelPrefix.Enabled, cfg.ModelPrefix.Value)
+	// No auth materialization: credentials live in this plugin's own pool.
+	// Writing CPA auth files was what dragged us onto the OAuth login page.
 	// A pending registration (no api-keys yet) must not touch the network:
 	// there is no credential to fetch a catalog with, and the /models call
 	// would just fail. Register successfully with an empty catalog so the
@@ -443,61 +437,6 @@ func authKeyHash(key string) string {
 // producer agrees without recomputing it.
 func authRecordIDFromHash(hash string) string { return ProviderID + "-key-" + hash }
 func authFileNameFromHash(hash string) string { return authRecordIDFromHash(hash) + ".json" }
-
-// materializeAuthRecords makes CPA-visible auth files idempotently. Existing
-// records are discovered through CPA so their host-managed metadata is never
-// overwritten. The full key digest is non-secret and independent of config
-// ordering. The host ABI has no delete/disable callback, so removed keys remain
-// stale records and are not claimed as removed.
-func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config) error {
-	if m.bridge == nil {
-		return nil
-	}
-	entries, err := m.bridge.AuthList(ctx)
-	if err != nil {
-		return fmt.Errorf("list existing auth records: %w", err)
-	}
-	existing := make(map[string]struct{}, len(entries)*2)
-	for _, entry := range entries {
-		if name := strings.TrimSpace(entry.Name); name != "" {
-			existing[name] = struct{}{}
-		}
-		if id := strings.TrimSpace(entry.ID); id != "" {
-			existing[id] = struct{}{}
-		}
-	}
-	for _, key := range cfg.APIKeys {
-		hash := authKeyHash(key.Value)
-		id := authRecordIDFromHash(hash)
-		name := authFileNameFromHash(hash)
-		if _, ok := existing[id]; ok {
-			continue
-		}
-		if _, ok := existing[name]; ok {
-			continue
-		}
-		record, err := json.Marshal(struct {
-			Type   string `json:"type"`
-			ID     string `json:"id"`
-			Label  string `json:"label"`
-			APIKey string `json:"api_key"`
-		}{
-			Type: ProviderID, ID: id, Label: "CommandCode credential " + hash, APIKey: key.Value,
-		})
-		if err != nil {
-			return fmt.Errorf("build auth record")
-		}
-		if err := m.bridge.AuthSave(ctx, pluginapi.HostAuthSaveRequest{
-			Name: name, JSON: record,
-		}); err != nil {
-			return err
-		}
-		existing[id] = struct{}{}
-		existing[name] = struct{}{}
-		debugTrace("auth materialized id=%s file=%s", id, name)
-	}
-	return nil
-}
 
 // handleModels implements model.static / model.for_auth (FR-003): the last
 // good catalog snapshot mapped to wire ModelInfos; empty catalog yields an
@@ -614,21 +553,84 @@ func (m *Manager) closeStop() chan struct{} {
 // the attempt: the lifecycle path passes context.Background() plus
 // registerRefreshTimeout; ticker ticks pass the loop's stop-derived context
 // plus the full request-timeout, so close(stop) aborts an in-flight tick
-// (F4). On failure it logs a warn via host.log — error text is a redacted
-// category label from the catalog package, never key material (FR-011).
+// (F4).
+//
+// Catalog resolution order (documented in the README): the live /models fetch
+// when a provider-mode account exists, and on failure the configured static
+// model list — with a usable previous snapshot always winning over the static
+// list. Concretely:
+//
+//   - no provider-mode account -> cfg.Catalog.Static, else empty;
+//   - provider account, live fetch OK -> the fetched catalog;
+//   - provider account, live fetch failed, a previous snapshot is being served
+//     and stale-while-unavailable is enabled -> keep serving that snapshot;
+//   - provider account, live fetch failed, no usable snapshot -> static list
+//     when configured, else the error (fail-closed, FR-002).
+//
+// Both catalog sources funnel through catalog.Manager's one snapshot builder,
+// so the static path obeys the same models.allow/deny, model-prefix, protocol
+// kill-switch, route-override, and dedup rules as the live path.
+//
+// Warnings log a redacted category label from the catalog package via
+// host.log, never key material (FR-011).
 func refreshOnce(parent context.Context, mgr *catalog.Manager, bridge *HostBridge, timeout time.Duration, cfg config.Config) error {
-	// Fallback: configured materialization input is catalog-only; CPA client
-	// authentication remains owned by its AuthProvider and CPA.
-	if len(cfg.APIKeys) == 0 {
+	accounts := cfg.EffectiveAccounts()
+	if len(accounts) == 0 {
 		// Pending registration: nothing to authenticate a catalog fetch
-		// with, and indexing APIKeys[0] below would panic. Serving stays
-		// empty until a key is saved and a reconfigure runs.
+		// with, and indexing below would panic. Serving stays empty until a
+		// credential is saved and a reconfigure runs.
+		return nil
+	}
+	// The catalog is fetched with a provider-mode credential: /models is part
+	// of the Provider API, which a Go-plan key cannot call. When the pool has
+	// no provider account, the catalog is left to the static model table.
+	credential := ""
+	for _, a := range accounts {
+		if a.Mode == config.TransportProvider {
+			credential = a.Credential
+			break
+		}
+	}
+	if credential == "" {
+		// No provider-mode account: the live /models endpoint is unreachable
+		// (it belongs to the Provider API, which refuses Go-plan keys). Serve
+		// the configured static list so a go-cli-only deployment still
+		// publishes models instead of an empty catalog.
+		if len(cfg.Catalog.Static) > 0 {
+			mgr.SeedStatic(cfg.Catalog.Static)
+			if bridge != nil {
+				_ = bridge.Log("info", "no provider-mode account; catalog served from the configured static model list", map[string]any{"models": len(cfg.Catalog.Static)})
+			}
+			return nil
+		}
+		if bridge != nil {
+			_ = bridge.Log("info", "no provider-mode account and no static catalog configured; model list will be empty", nil)
+		}
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	err := mgr.Refresh(ctx, cfg.APIKeys[0].Value)
+	err := mgr.Refresh(ctx, credential)
 	if err != nil {
+		// Fallback order matters: a usable snapshot already being served wins
+		// over the static list, so an outage never overwrites good data with
+		// the (necessarily coarser) static table. mgr.Models() is non-empty
+		// here only when a prior snapshot survived — Manager.fail clears the
+		// snapshot when stale-while-unavailable is off, so the flag and the
+		// snapshot agree by construction.
+		if cfg.Catalog.StaleWhileUnavailable && len(mgr.Models()) > 0 {
+			if bridge != nil {
+				_ = bridge.Log("warn", "catalog refresh failed; serving stale catalog", map[string]any{"error": err.Error()})
+			}
+			return nil
+		}
+		if len(cfg.Catalog.Static) > 0 {
+			mgr.SeedStatic(cfg.Catalog.Static)
+			if bridge != nil {
+				_ = bridge.Log("warn", "catalog refresh failed; catalog served from the configured static model list", map[string]any{"error": err.Error(), "models": len(cfg.Catalog.Static)})
+			}
+			return nil
+		}
 		if bridge != nil {
 			_ = bridge.Log("warn", "catalog refresh failed", map[string]any{"error": err.Error()})
 		}

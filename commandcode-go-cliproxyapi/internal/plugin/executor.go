@@ -21,6 +21,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 
 	"github.com/hex-ci/cpa-plugin/commandcode-go-cliproxyapi/internal/adapter/chatcompletions"
+	"github.com/hex-ci/cpa-plugin/commandcode-go-cliproxyapi/internal/adapter/gocli"
 	"github.com/hex-ci/cpa-plugin/commandcode-go-cliproxyapi/internal/adapter/messages"
 	"github.com/hex-ci/cpa-plugin/commandcode-go-cliproxyapi/internal/adapter/responses"
 	"github.com/hex-ci/cpa-plugin/commandcode-go-cliproxyapi/internal/adapter/shared"
@@ -40,37 +41,75 @@ type executorRequest struct {
 }
 
 // resolvedExecution carries everything both execution paths need after
-// model/key resolution succeeded.
+// model/account resolution succeeded.
 type resolvedExecution struct {
-	cfg config.Config
-	rec catalog.ModelRecord
-	key string
+	cfg     config.Config
+	rec     catalog.ModelRecord
+	account config.Account
+	// pool is the pool the account was acquired from. The lease belongs to
+	// that pool, not to whatever pool the manager holds when the request
+	// finishes: a reconfigure replaces the manager's pool while requests are
+	// still in flight, and returning their leases to the new pool would pin
+	// the old pool's in-flight counter forever (permanently capping those
+	// credentials) while decrementing a pool that never granted them.
+	pool *poolState
+	// goCli routes this request over the CLI transport (/alpha/generate)
+	// instead of the documented Provider API. It is derived from the
+	// selected account's mode, so a Go-plan credential never reaches a
+	// surface that refuses it with upgrade_required.
+	goCli bool
+	// status is the upstream HTTP status, recorded so the streaming path can
+	// release the account (with the right cooldown) when the pump finishes.
+	status int
+	// released guards the once-only release: a request has several failure
+	// exits plus the completion path, and releasing twice would decrement
+	// another request's in-flight count.
+	released bool
 }
 
-// resolveExecution resolves the requested model against the snapshot and
-// extracts the key selected by CPA. A non-nil second return is a ready-made
-// failure envelope.
+// releaseAccount returns the account to the pool it was acquired from. status
+// is the upstream HTTP status (0 when the request never reached upstream); the
+// pool maps it to a cooldown so a bad or throttled credential stops being
+// picked. The once-guard matters because a request has several failure exits
+// (URL/envelope build, transport error, non-2xx) plus the completion path.
+func (m *Manager) releaseAccount(res *resolvedExecution, status int) {
+	if res == nil || res.released {
+		return
+	}
+	res.released = true
+	if res.pool == nil || res.account.Credential == "" {
+		return
+	}
+	cooldown := cooldownFor(status)
+	if status == 429 && cooldown == 0 {
+		cooldown = 60 * time.Second
+	}
+	res.pool.release(res.account.Credential, cooldown, time.Now())
+}
+
+// resolveExecution resolves the requested model against the snapshot and picks
+// an account from the plugin's own pool. A non-nil second return is a
+// ready-made failure envelope.
+//
+// The credential no longer comes from the host: with no AuthProvider
+// capability there is no host auth record to read, and the ModelRouter path
+// passes no auth anyway. The pool is the single source of credentials.
 func (m *Manager) resolveExecution(req executorRequest) (*resolvedExecution, []byte) {
 	m.mu.RLock()
-	cfg, mgr := m.cfg, m.mgr
+	cfg, mgr, pool := m.cfg, m.mgr, m.pool
 	m.mu.RUnlock()
-	if req.AuthProvider != ProviderID {
-		return nil, classEnvelope(&errclass.Error{Class: errclass.ClassAuth, Message: "selected auth provider is not commandcode"})
-	}
-	if cfg.Pending || len(cfg.APIKeys) == 0 {
+
+	accounts := cfg.EffectiveAccounts()
+	if len(accounts) == 0 {
 		// Registered but not configured. Say so plainly instead of failing
 		// with a confusing "no routable catalog" further down.
 		return nil, classEnvelope(&errclass.Error{
 			Class:      errclass.ClassAuth,
-			Message:    "commandcode plugin is registered but not configured: set api-keys in the plugin configuration",
+			Message:    "commandcode plugin is registered but not configured: add an account credential in the plugin configuration",
 			StatusCode: http.StatusUnauthorized,
 		})
 	}
-	key := strings.TrimSpace(req.AuthAttributes["api_key"])
-	debugTrace("executor auth model=%s auth_id=%s provider=%s attr_api_key_present=%t attr_count=%d storage_json_bytes=%d", req.Model, req.AuthID, req.AuthProvider, key != "", len(req.AuthAttributes), len(req.StorageJSON))
-	if key == "" {
-		return nil, classEnvelope(&errclass.Error{Class: errclass.ClassAuth, Message: "selected auth has no api key"})
-	}
+
 	var rec catalog.ModelRecord
 	var found bool
 	if mgr != nil && req.Model != "" {
@@ -83,7 +122,21 @@ func (m *Manager) resolveExecution(req executorRequest) (*resolvedExecution, []b
 			StatusCode: http.StatusNotFound,
 		})
 	}
-	return &resolvedExecution{cfg: cfg, rec: rec, key: key}, nil
+
+	account := pool.acquire(accounts, cfg.Pool, time.Now())
+	if account == nil {
+		// Every account is cooling down or at its concurrency cap.
+		return nil, classEnvelope(&errclass.Error{
+			Class:      errclass.ClassAuth,
+			Message:    "no commandcode account available: all are cooling down or at their concurrency limit",
+			StatusCode: http.StatusServiceUnavailable,
+		})
+	}
+	debugTrace("executor account selected mode=%s label=%s model=%s upstream_model=%s route=%s",
+		account.Mode, account.Label, req.Model, rec.UpstreamID, rec.Protocol)
+	// The lease is bound to the pool it was taken from (see resolvedExecution),
+	// so releaseAccount never has to re-read m.pool.
+	return &resolvedExecution{cfg: cfg, rec: rec, account: *account, pool: pool, goCli: account.Mode == config.TransportGoCLI}, nil
 }
 
 // handleExecute implements executor.execute (non-stream). Stream-flagged
@@ -103,29 +156,37 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	}
 	sessionID, eErr := resolveCommandCodeSessionID(req)
 	if eErr != nil {
+		m.releaseAccount(res, 0)
 		return classEnvelope(eErr), nil
 	}
 	debugTrace("executor session mode=%s source_format=%s x_commandcode_session=%s fallback=%t", "non-stream", req.SourceFormat, sessionID, sessionID == emptyCommandCodeSessionID)
+	if res.goCli {
+		return m.handleExecuteGoCLI(req, res, sessionID)
+	}
 	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking)
 	if eErr != nil {
+		m.releaseAccount(res, 0)
 		return classEnvelope(eErr), nil
 	}
 
 	url := catalog.JoinUpstreamURL(res.cfg.BaseURL, res.rec.EndpointPath)
-	debugTrace("executor resolved public_model=%s upstream_model=%s route=%s url=%s key_count=%d", req.Model, res.rec.UpstreamID, res.rec.Protocol, url, len(res.cfg.APIKeys))
+	debugTrace("executor resolved public_model=%s upstream_model=%s route=%s url=%s mode=%s", req.Model, res.rec.UpstreamID, res.rec.Protocol, url, res.account.Mode)
 	debugTrace("executor sending non-stream url=%s body_len=%d", url, len(upstreamBody))
 	ctx, cancel := context.WithTimeout(context.Background(), res.cfg.RequestTimeout)
 	defer cancel()
+	headers := upstreamAuthHeaders(res.rec.Protocol, res.account.Credential, sessionID)
 	resp, err := m.bridge.Do(ctx, pluginapi.HTTPRequest{
 		Method:  http.MethodPost,
 		URL:     url,
-		Headers: upstreamAuthHeaders(res.rec.Protocol, res.key, sessionID),
+		Headers: headers,
 		Body:    upstreamBody,
 	})
 	if err != nil {
+		m.releaseAccount(res, 0)
 		debugTrace("executor non-stream network error: %v", err)
 		return classEnvelope(errclass.FromNetwork(err)), nil
 	}
+	m.releaseAccount(res, resp.StatusCode)
 	debugTrace("executor received non-stream status=%d body_len=%d", resp.StatusCode, len(resp.Body))
 	if resp.StatusCode >= 400 {
 		return classEnvelope(shared.UpstreamStatusError(resp.StatusCode, resp.Body)), nil
@@ -151,6 +212,105 @@ func buildUpstreamRequest(route catalog.Route, upstreamModel, sourceFormat strin
 		return responses.BuildRequest(upstreamModel, sourceFormat, sourceBody, ts)
 	}
 	return nil, errclass.Translation("unsupported route")
+}
+
+// buildGoCLIRequest renders the CLI-transport (/alpha/generate) envelope for
+// one request. The envelope is built from an OpenAI chat-completions body, so
+// a non-OpenAI source is translated first — the same body the provider route
+// would have sent, just wrapped for the CLI surface instead.
+func buildGoCLIRequest(res *resolvedExecution, req executorRequest, sessionID string) ([]byte, *errclass.Error) {
+	body, eErr := buildUpstreamRequest(catalog.RouteChatCompletions, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking)
+	if eErr != nil {
+		return nil, eErr
+	}
+	envelope, err := gocli.BuildEnvelope(body, gocli.Options{
+		// Thread identity is derived from the resolved session so the same
+		// client session maps onto one upstream thread across turns.
+		ThreadID: gocli.NormalizeThreadID(sessionID),
+		// With no system prompt the CLI substitute is a single space;
+		// otherwise upstream injects a multi-thousand-token default prompt.
+		SystemPlaceholder: true,
+	})
+	if err != nil {
+		return nil, errclass.Translation("failed to build CLI envelope: " + err.Error())
+	}
+	return envelope, nil
+}
+
+// handleExecuteGoCLI serves a non-streaming client over the CLI transport.
+// The CLI endpoint is always a stream, so the whole response is consumed and
+// aggregated into one completion before translation back to the client. The
+// aggregation is checked: only a stream that carries its finish event is a
+// completed answer, and a truncated body fails classified.
+func (m *Manager) handleExecuteGoCLI(req executorRequest, res *resolvedExecution, sessionID string) ([]byte, error) {
+	url, eErr := generateURL(res.cfg.BaseURL)
+	if eErr != nil {
+		m.releaseAccount(res, 0)
+		return classEnvelope(eErr), nil
+	}
+	upstreamBody, eErr := buildGoCLIRequest(res, req, sessionID)
+	if eErr != nil {
+		m.releaseAccount(res, 0)
+		return classEnvelope(eErr), nil
+	}
+	debugTrace("executor sending non-stream url=%s body_len=%d mode=go-cli", url, len(upstreamBody))
+	ctx, cancel := context.WithTimeout(context.Background(), res.cfg.RequestTimeout)
+	defer cancel()
+	resp, err := m.bridge.Do(ctx, pluginapi.HTTPRequest{
+		Method:  http.MethodPost,
+		URL:     url,
+		Headers: gocli.GenerateHeaders(res.account.Credential, sessionID),
+		Body:    upstreamBody,
+	})
+	if err != nil {
+		m.releaseAccount(res, 0)
+		debugTrace("executor go-cli non-stream network error: %v", err)
+		return classEnvelope(errclass.FromNetwork(err)), nil
+	}
+	m.releaseAccount(res, resp.StatusCode)
+	debugTrace("executor go-cli received non-stream status=%d body_len=%d", resp.StatusCode, len(resp.Body))
+	if resp.StatusCode >= 400 {
+		return classEnvelope(shared.UpstreamStatusError(resp.StatusCode, resp.Body)), nil
+	}
+	if int64(len(resp.Body)) > res.cfg.MaxResponseBytes {
+		return classEnvelope(errclass.Translation("response exceeds max-response-bytes")), nil
+	}
+	// The checked aggregation reports whether the CLI stream ended without its
+	// finish event. A truncated stream is a dropped connection, not an answer:
+	// fail it rather than hand the client a half response dressed up as a
+	// completed completion.
+	//
+	// Classification is UpstreamFallback (ClassUpstream, retryable) because a
+	// non-stream response is fully buffered before anything reaches the
+	// client, so the partial body was never delivered: re-execution cannot
+	// duplicate content, and the failure is an upstream server/connection
+	// fault with no HTTP status of its own. Malformed frames and upstream
+	// error events keep the classification ConvertNonStreamChecked derives
+	// (Translation / FromStatus), which is strictly more specific than the
+	// truncation fallback.
+	assembled, truncated, eErr := gocli.ConvertNonStreamChecked(resp.Body)
+	if eErr != nil {
+		return classEnvelope(eErr), nil
+	}
+	if truncated {
+		debugTrace("executor go-cli non-stream truncated body_len=%d", len(resp.Body))
+		return classEnvelope(errclass.UpstreamFallback("upstream CLI stream ended without a finish event")), nil
+	}
+	converted, eErr := chatcompletions.ConvertNonStreamResponse(req.SourceFormat, http.StatusOK, assembled)
+	if eErr != nil {
+		return classEnvelope(eErr), nil
+	}
+	return okEnvelope(pluginapi.ExecutorResponse{Payload: converted, Headers: resp.Headers}), nil
+}
+
+// generateURL resolves the CLI endpoint, folding the adapter's plain error
+// into the classified envelope vocabulary used by the executor.
+func generateURL(baseURL string) (string, *errclass.Error) {
+	url, err := gocli.GenerateURL(baseURL)
+	if err != nil {
+		return "", errclass.Translation(err.Error())
+	}
+	return url, nil
 }
 
 func upstreamAuthHeaders(route catalog.Route, key, sessionID string) http.Header {
@@ -319,7 +479,7 @@ func classEnvelope(e *errclass.Error) []byte {
 	return out
 }
 
-// streamConverter is the common shape of the three adapters' stream
+// streamConverter is the common shape of the four adapters' stream
 // converters: feed one upstream SSE chunk, get translated client events.
 type streamConverter interface {
 	Feed(chunk []byte) (events [][]byte, done bool, eErr *errclass.Error)
@@ -332,7 +492,13 @@ var (
 	_ interface{ Flush() [][]byte } = (*messages.StreamConverter)(nil)
 )
 
-func newStreamConverter(route catalog.Route, sourceFormat string) streamConverter {
+func newStreamConverter(route catalog.Route, sourceFormat string, goCli bool) streamConverter {
+	if goCli {
+		// The CLI transport always answers in its own event vocabulary
+		// regardless of the model's catalog route; gocli translates onto the
+		// chat-completions kernel and then into sourceFormat.
+		return gocli.NewConverter(sourceFormat)
+	}
 	switch route {
 	case catalog.RouteMessages:
 		return messages.NewStreamConverter(sourceFormat)
@@ -367,11 +533,16 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 	}
 	sessionID, eErr := resolveCommandCodeSessionID(req)
 	if eErr != nil {
+		m.releaseAccount(res, 0)
 		return classEnvelope(eErr), nil
 	}
 	debugTrace("executor session mode=%s source_format=%s x_commandcode_session=%s fallback=%t", "stream", req.SourceFormat, sessionID, sessionID == emptyCommandCodeSessionID)
+	if res.goCli {
+		return m.executeStreamGoCLI(req, res, sessionID)
+	}
 	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking)
 	if eErr != nil {
+		m.releaseAccount(res, 0)
 		return classEnvelope(eErr), nil
 	}
 
@@ -382,14 +553,16 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 	st, _, id, err := m.bridge.DoStream(ctx, pluginapi.HTTPRequest{
 		Method:  http.MethodPost,
 		URL:     url,
-		Headers: upstreamAuthHeaders(res.rec.Protocol, res.key, sessionID),
+		Headers: upstreamAuthHeaders(res.rec.Protocol, res.account.Credential, sessionID),
 		Body:    upstreamBody,
 	})
 	debugTrace("executor stream DoStream status=%d upstreamID=%s err=%v", st, id, err)
 	if err != nil {
+		m.releaseAccount(res, 0)
 		return classEnvelope(errclass.FromNetwork(err)), nil
 	}
 	if st >= 400 {
+		m.releaseAccount(res, st)
 		var body []byte
 		if id != "" {
 			payload, errMsg, _, readErr := m.bridge.StreamRead(id)
@@ -404,6 +577,72 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 		}
 		return classEnvelope(shared.UpstreamStatusError(st, body)), nil
 	}
+	// Success: the account stays in-flight for the whole stream so
+	// pool.max-concurrency-per-account actually bounds concurrency; the pump
+	// releases it once, when the stream finishes.
+	res.status = st
+
+	downID := req.StreamID
+	if m.bridge != nil {
+		m.bridge.inFlight.Add(1)
+	}
+	go func() {
+		if m.bridge != nil {
+			defer m.bridge.inFlight.Done()
+		}
+		m.pumpStream(downID, id, res, req.SourceFormat)
+	}()
+	return okEnvelope(struct{}{}), nil
+}
+
+// executeStreamGoCLI runs a streaming client over the CLI transport. The
+// upstream is a plain SSE stream; pumpStream translates it with the gocli
+// converter. Pre-first-byte failures (URL, envelope, HTTP >=400) still return
+// as envelopes so CPA can failover before any emission.
+func (m *Manager) executeStreamGoCLI(req executorRequest, res *resolvedExecution, sessionID string) ([]byte, error) {
+	url, eErr := generateURL(res.cfg.BaseURL)
+	if eErr != nil {
+		m.releaseAccount(res, 0)
+		return classEnvelope(eErr), nil
+	}
+	upstreamBody, eErr := buildGoCLIRequest(res, req, sessionID)
+	if eErr != nil {
+		m.releaseAccount(res, 0)
+		return classEnvelope(eErr), nil
+	}
+	debugTrace("executor sending stream url=%s body_len=%d mode=go-cli", url, len(upstreamBody))
+	ctx, cancel := context.WithTimeout(context.Background(), res.cfg.RequestTimeout)
+	defer cancel()
+	st, _, id, err := m.bridge.DoStream(ctx, pluginapi.HTTPRequest{
+		Method:  http.MethodPost,
+		URL:     url,
+		Headers: gocli.GenerateHeaders(res.account.Credential, sessionID),
+		Body:    upstreamBody,
+	})
+	debugTrace("executor go-cli stream DoStream status=%d upstreamID=%s err=%v", st, id, err)
+	if err != nil {
+		m.releaseAccount(res, 0)
+		return classEnvelope(errclass.FromNetwork(err)), nil
+	}
+	if st >= 400 {
+		m.releaseAccount(res, st)
+		var body []byte
+		if id != "" {
+			payload, errMsg, _, readErr := m.bridge.StreamRead(id)
+			if readErr == nil {
+				if len(payload) > 0 {
+					body = payload
+				} else if errMsg != "" {
+					body = []byte(errMsg)
+				}
+			}
+			_ = m.bridge.StreamClose(id)
+		}
+		return classEnvelope(shared.UpstreamStatusError(st, body)), nil
+	}
+	// Success: the account stays in-flight for the whole stream (see
+	// executeStream); the pump releases it exactly once at the end.
+	res.status = st
 
 	downID := req.StreamID
 	if m.bridge != nil {
@@ -419,6 +658,11 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 }
 
 func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, sourceFormat string) {
+	// The account was acquired by resolveExecution and stays in-flight for the
+	// whole stream; release it exactly once when the pump ends (cleanly, on
+	// truncation, or on any early failure exit below).
+	defer m.releaseAccount(res, res.status)
+
 	var closeOnce sync.Once
 	closeStreams := func(downErrMsg string) {
 		closeOnce.Do(func() {
@@ -440,7 +684,7 @@ func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, 
 	})
 	defer watchdog.Stop()
 
-	conv := newStreamConverter(res.rec.Protocol, sourceFormat)
+	conv := newStreamConverter(res.rec.Protocol, sourceFormat, res.goCli)
 	var (
 		total          int64
 		upstreamClosed bool
@@ -483,6 +727,14 @@ func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, 
 	}
 	debugTrace("executor stream loop end convDone=%t upstreamClosed=%t", convDone, upstreamClosed)
 	if !convDone && upstreamClosed {
+		// A CLI stream that ended before its finish event is truncated (a
+		// dropped connection). gocli exposes Truncated to say so; the
+		// provider converters do not implement it and keep their existing
+		// clean-close flush.
+		if _, ok := conv.(interface{ Truncated() bool }); ok {
+			closeStreams(errclass.Redact("upstream stream ended without a finish event"))
+			return
+		}
 		if flusher, ok := conv.(interface{ Flush() [][]byte }); ok {
 			flushed := flusher.Flush()
 			if emitErr := m.emitAll(downID, flushed); emitErr != nil {
@@ -490,6 +742,12 @@ func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, 
 				return
 			}
 		}
+	}
+	// A CLI stream that reached [DONE] without a finish event is also
+	// truncated: fail it rather than report a completed answer.
+	if trunc, ok := conv.(interface{ Truncated() bool }); ok && trunc.Truncated() {
+		closeStreams(errclass.Redact("upstream stream ended without a finish event"))
+		return
 	}
 }
 

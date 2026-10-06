@@ -210,7 +210,7 @@ func TestLoadRejections(t *testing.T) {
 		{"invalid yaml syntax", "[unclosed", "decode config"},
 		{"unknown anchor has no line info", "request-timeout: *nope\n", "decode config: invalid YAML structure"},
 		{"duplicate api key never leaks", "api-keys:\n  - sk-dup-value\n  - sk-dup-value\n", "api-keys: duplicate key values are not allowed"},
-		{"keyless config rejected", "", "api-keys: at least one key is required"},
+		{"keyless config rejected", "", "accounts: at least one credential is required"},
 		{"request-timeout zero rejected", "request-timeout: 0s\n" + withKey, "request-timeout: must be positive"},
 		{
 			"duplicate route-override keys",

@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.2.0
+
+### 变更
+
+- **不再声明 `AuthProvider`**：CommandCode 用 API Key 认证，没有 OAuth/设备码流程。
+  此前该能力会带来一个必然失败的登录按钮（`failed to generate authorization url`）。
+  现在直接去掉，在**未打宿主补丁**的官方 CLIProxyAPI 上登录入口即消失；`ExecutorModelScope`
+  同时改为 `Static`（模型由插件自己拥有，不绑定宿主 auth 记录），不再写任何 auth 文件。
+- **账号池（`accounts` / `pool`）**：扁平 `api-keys` 升级为账号池。每个账号显式声明
+  `mode`（`provider` 或 `go-cli`）、可选 `label`、`credential`（支持 `${ENV_VAR}`）与
+  `disabled`。`pool` 控制选择策略（`sticky` / `round-robin`）与每账号并发上限。
+  旧 `api-keys` 仍然兼容，会折叠为 provider 账号。
+- **`go-cli` 传输**：Go 套餐是唯一被 Provider API 以 `upgrade_required` 拒绝的套餐，只能走
+  厂商 CLI 的 `/alpha/generate` 信封。新增 `internal/adapter/gocli`：信封构造、SSE 事件解析、
+  tool-call / reasoning 保真，并复用既有 chat-completions 内核产出 openai / claude /
+  openai-response 三种客户端格式。`mode: go-cli` 的账号不再发往 Provider API。
+- **`catalog.static` 静态模型表**：`/models` 属于 Provider API，会拒绝 Go 套餐 key，因此
+  **纯 go-cli 池拿不到实时目录**。新增静态模型 id 列表配置；池中没有 provider 账号时以它发布
+  模型，使 Go 单账号部署可用。
+- **WebUI 新增 `accounts`、`pool` 配置字段**，可在插件管理页直接配置账号池。
+
+### 修复
+
+- **CLI 流被截断时不再伪装成功**：上游缺 finish 事件（掉线）时，现在明确报错关闭下游
+  （`upstream stream ended without a finish event`），而不是把半截回答当成完整回答。
+  **非流式**路径同样处理：新增 `gocli.ConvertNonStreamChecked`，`handleExecuteGoCLI`
+  在截断时返回分类错误，不再把半截响应当成正常 completion。
+- **账号池生命周期**：流式请求在整个流生命周期持有账号（`max-concurrency-per-account` 真正生效），
+  且每次成功获取的账号**恰好释放一次**；所有失败出口（会话解析 / 信封构造 / URL 构造 / 传输错误）
+  都会释放，不再泄漏 in-flight 计数。
+  归属也修正：一次请求把它取号的那个池记在 `resolvedExecution.pool` 上，释放回**同一个池**——
+  此前用 `m.pool`，reconfigure 换池后会把旧请求归还到新池，导致旧池 in-flight 永远不归零、
+  新池被无关扣减。
+- **`pool.strategy=sticky` 实现与注释相反**：原实现按 `lastUsed` **最早**挑选，
+  等于在每个请求间轮换账号，与"同一账号持续服务"的声明矛盾。现改为优先**最近用过**的健康账号，
+  仅当它进入 cooldown 或达到并发上限时才切换；注释同步说明这是**进程级**粘性（`acquire` 无会话句柄）。
+- **`accounts` 声明类型与形态不符**：由 `Object` 改为 `Array`。宿主把提交的 JSON 原样落成 YAML 节点
+  （`yamlNodeFromJSONValue` 的 `[]any` → `SequenceNode`），`field.Type` 只是前端渲染提示、不做强制转换；
+  而 `accounts` 的示例一直是 JSON 数组，与 `api-keys` 同类。错声明为 `Object` 会诱导出插件无法解码的
+  对象形态，正是 0.1.4「保存了却不生效」那类事故。
+- **`catalog.static` 回退行为补全**：此前只在**池中没有 provider 账号**时启用，
+  与文档「拿不到实时 `/models` 时启用」不符。现在实时拉取失败时也回退，且顺序为
+  **先保留可用旧快照（`stale-while-unavailable`），再用静态表**——避免用较粗的静态表覆盖好数据。
+
+### 说明
+
+- `go build ./... && go vet ./... && go test ./...` 全绿，`go test -race ./internal/plugin/` 亦通过。
+  新增测试覆盖：`go-cli` 账号路由到 `/alpha/generate` 且带 `Authorization: Bearer <cred>` 与
+  `x-command-code-version`、`provider` 账号仍走 `/v1/chat/completions`；CLI SSE 解析（多事件、
+  跨帧切分、error 事件、非流式聚合与截断）；sticky/round-robin 选择；账号释放与换池归属；
+  `accounts` 字段类型；静态 catalog 回退矩阵（allow/deny、prefix、协议开关、去重、空列表、
+  失败重配置后恢复）。
+- 尚未在真实 CommandCode Go 套餐凭据上做端到端实测（本机无该凭据），标记为 **NOT_VERIFIED**。
+
 ## 0.1.4
 
 ### 修复

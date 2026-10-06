@@ -17,6 +17,7 @@ import (
 
 	"github.com/hex-ci/cpa-plugin/commandcode-go-cliproxyapi/internal/adapter/shared"
 	"github.com/hex-ci/cpa-plugin/commandcode-go-cliproxyapi/internal/catalog"
+	"github.com/hex-ci/cpa-plugin/commandcode-go-cliproxyapi/internal/config"
 	"github.com/hex-ci/cpa-plugin/commandcode-go-cliproxyapi/internal/errclass"
 )
 
@@ -36,7 +37,6 @@ const (
 func execReqBody(model, format string, body []byte, stream bool) []byte {
 	b, _ := json.Marshal(executorRequest{
 		ExecutorRequest: pluginapi.ExecutorRequest{
-			AuthProvider: ProviderID, AuthAttributes: map[string]string{"api_key": testKey},
 			Model: model, SourceFormat: format, OriginalRequest: body, Stream: stream,
 		},
 	})
@@ -50,7 +50,6 @@ func execStreamReqBody(model, format string, body []byte, downStreamID string) [
 func execStreamReqBodyForKey(model, format string, body []byte, downStreamID, key string) []byte {
 	b, _ := json.Marshal(executorRequest{
 		ExecutorRequest: pluginapi.ExecutorRequest{
-			AuthProvider: ProviderID, AuthAttributes: map[string]string{"api_key": key},
 			Model: model, SourceFormat: format, OriginalRequest: body, Stream: true,
 		},
 		StreamID: downStreamID,
@@ -211,7 +210,6 @@ func mustExecute(t *testing.T, m *Manager, model, format string, body []byte) pl
 
 func execReqBodyWithKey(model, format string, body []byte, stream bool, key string) []byte {
 	b, _ := json.Marshal(executorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
-		AuthProvider: ProviderID, AuthAttributes: map[string]string{"api_key": key},
 		Model: model, SourceFormat: format, OriginalRequest: body, Stream: stream,
 	}})
 	return b
@@ -219,7 +217,6 @@ func execReqBodyWithKey(model, format string, body []byte, stream bool, key stri
 
 func execReqBodyWithSessionInputs(model, format string, body []byte, stream bool, key, canonical, header string) []byte {
 	b, _ := json.Marshal(executorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
-		AuthProvider: ProviderID, AuthAttributes: map[string]string{"api_key": key},
 		Model: model, SourceFormat: format, OriginalRequest: body, Stream: stream,
 		Metadata: map[string]any{"canonical_session_id": canonical},
 		Headers:  http.Header{"X-Claude-Code-Session-Id": []string{header}},
@@ -1265,7 +1262,7 @@ func TestRegistrationCapabilitiesIncludeExecutor(t *testing.T) {
 	var reg registrationResult
 	decodeResult(t, resp, &reg)
 	want := []string{"openai", "claude", "openai-response"}
-	if !reg.Capabilities.Executor || !reg.Capabilities.AuthProvider ||
+	if !reg.Capabilities.Executor ||
 		!reflectDeepEqualStrings(reg.Capabilities.ExecutorInputFormats, want) ||
 		!reflectDeepEqualStrings(reg.Capabilities.ExecutorOutputFormats, want) {
 		t.Fatalf("capabilities = %+v", reg.Capabilities)
@@ -1435,12 +1432,17 @@ func TestExecuteStreamMidStreamFailureNoRetry(t *testing.T) {
 }
 
 func TestExecuteInvalidAuthRejection(t *testing.T) {
-	m, _ := newExecManager(t)
+	t.Run("no account configured", func(t *testing.T) {
+		m, _ := newExecManager(t)
+		// Empty the pool: with no credential the executor must fail with a
+		// clear "not configured" error rather than reaching upstream.
+		m.mu.Lock()
+		m.cfg.Accounts = nil
+		m.cfg.APIKeys = nil
+		m.mu.Unlock()
 
-	t.Run("wrong auth provider", func(t *testing.T) {
 		req := executorRequest{
 			ExecutorRequest: pluginapi.ExecutorRequest{
-				AuthProvider: "wrong-provider", AuthAttributes: map[string]string{"api_key": testKey},
 				Model: "commandcode/glm-5.3", SourceFormat: "openai", OriginalRequest: []byte(ccRequestBody),
 			},
 		}
@@ -1450,16 +1452,16 @@ func TestExecuteInvalidAuthRejection(t *testing.T) {
 			t.Fatalf("handle call: %v", err)
 		}
 		env := decodeEnv(t, resp)
-		if env.OK || env.Error == nil || env.Error.Code != "auth_failure" || !strings.Contains(env.Error.Message, "selected auth provider is not commandcode") {
-			t.Fatalf("wrong provider envelope = %+v", env.Error)
+		if env.OK || env.Error == nil || env.Error.Code != "auth_failure" || !strings.Contains(env.Error.Message, "not configured") {
+			t.Fatalf("unconfigured envelope = %+v", env.Error)
 		}
 	})
 
-	t.Run("missing api key", func(t *testing.T) {
+	t.Run("model not in catalog", func(t *testing.T) {
+		m, _ := newExecManager(t)
 		req := executorRequest{
 			ExecutorRequest: pluginapi.ExecutorRequest{
-				AuthProvider: ProviderID, AuthAttributes: map[string]string{"api_key": "   "},
-				Model: "commandcode/glm-5.3", SourceFormat: "openai", OriginalRequest: []byte(ccRequestBody),
+				Model: "commandcode/does-not-exist", SourceFormat: "openai", OriginalRequest: []byte(ccRequestBody),
 			},
 		}
 		b, _ := json.Marshal(req)
@@ -1468,19 +1470,22 @@ func TestExecuteInvalidAuthRejection(t *testing.T) {
 			t.Fatalf("handle call: %v", err)
 		}
 		env := decodeEnv(t, resp)
-		if env.OK || env.Error == nil || env.Error.Code != "auth_failure" || !strings.Contains(env.Error.Message, "selected auth has no api key") {
-			t.Fatalf("missing key envelope = %+v", env.Error)
+		if env.OK || env.Error == nil || !strings.Contains(env.Error.Message, "not in routable catalog") {
+			t.Fatalf("unknown model envelope = %+v", env.Error)
 		}
 	})
 }
 
 func TestExecuteStreamInvalidAuthRejection(t *testing.T) {
-	m, f := newStreamManager(t, streamScript{})
+	t.Run("no account configured", func(t *testing.T) {
+		m, f := newStreamManager(t, streamScript{})
+		m.mu.Lock()
+		m.cfg.Accounts = nil
+		m.cfg.APIKeys = nil
+		m.mu.Unlock()
 
-	t.Run("wrong auth provider", func(t *testing.T) {
 		req := executorRequest{
 			ExecutorRequest: pluginapi.ExecutorRequest{
-				AuthProvider: "wrong-provider", AuthAttributes: map[string]string{"api_key": testKey},
 				Model: "commandcode/glm-5.3", SourceFormat: "openai", OriginalRequest: []byte(ccRequestBody), Stream: true,
 			},
 			StreamID: "down-bad-auth",
@@ -1491,21 +1496,21 @@ func TestExecuteStreamInvalidAuthRejection(t *testing.T) {
 			t.Fatalf("handle call: %v", err)
 		}
 		env := decodeEnv(t, resp)
-		if env.OK || env.Error == nil || env.Error.Code != "auth_failure" || !strings.Contains(env.Error.Message, "selected auth provider is not commandcode") {
-			t.Fatalf("stream wrong provider envelope = %+v", env.Error)
+		if env.OK || env.Error == nil || !strings.Contains(env.Error.Message, "not configured") {
+			t.Fatalf("stream unconfigured envelope = %+v", env.Error)
 		}
 		if got := len(f.callsOf(pluginabi.MethodHostHTTPDoStream)); got != 0 {
-			t.Fatalf("stream opens after auth failure = %d", got)
+			t.Fatalf("stream opens without a credential = %d", got)
 		}
 	})
 
-	t.Run("missing api key", func(t *testing.T) {
+	t.Run("model not in catalog", func(t *testing.T) {
+		m, f := newStreamManager(t, streamScript{})
 		req := executorRequest{
 			ExecutorRequest: pluginapi.ExecutorRequest{
-				AuthProvider: ProviderID, AuthAttributes: map[string]string{},
-				Model: "commandcode/glm-5.3", SourceFormat: "openai", OriginalRequest: []byte(ccRequestBody), Stream: true,
+				Model: "commandcode/does-not-exist", SourceFormat: "openai", OriginalRequest: []byte(ccRequestBody), Stream: true,
 			},
-			StreamID: "down-bad-auth-key",
+			StreamID: "down-bad-model",
 		}
 		b, _ := json.Marshal(req)
 		resp, err := m.HandleCall("executor.execute_stream", b)
@@ -1513,27 +1518,142 @@ func TestExecuteStreamInvalidAuthRejection(t *testing.T) {
 			t.Fatalf("handle call: %v", err)
 		}
 		env := decodeEnv(t, resp)
-		if env.OK || env.Error == nil || env.Error.Code != "auth_failure" || !strings.Contains(env.Error.Message, "selected auth has no api key") {
-			t.Fatalf("stream missing key envelope = %+v", env.Error)
+		if env.OK || env.Error == nil || !strings.Contains(env.Error.Message, "not in routable catalog") {
+			t.Fatalf("stream unknown model envelope = %+v", env.Error)
 		}
 		if got := len(f.callsOf(pluginabi.MethodHostHTTPDoStream)); got != 0 {
-			t.Fatalf("stream opens after auth failure = %d", got)
+			t.Fatalf("stream opens for an unknown model = %d", got)
 		}
 	})
 }
 
-func TestExecuteUsesSelectedAuthKeyWithoutFallback(t *testing.T) {
-	customKey := "sk-cpa-selected-unique-key"
+// ---- non-stream go-cli path ----------------------------------------------
+//
+// The CLI endpoint is always a stream, so a non-streaming client is served
+// by aggregating the whole upstream SSE body. That aggregation must be
+// checked: only a stream that reaches its finish event is a completed
+// answer, and anything else (a dropped connection, a bare [DONE], an empty
+// body, a malformed frame, an upstream error event, unusable tool-call
+// arguments) must fail classified instead of being passed off as a
+// completion.
+
+// goCliNonStreamManager scripts one non-stream /alpha/generate response body
+// for a go-cli pool (see goCliStreamManager in gocli_pool_test.go).
+func goCliNonStreamManager(t *testing.T, body string) (*Manager, *fakeCaller) {
+	t.Helper()
+	return goCliStreamManager(t, streamScript{}, func() ([]byte, error) {
+		return hostOK(pluginapi.HTTPResponse{
+			StatusCode: http.StatusOK,
+			Headers:    http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       []byte(body),
+		}), nil
+	})
+}
+
+func goCliNonStreamExecute(t *testing.T, m *Manager) (pluginabi.Envelope, []byte) {
+	t.Helper()
+	resp, err := m.HandleCall("executor.execute",
+		execReqBody("commandcode/glm-5.3", "openai", []byte(ccRequestBody), false))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	return decodeEnv(t, resp), resp
+}
+
+func TestExecuteGoCliNonStreamChecked(t *testing.T) {
+	cases := []struct {
+		name      string
+		body      string
+		wantOK    bool
+		wantClass errclass.Class
+	}{
+		{
+			name:   "text plus finish plus done sentinel succeeds",
+			body:   cliGoStream,
+			wantOK: true,
+		},
+		{
+			name: "text plus finish without done sentinel succeeds",
+			body: "data: {\"type\":\"text-delta\",\"text\":\"hello\"}\n\n" +
+				"data: {\"type\":\"finish\",\"finishReason\":\"stop\"}\n\n",
+			wantOK: true,
+		},
+		{
+			name:      "text without finish fails",
+			body:      "data: {\"type\":\"text-delta\",\"text\":\"partial\"}\n\n",
+			wantClass: errclass.ClassUpstream,
+		},
+		{
+			name:      "done sentinel without finish fails",
+			body:      "data: [DONE]\n\n",
+			wantClass: errclass.ClassUpstream,
+		},
+		{
+			name:      "empty body fails",
+			body:      "",
+			wantClass: errclass.ClassUpstream,
+		},
+		{
+			name:      "malformed json frame fails",
+			body:      "data: {definitely not json\n\n",
+			wantClass: errclass.ClassTranslation,
+		},
+		{
+			name:      "error event fails",
+			body:      "data: {\"type\":\"error\",\"error\":\"500\",\"message\":\"boom\"}\n\n",
+			wantClass: errclass.ClassUpstream,
+		},
+		{
+			name:      "incomplete tool-call arguments fail",
+			body:      "data: {\"type\":\"tool-call\",\"toolCallId\":\"c1\",\"toolName\":\"f\",\"input\":\"{\\\"a\\\":\"}\n\n",
+			wantClass: errclass.ClassTranslation,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := goCliNonStreamManager(t, tc.body)
+			env, raw := goCliNonStreamExecute(t, m)
+			if tc.wantOK {
+				if !env.OK || env.Error != nil {
+					t.Fatalf("want success, got error %+v (%s)", env.Error, raw)
+				}
+				var out pluginapi.ExecutorResponse
+				if err := json.Unmarshal(env.Result, &out); err != nil {
+					t.Fatalf("result decode: %v", err)
+				}
+				if !bytes.Contains(out.Payload, []byte("hello")) {
+					t.Fatalf("aggregated payload lost the text: %s", out.Payload)
+				}
+				if !bytes.Contains(out.Payload, []byte(`"finish_reason":"stop"`)) {
+					t.Fatalf("terminal reason missing: %s", out.Payload)
+				}
+				return
+			}
+			if env.OK || env.Error == nil {
+				t.Fatalf("want a classified error envelope, got %s", raw)
+			}
+			if env.Error.Code == "" || env.Error.Message == "" {
+				t.Fatalf("error envelope not classified: %+v", env.Error)
+			}
+			if tc.wantClass != "" && env.Error.Code != string(tc.wantClass) {
+				t.Fatalf("error class = %q, want %q (%+v)", env.Error.Code, tc.wantClass, env.Error)
+			}
+		})
+	}
+}
+
+func TestExecuteUsesPoolCredential(t *testing.T) {
+	customKey := "user_pool-key-abc123"
 	f := &fakeCaller{responder: wrapWithCatalog(testCatalogJSON, upstreamRouter(t, map[string]string{
 		"/v1/chat/completions": ccResponseBody,
 	}))}
 	m := NewManager(NewHostBridge(f.call))
 	t.Cleanup(func() { _, _ = m.HandleCall("plugin.shutdown", nil) })
-	if _, err := m.HandleCall("plugin.register", lifecycleRequestBody(testValidYAML)); err != nil {
+	if _, err := m.HandleCall("plugin.register", lifecycleRequestBody("api-keys:\n  - value: "+customKey+"\n")); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
-	resp, err := m.HandleCall("executor.execute", execReqBodyWithKey("commandcode/glm-5.3", "openai", []byte(ccRequestBody), false, customKey))
+	resp, err := m.HandleCall("executor.execute", execReqBody("commandcode/glm-5.3", "openai", []byte(ccRequestBody), false))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -1549,8 +1669,8 @@ func TestExecuteUsesSelectedAuthKeyWithoutFallback(t *testing.T) {
 	}
 }
 
-func TestExecuteStreamUsesSelectedAuthKey(t *testing.T) {
-	customKey := "sk-cpa-selected-stream-key"
+func TestExecuteStreamUsesPoolCredential(t *testing.T) {
+	customKey := "user_pool-stream-key"
 	var gotAuth string
 	f := &fakeCaller{}
 	m := NewManager(NewHostBridge(f.call))
@@ -1564,18 +1684,18 @@ func TestExecuteStreamUsesSelectedAuthKey(t *testing.T) {
 					gotAuth, _ = auth[0].(string)
 				}
 			}
-			return hostOK(hostStreamStartResp{StatusCode: http.StatusOK, StreamID: "up-auth"}), nil
+			return hostOK(hostStreamStartResp{StatusCode: http.StatusOK, StreamID: "up-pool"}), nil
 		}
 		if method == pluginabi.MethodHostHTTPStreamRead {
 			return hostOK(hostStreamReadResp{Done: true}), nil
 		}
 		return hostOK(map[string]any{}), nil
 	})
-	if _, err := m.HandleCall("plugin.register", lifecycleRequestBody(testValidYAML)); err != nil {
+	if _, err := m.HandleCall("plugin.register", lifecycleRequestBody("api-keys:\n  - value: "+customKey+"\n")); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	resp, err := m.HandleCall("executor.execute_stream",
-		execStreamReqBodyForKey("commandcode/glm-5.3", "openai", []byte(ccRequestBody), "down-auth", customKey))
+		execReqBody("commandcode/glm-5.3", "openai", []byte(ccRequestBody), true))
 	if err != nil {
 		t.Fatalf("execute_stream: %v", err)
 	}
@@ -1649,4 +1769,298 @@ func TestExecuteStreamBlockedEmitCannotWedgeTheProducer(t *testing.T) {
 		!strings.Contains(string(downCloses[0].payload), `"error"`) {
 		t.Fatalf("downstream close with error label missing: %v", downCloses)
 	}
+}
+
+// ---- pool lease ownership ------------------------------------------------
+//
+// A request acquires its account from the pool installed at resolution time.
+// Reconfiguration swaps the manager's pool, so a request still in flight must
+// return its lease to the pool it acquired from — never to whatever pool the
+// manager holds when the request ends. The tests below pin that ownership in
+// both execution paths.
+
+const leaseAccountKey = "user_lease-key-1"
+
+// leaseTestYAML is a single-account pool with no concurrency cap: every
+// acquire of that credential succeeds unless it is cooling down, which makes
+// an acquire after a release a direct probe of the lease accounting.
+const leaseTestYAML = "accounts:\n" +
+	"  - label: lease\n" +
+	"    credential: " + leaseAccountKey + "\n"
+
+// newLeaseManager registers the single-account lease pool over the given
+// upstream responder and returns the manager with the pool it started on.
+func newLeaseManager(t *testing.T, next func(string, []byte) ([]byte, error)) (*Manager, *fakeCaller, *poolState) {
+	t.Helper()
+	f := &fakeCaller{responder: next}
+	m := NewManager(NewHostBridge(f.call))
+	t.Cleanup(func() { _, _ = m.HandleCall("plugin.shutdown", nil) })
+	if _, err := m.HandleCall("plugin.register", lifecycleRequestBody(leaseTestYAML)); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	return m, f, m.pool
+}
+
+// leaseAccounts returns the effective account list of the lease config.
+func leaseAccounts(t *testing.T, m *Manager) []config.Account {
+	t.Helper()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	accounts := m.cfg.EffectiveAccounts()
+	if len(accounts) != 1 || accounts[0].Credential != leaseAccountKey {
+		t.Fatalf("effective accounts = %+v, want the single lease account", accounts)
+	}
+	return accounts
+}
+
+// poolAccountState reads one credential's pool bookkeeping (cooldown and
+// in-flight count) under the pool lock, so state updated by a background
+// stream pump is read without racing the race detector.
+func poolAccountState(pool *poolState, credential string) (cooldownUntil time.Time, inFlight int) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	st := pool.state(credential)
+	return st.cooldownUntil, st.inFlight
+}
+
+// holdBackgroundLease takes a lease on the side, playing the part of another
+// in-flight request. With a lease outstanding, a single release leaves
+// inFlight at 1: a double release would drop it to 0 and a missing release
+// would leave it at 2, so the count pins "released exactly once" where an
+// idle-pool check (clamped at zero) could not.
+func holdBackgroundLease(t *testing.T, m *Manager, pool *poolState) *config.Account {
+	t.Helper()
+	account := pool.acquire(leaseAccounts(t, m), config.Pool{}, time.Now())
+	if account == nil {
+		t.Fatal("background acquire returned nil")
+	}
+	return account
+}
+
+// swapPoolState installs a fresh pool on the manager, the way a reconfigure
+// replaces plugin-owned runtime state, and returns the NEW pool. The old pool
+// stays live for requests already in flight, which is exactly the ownership
+// under test.
+func swapPoolState(t *testing.T, m *Manager) *poolState {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	old := m.pool
+	m.pool = newPoolState()
+	if m.pool == old {
+		t.Fatal("pool swap did not install a distinct poolState")
+	}
+	return m.pool
+}
+
+// TestExecuteReleasesLeaseToAcquiringPool pins the non-stream success path:
+// the request acquires and releases its lease exactly once, leaving the pool
+// idle again.
+func TestExecuteReleasesLeaseToAcquiringPool(t *testing.T) {
+	m, f, pool := newLeaseManager(t, wrapWithCatalog(testCatalogJSON, upstreamRouter(t, map[string]string{
+		"/v1/chat/completions": ccResponseBody,
+	})))
+	background := holdBackgroundLease(t, m, pool)
+
+	env := mustExecute(t, m, "commandcode/glm-5.3", "openai", []byte(ccRequestBody))
+	if !env.OK || env.Error != nil {
+		t.Fatalf("execute envelope error: %+v", env.Error)
+	}
+	if cooldown, inFlight := poolAccountState(pool, leaseAccountKey); inFlight != 1 {
+		t.Fatalf("inFlight = %d with one background lease outstanding, want 1 (released exactly once)", inFlight)
+	} else if !cooldown.IsZero() {
+		t.Fatalf("cooldown = %v, want none after a successful request", cooldown)
+	}
+	pool.release(background.Credential, 0, time.Now())
+	if _, inFlight := poolAccountState(pool, leaseAccountKey); inFlight != 0 {
+		t.Fatalf("inFlight = %d after every lease was returned, want 0", inFlight)
+	}
+
+	// The pooled credential (not some other one) is what reached upstream.
+	wire := lastWire(t, f, pluginabi.MethodHostHTTPDo)
+	if got := wire["headers"].(map[string]any)["Authorization"].([]any)[0].(string); got != "Bearer "+leaseAccountKey {
+		t.Fatalf("upstream auth = %q, want the pooled credential", got)
+	}
+}
+
+// TestExecuteFailedExitReleasesLeaseOnce pins the failure exit: an upstream
+// 4xx still returns the lease exactly once (the once-guard on
+// resolvedExecution) and applies the cooldown class of the observed status.
+func TestExecuteFailedExitReleasesLeaseOnce(t *testing.T) {
+	m, _, pool := newLeaseManager(t, wrapWithCatalog(testCatalogJSON, func(method string, _ []byte) ([]byte, error) {
+		if method != pluginabi.MethodHostHTTPDo {
+			return hostOK(map[string]any{}), nil
+		}
+		return hostOK(pluginapi.HTTPResponse{
+			StatusCode: http.StatusUnauthorized,
+			Headers:    http.Header{"Content-Type": []string{"application/json"}},
+			Body:       []byte(`{"error":"bad key"}`),
+		}), nil
+	}))
+	background := holdBackgroundLease(t, m, pool)
+
+	env := mustExecute(t, m, "commandcode/glm-5.3", "openai", []byte(ccRequestBody))
+	if env.OK || env.Error == nil || env.Error.HTTPStatus != http.StatusUnauthorized {
+		t.Fatalf("envelope = %+v, want a classified 401", env.Error)
+	}
+	cooldown, inFlight := poolAccountState(pool, leaseAccountKey)
+	if inFlight != 1 {
+		t.Fatalf("inFlight = %d with one background lease outstanding, want 1 (released exactly once)", inFlight)
+	}
+	sinceNow := cooldown.Sub(time.Now())
+	if want := cooldownFor(http.StatusUnauthorized); sinceNow < want-time.Minute || sinceNow > want+time.Minute {
+		t.Fatalf("cooldown expires in %v, want about %v", sinceNow, want)
+	}
+	if probe := pool.acquire(leaseAccounts(t, m), config.Pool{}, time.Now()); probe != nil {
+		t.Fatalf("acquire = %q while the credential is cooling down, want nil", probe.Credential)
+	}
+	pool.release(background.Credential, 0, time.Now())
+	if _, inFlight := poolAccountState(pool, leaseAccountKey); inFlight != 0 {
+		t.Fatalf("inFlight = %d after every lease was returned, want 0", inFlight)
+	}
+}
+
+// TestStreamingPumpReleasesLeaseToAcquiringPool pins the streaming path: the
+// lease is held for the whole stream and the pump's deferred release returns
+// it to its pool exactly once.
+func TestStreamingPumpReleasesLeaseToAcquiringPool(t *testing.T) {
+	m, _, pool := newLeaseManager(t, wrapWithCatalog(testCatalogJSON, streamResponder(streamScript{
+		upstreamID: "up-lease",
+		frames: []string{
+			`data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"}}]}` + "\n\n",
+			`data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n",
+			"data: [DONE]\n\n",
+		},
+	})))
+	background := holdBackgroundLease(t, m, pool)
+
+	resp, err := m.HandleCall("executor.execute_stream",
+		execStreamReqBody("commandcode/glm-5.3", "openai", []byte(ccRequestBody), "down-lease"))
+	if err != nil {
+		t.Fatalf("execute_stream: %v", err)
+	}
+	if env := decodeEnv(t, resp); !env.OK {
+		t.Fatalf("execute_stream initial envelope = %+v", env.Error)
+	}
+	m.bridge.WaitForInFlight(5 * time.Second)
+
+	cooldown, inFlight := poolAccountState(pool, leaseAccountKey)
+	if inFlight != 1 {
+		t.Fatalf("inFlight = %d with one background lease outstanding, want 1 (released exactly once)", inFlight)
+	}
+	if !cooldown.IsZero() {
+		t.Fatalf("cooldown = %v, want none after a clean stream", cooldown)
+	}
+	pool.release(background.Credential, 0, time.Now())
+	if _, inFlight := poolAccountState(pool, leaseAccountKey); inFlight != 0 {
+		t.Fatalf("inFlight = %d after every lease was returned, want 0", inFlight)
+	}
+}
+
+// TestInFlightLeaseReleasesToAcquiringPoolAcrossPoolSwap is the reconfigure
+// regression this suite exists for: a request acquires from pool A, the
+// manager is reconfigured onto pool B while the request is still in flight,
+// and the request must then return its lease to A. Under the old
+// releaseAccount (which read m.pool at release time) the lease landed in B:
+// A kept inFlight=1 forever, permanently capping that credential, while B was
+// decremented for a request it never granted.
+func TestInFlightLeaseReleasesToAcquiringPoolAcrossPoolSwap(t *testing.T) {
+	t.Run("non-stream completion", func(t *testing.T) {
+		var once sync.Once
+		releaseUpstream := make(chan struct{})
+		drain := func() { once.Do(func() { close(releaseUpstream) }) }
+
+		m, _, pool := newLeaseManager(t, wrapWithCatalog(testCatalogJSON, func(method string, _ []byte) ([]byte, error) {
+			if method != pluginabi.MethodHostHTTPDo {
+				return hostOK(map[string]any{}), nil
+			}
+			<-releaseUpstream // hold the request mid-flight across the swap
+			return hostOK(pluginapi.HTTPResponse{
+				StatusCode: http.StatusOK,
+				Headers:    http.Header{"Content-Type": []string{"application/json"}},
+				Body:       []byte(ccResponseBody),
+			}), nil
+		}))
+		// Registered after the manager's shutdown cleanup, so it runs first
+		// and unparks the request before shutdown drains the bridge.
+		t.Cleanup(drain)
+
+		type callResult struct {
+			raw []byte
+			err error
+		}
+		done := make(chan callResult, 1)
+		go func() {
+			raw, err := m.HandleCall("executor.execute", execReqBody("commandcode/glm-5.3", "openai", []byte(ccRequestBody), false))
+			done <- callResult{raw: raw, err: err}
+		}()
+		// The request is now holding a lease in pool A...
+		waitFor(t, "the in-flight request to hold a lease in the old pool", func() bool {
+			_, inFlight := poolAccountState(pool, leaseAccountKey)
+			return inFlight == 1
+		})
+		// ...and the reconfigure replaces the pool underneath it.
+		newPool := swapPoolState(t, m)
+
+		drain()
+		res := <-done
+		if res.err != nil {
+			t.Fatalf("execute: %v", res.err)
+		}
+		if env := decodeEnv(t, res.raw); !env.OK || env.Error != nil {
+			t.Fatalf("execute envelope error: %+v", env.Error)
+		}
+		if _, inFlight := poolAccountState(pool, leaseAccountKey); inFlight != 0 {
+			t.Fatalf("old pool inFlight = %d, want 0: the lease was returned to the wrong pool", inFlight)
+		}
+		if cooldown, inFlight := poolAccountState(newPool, leaseAccountKey); inFlight != 0 || !cooldown.IsZero() {
+			t.Fatalf("new pool touched by a foreign request: inFlight=%d cooldown=%v", inFlight, cooldown)
+		}
+	})
+
+	t.Run("stream pump", func(t *testing.T) {
+		var once sync.Once
+		releaseRead := make(chan struct{})
+		drain := func() { once.Do(func() { close(releaseRead) }) }
+
+		m, _, pool := newLeaseManager(t, wrapWithCatalog(testCatalogJSON, func(method string, _ []byte) ([]byte, error) {
+			switch method {
+			case pluginabi.MethodHostHTTPDoStream:
+				return hostOK(hostStreamStartResp{
+					StatusCode: http.StatusOK,
+					Headers:    http.Header{"Content-Type": []string{"text/event-stream"}},
+					StreamID:   "up-swap",
+				}), nil
+			case pluginabi.MethodHostHTTPStreamRead:
+				<-releaseRead // the pump holds the lease across the swap
+				return hostOK(hostStreamReadResp{Done: true}), nil
+			default:
+				return hostOK(map[string]any{}), nil
+			}
+		}))
+		// Runs before the manager's shutdown cleanup (see the case above).
+		t.Cleanup(drain)
+
+		resp, err := m.HandleCall("executor.execute_stream",
+			execStreamReqBody("commandcode/glm-5.3", "openai", []byte(ccRequestBody), "down-swap"))
+		if err != nil {
+			t.Fatalf("execute_stream: %v", err)
+		}
+		if env := decodeEnv(t, resp); !env.OK {
+			t.Fatalf("execute_stream initial envelope = %+v", env.Error)
+		}
+		if _, inFlight := poolAccountState(pool, leaseAccountKey); inFlight != 1 {
+			t.Fatalf("old pool inFlight = %d while the pump is running, want 1", inFlight)
+		}
+		newPool := swapPoolState(t, m)
+
+		drain()
+		m.bridge.WaitForInFlight(5 * time.Second)
+		if _, inFlight := poolAccountState(pool, leaseAccountKey); inFlight != 0 {
+			t.Fatalf("old pool inFlight = %d, want 0: the pump returned the lease to the wrong pool", inFlight)
+		}
+		if cooldown, inFlight := poolAccountState(newPool, leaseAccountKey); inFlight != 0 || !cooldown.IsZero() {
+			t.Fatalf("new pool touched by a foreign stream: inFlight=%d cooldown=%v", inFlight, cooldown)
+		}
+	})
 }

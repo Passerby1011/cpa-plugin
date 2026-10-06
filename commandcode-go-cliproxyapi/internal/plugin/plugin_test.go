@@ -3,8 +3,6 @@ package plugin
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -456,7 +454,7 @@ func TestRegisterSuccessPublishesModels(t *testing.T) {
 	if !hasKeys {
 		t.Fatalf("api-keys config field not declared: %+v", reg.Metadata.ConfigFields)
 	}
-	if !reg.Capabilities.ModelProvider || !reg.Capabilities.AuthProvider {
+	if !reg.Capabilities.ModelProvider {
 		t.Fatalf("capabilities wrong: %+v", reg.Capabilities)
 	}
 
@@ -496,6 +494,90 @@ func TestRegisterSuccessPublishesModels(t *testing.T) {
 	decodeResult(t, mustHandle(t, m, "model.for_auth", []byte("{}")), &forAuth)
 	if forAuth.Provider != ProviderID || len(forAuth.Models) != 1 || forAuth.Models[0].ID != got.ID {
 		t.Fatalf("for_auth = %+v", forAuth)
+	}
+}
+
+// TestAccountsConfigFieldIsArray pins the host-contract fix for the 0.1.4
+// "saved through the WebUI, then the plugin stops working" class of bug.
+//
+// Basis, from the host source (internal/api/handlers/management/plugins.go):
+//
+//   - A field's Type is display metadata only. The host's sole reader is
+//     pluginConfigFields (plugins.go:466), which forwards string(field.Type)
+//     unchanged (plugins.go:471); nothing in the save or readback path inspects
+//     or coerces it.
+//   - Save path: PutPluginConfig (plugins.go:253) -> readPluginConfigObject
+//     (plugins.go:511) -> yamlNodeFromJSONObject (plugins.go:570) ->
+//     yamlNodeFromJSONValue, whose case []any (plugins.go:605) builds a
+//     yaml.SequenceNode and whose case string (plugins.go:591) would instead
+//     freeze the text into a scalar. PatchPluginConfig (plugins.go:281) reaches
+//     the same conversion (plugins.go:306). The node is decoded into
+//     config.PluginInstanceConfig (pluginInstanceConfigFromNode, plugins.go:559)
+//     and survives verbatim in .Raw.
+//   - Readback: GetPluginConfig (plugins.go:163) -> pluginConfigJSONObject
+//     (plugins.go:547) -> yamlNodeToJSONValue, whose case yaml.SequenceNode
+//     (plugins.go:642) returns a JSON array.
+//
+// So a JSON array submitted for "accounts" is preserved exactly as an array —
+// which is what config.rawConfig.Accounts ([]rawAccount, config.go:233) decodes.
+// Declaring Object would only steer the WebUI toward an object-shaped
+// submission the plugin cannot decode, with no host-side rescue. Both
+// "api-keys" and "accounts" carry the same JSON-array shape, so both must say
+// Array; this guards against the type drifting away from the documented
+// example again.
+func TestAccountsConfigFieldIsArray(t *testing.T) {
+	t.Parallel()
+
+	fields := configFields()
+	var accounts, keys *pluginapi.ConfigField
+	for index := range fields {
+		field := &fields[index]
+		switch field.Name {
+		case "accounts":
+			accounts = field
+		case "api-keys":
+			keys = field
+		}
+	}
+	if accounts == nil {
+		t.Fatal("accounts config field not declared")
+	}
+	// The host persists whatever JSON the UI submits with no coercion, so the
+	// declared type is the only thing steering the WebUI editor. Array matches
+	// config.rawConfig.Accounts ([]rawAccount); Object would invite an object
+	// the plugin cannot decode, which is the 0.1.4 outage class.
+	if accounts.Type != pluginapi.ConfigFieldTypeArray {
+		t.Fatalf("accounts field type = %q, want %q: the host persists the submitted JSON node verbatim "+
+			"(yamlNodeFromJSONValue []any -> SequenceNode, plugins.go:605) and the plugin decodes it as "+
+			"[]rawAccount (config.go:233), so an Object declaration contradicts the array example in the "+
+			"description", accounts.Type, pluginapi.ConfigFieldTypeArray)
+	}
+	if !strings.Contains(accounts.Description, "JSON array") {
+		t.Fatalf("accounts description does not state the array shape: %q", accounts.Description)
+	}
+
+	// Same no-coercion rule in the other direction: an Object field reaches
+	// config.rawConfig as a YAML mapping decoded via yaml.Unmarshal
+	// (config.go:382), which drops unknown keys as well as rejecting a scalar
+	// or sequence in their place. Every non-Array object field must therefore
+	// document an object example, never a bare array.
+	for _, field := range fields {
+		if field.Type != pluginapi.ConfigFieldTypeObject {
+			continue
+		}
+		example := strings.TrimSpace(field.Description)
+		if !strings.Contains(example, "{") {
+			t.Fatalf("object field %q description carries no object-shaped example: %q", field.Name, field.Description)
+		}
+	}
+
+	// api-keys carries the same array shape through the same host path; if one
+	// moves to Array the other must not be left declaring Object.
+	if keys == nil {
+		t.Fatal("api-keys config field not declared")
+	}
+	if keys.Type != accounts.Type {
+		t.Fatalf("api-keys type = %q, accounts type = %q; both are JSON arrays on the wire", keys.Type, accounts.Type)
 	}
 }
 
@@ -580,119 +662,78 @@ func TestReconfigureWithKeysActivatesPlugin(t *testing.T) {
 	}
 }
 
-func TestLifecycleMaterializesDeterministicAuthRecords(t *testing.T) {
-	first, second, third := "sk-materialize-a", "sk-materialize-b", "sk-materialize-c"
+// TestLifecycleDoesNotWriteCPAAuthFiles pins the 0.2.0 architecture change:
+// credentials live in this plugin's own pool, so register/reconfigure must
+// never touch CPA's auth store. Writing auth files was exactly what dragged
+// the plugin onto the host OAuth login page, where the only possible outcome
+// was "failed to generate authorization url".
+func TestLifecycleDoesNotWriteCPAAuthFiles(t *testing.T) {
+	first, second := "user_first-key", "user_second-key"
 	yamlText := "api-keys:\n  - value: " + first + "\n  - value: " + second + "\n"
 	f := &fakeCaller{responder: catalogResponder(true, testCatalogJSON)}
 	m := NewManager(NewHostBridge(f.call))
 	t.Cleanup(func() { _, _ = m.HandleCall("plugin.shutdown", nil) })
+
 	if _, err := m.HandleCall("plugin.register", lifecycleRequestBody(yamlText)); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if _, err := m.HandleCall("plugin.reconfigure", lifecycleRequestBody("api-keys:\n  - value: "+second+"\n  - value: "+first+"\n")); err != nil {
+	// Both keys are live straight from config, with no auth-file round trip.
+	m.mu.RLock()
+	afterRegister := len(m.cfg.EffectiveAccounts())
+	m.mu.RUnlock()
+	if afterRegister != 2 {
+		t.Fatalf("effective accounts after register = %d, want 2", afterRegister)
+	}
+
+	if _, err := m.HandleCall("plugin.reconfigure", lifecycleRequestBody("api-keys:\n  - value: "+second+"\n")); err != nil {
 		t.Fatalf("reconfigure: %v", err)
 	}
-	calls := f.callsOf(pluginabi.MethodHostAuthSave)
-	if len(calls) != 2 {
-		t.Fatalf("unchanged reconfigure auth saves = %d, want 2", len(calls))
+
+	if got := len(f.callsOf(pluginabi.MethodHostAuthSave)); got != 0 {
+		t.Fatalf("auth saves = %d, want 0 (credentials are plugin-owned)", got)
 	}
-	seen := map[string]bool{}
-	for _, call := range calls {
-		var wire pluginapi.HostAuthSaveRequest
-		if err := json.Unmarshal(call.payload, &wire); err != nil {
-			t.Fatalf("auth payload: %v", err)
-		}
-		var record struct {
-			Type   string `json:"type"`
-			ID     string `json:"id"`
-			Label  string `json:"label"`
-			APIKey string `json:"api_key"`
-		}
-		if err := json.Unmarshal(wire.JSON, &record); err != nil {
-			t.Fatalf("auth record: %v", err)
-		}
-		hash := sha256.Sum256([]byte(record.APIKey))
-		wantHash := hex.EncodeToString(hash[:])
-		if record.Type != ProviderID || record.ID != "commandcode-key-"+wantHash || record.Label != "CommandCode credential "+wantHash || wire.Name != record.ID+".json" {
-			t.Fatalf("record identity = %+v name=%q", record, wire.Name)
-		}
-		if record.APIKey == "" || strings.Contains(wire.Name, record.APIKey) || strings.Contains(record.ID, record.APIKey) {
-			t.Fatalf("secret leaked in identity: %+v name=%q", record, wire.Name)
-		}
-		seen[record.APIKey] = true
+	if got := len(f.callsOf(pluginabi.MethodHostAuthList)); got != 0 {
+		t.Fatalf("auth list calls = %d, want 0", got)
 	}
-	if len(seen) != 2 {
-		t.Fatalf("materialized keys = %v", seen)
-	}
-	if _, err := m.HandleCall("plugin.reconfigure", lifecycleRequestBody("api-keys:\n  - value: "+first+"\n")); err != nil {
-		t.Fatalf("removed-key reconfigure: %v", err)
-	}
-	// No delete callback exists in the pinned ABI: the old record is stale and
-	// remains in CPA rather than being falsely reported as removed.
-	if len(f.callsOf(pluginabi.MethodHostAuthSave)) != 2 {
-		t.Fatalf("removed-key reconfigure changed save count = %d, want 2", len(f.callsOf(pluginabi.MethodHostAuthSave)))
-	}
-	if _, err := m.HandleCall("plugin.reconfigure", lifecycleRequestBody("api-keys:\n  - value: "+first+"\n  - value: "+third+"\n")); err != nil {
-		t.Fatalf("new-key reconfigure: %v", err)
-	}
-	calls = f.callsOf(pluginabi.MethodHostAuthSave)
-	if len(calls) != 3 {
-		t.Fatalf("new-key reconfigure auth saves = %d, want 3", len(calls))
-	}
-	var newRecord struct {
-		APIKey string `json:"api_key"`
-	}
-	var wire pluginapi.HostAuthSaveRequest
-	if err := json.Unmarshal(calls[2].payload, &wire); err != nil {
-		t.Fatalf("new auth wire: %v", err)
-	}
-	if err := json.Unmarshal(wire.JSON, &newRecord); err != nil || newRecord.APIKey != third {
-		t.Fatalf("new auth record = %+v, want key %q", newRecord, third)
+
+	// The reconfigure replaced the pool with the single remaining key.
+	m.mu.RLock()
+	accounts := m.cfg.EffectiveAccounts()
+	m.mu.RUnlock()
+	if len(accounts) != 1 || accounts[0].Credential != second {
+		t.Fatalf("effective accounts after reconfigure = %+v, want just %q", accounts, second)
 	}
 }
 
-func TestLifecycleUsesCPAAuthListAfterManagerRestart(t *testing.T) {
-	f := &fakeCaller{responder: catalogResponder(true, testCatalogJSON)}
-	first := NewManager(NewHostBridge(f.call))
-	if _, err := first.HandleCall("plugin.register", lifecycleRequestBody(testValidYAML)); err != nil {
-		t.Fatalf("first register: %v", err)
-	}
-	if _, err := first.HandleCall("plugin.shutdown", nil); err != nil {
-		t.Fatalf("first shutdown: %v", err)
-	}
-
-	second := NewManager(NewHostBridge(f.call))
-	t.Cleanup(func() { _, _ = second.HandleCall("plugin.shutdown", nil) })
-	if _, err := second.HandleCall("plugin.register", lifecycleRequestBody(testValidYAML)); err != nil {
-		t.Fatalf("second register: %v", err)
-	}
-	if got := len(f.callsOf(pluginabi.MethodHostAuthSave)); got != 1 {
-		t.Fatalf("auth saves after manager restart = %d, want 1", got)
-	}
-}
-
-func TestLifecycleAuthListFailureDoesNotWrite(t *testing.T) {
-	f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+// TestLifecycleSurvivesAuthStoreFailure: a broken CPA auth directory must not
+// affect the plugin now that it does not use that store at all.
+func TestLifecycleSurvivesAuthStoreFailure(t *testing.T) {
+	f := &fakeCaller{responder: func(method string, payload []byte) ([]byte, error) {
 		if method == pluginabi.MethodHostAuthList {
 			return hostErr("auth_unavailable", "auth directory unavailable"), nil
+		}
+		if method == pluginabi.MethodHostHTTPDo {
+			var wire map[string]any
+			_ = json.Unmarshal(payload, &wire)
+			if url, _ := wire["url"].(string); strings.HasSuffix(url, "/models") {
+				return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(testCatalogJSON)}), nil
+			}
 		}
 		return hostOK(map[string]any{}), nil
 	}}
 	m := NewManager(NewHostBridge(f.call))
 	t.Cleanup(func() { _, _ = m.HandleCall("plugin.shutdown", nil) })
+
 	resp, err := m.HandleCall("plugin.register", lifecycleRequestBody(testValidYAML))
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	env := decodeEnv(t, resp)
-	if env.OK || env.Error == nil || env.Error.Code != "auth_materialization_failed" {
-		t.Fatalf("list failure envelope = %+v", env.Error)
+	if !env.OK {
+		t.Fatalf("register failed over an unrelated auth-store error: %+v", env.Error)
 	}
 	if got := len(f.callsOf(pluginabi.MethodHostAuthSave)); got != 0 {
-		t.Fatalf("auth saves after list failure = %d, want 0", got)
-	}
-	if got := len(f.callsOf(pluginabi.MethodHostHTTPDo)); got != 0 {
-		t.Fatalf("catalog calls after list failure = %d, want 0", got)
+		t.Fatalf("auth saves = %d, want 0", got)
 	}
 }
 
@@ -1066,8 +1107,8 @@ func TestOverlappingLifecyclesLeaveSingleTicker(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	if got := len(f.callsOf(pluginabi.MethodHostAuthSave)); got != 1 {
-		t.Fatalf("overlapping lifecycle auth saves = %d, want 1", got)
+	if got := len(f.callsOf(pluginabi.MethodHostAuthSave)); got != 0 {
+		t.Fatalf("overlapping lifecycle auth saves = %d, want 0 (credentials are plugin-owned)", got)
 	}
 	done := m.closeStop()
 	if done == nil {

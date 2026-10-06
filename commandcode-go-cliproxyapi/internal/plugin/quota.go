@@ -190,7 +190,7 @@ func (m *Manager) HandleManagement(ctx context.Context, req pluginapi.Management
 	}
 	m.mu.RLock()
 	baseURL, timeout := m.cfg.BaseURL, m.cfg.RequestTimeout
-	keys := append([]config.APIKey(nil), m.cfg.APIKeys...)
+	keys := append([]config.Account(nil), m.cfg.EffectiveAccounts()...)
 	m.mu.RUnlock()
 	if body.KeyID == "" {
 		// List is deliberately cheap: no upstream account calls. The page
@@ -200,7 +200,10 @@ func (m *Manager) HandleManagement(ctx context.Context, req pluginapi.Management
 		emails := m.accountEmails(ctx)
 		cards := make([]quotaCard, 0, len(keys))
 		for _, key := range keys {
-			id, label := quotaIdentity(key.Value)
+			id, label := quotaIdentity(key.Credential)
+			if key.Label != "" {
+				label = key.Label
+			}
 			email := emails[id]
 			if email != "" {
 				label = email
@@ -210,11 +213,11 @@ func (m *Manager) HandleManagement(ctx context.Context, req pluginapi.Management
 		return quotaJSON(quotaList{Cards: cards})
 	}
 	for _, key := range keys {
-		id, label := quotaIdentity(key.Value)
+		id, label := quotaIdentity(key.Credential)
 		if id != body.KeyID {
 			continue
 		}
-		usage, account, email, err := fetchQuota(ctx, m.bridge, baseURL, timeout, key.Value)
+		usage, account, email, err := fetchQuota(ctx, m.bridge, baseURL, timeout, key.Credential)
 		if err != nil {
 			// One unreachable or unsupported account must not blank the
 			// whole page: the card carries the failure so the others still
@@ -230,7 +233,7 @@ func (m *Manager) HandleManagement(ctx context.Context, req pluginapi.Management
 		// credential with the mailbox. Best-effort by design: a failed
 		// sync is a cosmetic loss and must never blank the quota card.
 		if email != "" {
-			if errSync := m.syncAccountEmail(ctx, key.Value, email); errSync != nil {
+			if errSync := m.syncAccountEmail(ctx, key.Credential, email); errSync != nil {
 				_ = m.bridge.Log("warn", "commandcode credential email not synced", map[string]any{"reason": errSync.Error()})
 			}
 		}
