@@ -61,19 +61,49 @@ func GenerateURL(base string) (string, error) {
 	return authority + "/alpha/generate", nil
 }
 
-// GenerateHeaders returns the headers a CLI-transport request needs. The
-// credential is sent as a bearer token; sessionID (when non-empty) is sent
-// as x-session-id, matching the vendor CLI.
+// HeaderOptions carries everything GenerateHeaders needs beyond the credential.
+type HeaderOptions struct {
+	SessionID string
+	// ProjectDir becomes the x-project-slug header (via SlugifyProjectPath).
+	// Empty means the default fabricated project dir.
+	ProjectDir string
+	// Version overrides x-command-code-version. Empty means DefaultVersion.
+	Version string
+}
+
+// GenerateHeaders returns the headers a CLI-transport request needs, using the
+// default session-less identity. It is the thin wrapper around
+// GenerateHeadersWithOptions kept for callers that carry only a session id.
 func GenerateHeaders(credential, sessionID string) http.Header {
+	return GenerateHeadersWithOptions(credential, HeaderOptions{SessionID: sessionID})
+}
+
+// GenerateHeadersWithOptions returns the headers a CLI-transport request
+// needs. The set is the vendor CLI's own wire shape, not a convenience
+// subset: the project slug and taste-learning flag describe the client the
+// upstream expects to be talking to, and an empty SessionID drops the header
+// entirely rather than sending an empty one.
+func GenerateHeadersWithOptions(credential string, opts HeaderOptions) http.Header {
+	version := opts.Version
+	if version == "" {
+		version = DefaultVersion
+	}
+	projectDir := opts.ProjectDir
+	if projectDir == "" {
+		projectDir = DefaultProjectDir
+	}
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
 	h.Set("User-Agent", "cli")
-	h.Set("x-command-code-version", DefaultVersion)
+	h.Set("x-command-code-version", version)
 	h.Set("x-cli-environment", "production")
-	h.Set("Authorization", "Bearer "+credential)
-	if sessionID != "" {
-		h.Set("x-session-id", sessionID)
+	h.Set("x-project-slug", SlugifyProjectPath(projectDir))
+	h.Set("x-taste-learning", "false")
+	if opts.SessionID != "" {
+		h.Set("x-session-id", opts.SessionID)
 	}
+	h.Set("Authorization", "Bearer "+credential)
+	h.Set("traceparent", NewTraceparent())
 	return h
 }
 
@@ -556,4 +586,84 @@ func ConvertNonStreamChecked(stream []byte) (body []byte, truncated bool, eErr *
 		return nil, false, errclass.Translation("failed to encode CLI completion: " + err.Error())
 	}
 	return out, truncated, nil
+}
+
+// ---- upstream status mapping ----
+
+// UpstreamStatus describes how a CommandCode-specific status should be
+// presented to the client.
+type UpstreamStatus struct {
+	Status int
+	Type   string
+}
+
+// ccStatusMap is the reference CC_STATUS_MAP: CommandCode reports its own
+// statuses (a quota wall is 402, an overloaded backend is 529) which a client
+// speaking HTTP would misread, so each is translated onto the status the
+// client protocol actually expects.
+var ccStatusMap = map[int]UpstreamStatus{
+	// Copied verbatim from the reference CC_STATUS_MAP. The mapping is a
+	// translation, not an identity: a quota wall arrives as 402 and must reach
+	// the client as 429 (payment required is not a rate limit, but it is what
+	// a retrying client should back off on), an overloaded backend arrives as
+	// 503 and must not be reported as the generic 502.
+	400: {Status: 400, Type: "invalid_request_error"},
+	401: {Status: 401, Type: "authentication_error"},
+	402: {Status: 429, Type: "rate_limit_error"}, // payment required -> rate limit
+	403: {Status: 401, Type: "authentication_error"},
+	404: {Status: 404, Type: "not_found"},
+	422: {Status: 400, Type: "invalid_request_error"},
+	429: {Status: 429, Type: "rate_limit_error"},
+	500: {Status: 502, Type: "upstream_error"},
+	502: {Status: 502, Type: "upstream_error"},
+	503: {Status: 503, Type: "temporarily_unavailable"},
+}
+
+// upstreamErrorStatus is the fallback for codes the map does not know: an
+// unmapped CommandCode status is still a bad upstream, never a client error.
+var upstreamErrorStatus = UpstreamStatus{Status: 502, Type: "upstream_error"}
+
+// MapUpstreamStatus translates a CommandCode status code. Unknown codes map to
+// 502 / "upstream_error".
+func MapUpstreamStatus(ccStatus int) UpstreamStatus {
+	if s, ok := ccStatusMap[ccStatus]; ok {
+		return s
+	}
+	return upstreamErrorStatus
+}
+
+// ---- zero-output guard ----
+
+// zeroOutputReason is the reason reported when a completed stream carries no
+// visible output at all.
+const zeroOutputReason = "upstream returned no output"
+
+// ZeroOutputReason returns a non-empty reason when a completed CLI stream
+// produced no visible output at all. An empty answer that reports success is a
+// silent failure the client would otherwise cache as an answer.
+// It returns "" when the stream produced text, reasoning or a tool call.
+func ZeroOutputReason(completedStream []byte) string {
+	body, _, eErr := ConvertNonStreamChecked(completedStream)
+	if eErr != nil {
+		// Unparseable is indistinguishable from empty for this purpose: either
+		// way the caller has nothing to show the client.
+		return zeroOutputReason
+	}
+	var completion struct {
+		Choices []struct {
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+				ToolCalls        []any  `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &completion); err != nil || len(completion.Choices) == 0 {
+		return zeroOutputReason
+	}
+	msg := completion.Choices[0].Message
+	if strings.TrimSpace(msg.Content) != "" || strings.TrimSpace(msg.ReasoningContent) != "" || len(msg.ToolCalls) > 0 {
+		return ""
+	}
+	return zeroOutputReason
 }

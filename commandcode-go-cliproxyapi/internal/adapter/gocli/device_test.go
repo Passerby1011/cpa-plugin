@@ -353,6 +353,29 @@ func TestValidateAPIKey(t *testing.T) {
 	}
 }
 
+// TestValidateAPIKeyTokenBoundary pins the parts of the extraction contract
+// the table above leaves implicit: the token ends where the `[A-Za-z0-9_-]`
+// class ends, the `user_` prefix is case-sensitive, and the leftmost token
+// wins. A regex relaxed to `user_.+`, made case-insensitive, or switched to
+// last-match would break the WebUI's wrapped-key inputs.
+func TestValidateAPIKeyTokenBoundary(t *testing.T) {
+	cases := map[string]string{
+		"user_abc!":                 "user_abc",   // trailing punctuation is not part of the token
+		"user_abc\nmore":            "user_abc",   // nor is a following line
+		"{\"apiKey\":\"user_abc\"}": "user_abc",   // JSON-wrapped key still yields the bare token
+		"USER_abc":                  "",           // the prefix is lowercase-only
+		"User_abc":                  "",           // ...in any casing
+		"user_first user_second":    "user_first", // leftmost match wins
+		"user_a-b_c":                "user_a-b_c", // separators are allowed inside the token
+		"user__-":                   "user__-",    // and are greedily included when trailing
+	}
+	for in, want := range cases {
+		if got := ValidateAPIKey(in); got != want {
+			t.Errorf("ValidateAPIKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // ─── Cross-implementation golden vectors ─────────────────────────────────────
 //
 // These vectors were produced by the REFERENCE implementation
