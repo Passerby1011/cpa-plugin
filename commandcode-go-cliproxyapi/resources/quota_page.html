@@ -60,9 +60,27 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
 .quota-percent { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .quota-track { height: 8px; margin: 8px 0 6px; overflow: hidden; border-radius: 999px; background: var(--bg-tertiary); }
 .quota-fill { height: 100%; border-radius: inherit; background: var(--success-color); transition: width .2s ease; }
+/* Colour grading: the bar warns before the vendor blocks the account. */
+.quota-fill.is-watch { background: var(--warning-color); }
+.quota-fill.is-critical { background: #d97706; }
 .quota-fill.is-exceeded { background: var(--error-color); }
 .quota-meta.is-exceeded { color: var(--error-color); }
 .quota-meta { color: var(--text-secondary); font-size: 12px; }
+.quota-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.quota-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--border-color); color: var(--text-secondary); background: var(--bg-tertiary); }
+.quota-badge.is-warn { color: var(--warning-color); border-color: currentColor; }
+.quota-badge.is-danger { color: var(--error-color); border-color: currentColor; }
+.quota-balances { display: flex; flex-wrap: wrap; gap: 16px; padding: 14px 0; border-top: 1px solid var(--border-color); }
+.quota-balance { display: flex; flex-direction: column; gap: 2px; }
+.quota-balance-value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.quota-balance-label { color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+.quota-detail-toggle { margin-top: 12px; border: 1px solid var(--border-color); border-radius: 8px; padding: 6px 10px; color: var(--text-primary); background: var(--bg-tertiary); font: inherit; font-size: 12px; cursor: pointer; }
+.quota-detail-toggle:hover { border-color: var(--primary-color); background: var(--bg-primary); }
+.quota-detail { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 16px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); }
+.quota-detail-item { display: flex; flex-direction: column; gap: 2px; }
+.quota-detail-value { font-variant-numeric: tabular-nums; font-weight: 600; }
+.quota-detail-label { color: var(--text-secondary); font-size: 11px; }
+.quota-detail-note { grid-column: 1 / -1; color: var(--text-tertiary); font-size: 11px; }
 .quota-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
 .quota-refresh { border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 10px; color: var(--text-primary); background: var(--bg-tertiary); font: inherit; font-size: 12px; cursor: pointer; }
 .quota-refresh:hover { border-color: var(--primary-color); background: var(--bg-primary); }
@@ -187,15 +205,24 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     });
   }
   function text(parent, value) { const node = document.createElement("span"); node.textContent = value == null || value === "" ? "-" : value; parent.appendChild(node); }
+  function gradeClass(usage) {
+    if (usage.status === "exceeded") return "is-exceeded";
+    const gradePercent = Number(usage.percent) || 0;
+    if (gradePercent >= 90) return "is-exceeded";
+    if (gradePercent >= 75) return "is-critical";
+    if (gradePercent >= 50) return "is-watch";
+    return "";
+  }
   function renderUsage(row, usage, extraParts, withDaysLeft) {
     const value = document.createElement("div"); value.className = "quota-percent";
     const track = document.createElement("div"); track.className = "quota-track";
-    const fill = document.createElement("div"); fill.className = usage.status === "exceeded" ? "quota-fill is-exceeded" : "quota-fill";
+    const grade = gradeClass(usage);
+    const fill = document.createElement("div"); fill.className = grade ? "quota-fill " + grade : "quota-fill";
     const percent = Math.max(0, Math.min(100, Number(usage.percent) || 0));
     fill.style.width = percent + "%";
     track.setAttribute("role", "progressbar"); track.setAttribute("aria-valuemin", "0"); track.setAttribute("aria-valuemax", "100"); track.setAttribute("aria-valuenow", String(percent)); track.setAttribute("aria-label", "Quota used"); track.appendChild(fill);
     value.textContent = percent + "%";
-    const meta = document.createElement("div"); meta.className = usage.status === "exceeded" ? "quota-meta is-exceeded" : "quota-meta";
+    const meta = document.createElement("div"); meta.className = grade === "is-exceeded" ? "quota-meta is-exceeded" : "quota-meta";
     const parts = [usage.status || "ok"];
     if (Number(usage.cap) > 0) parts.push((Number(usage.used) || 0).toFixed(2) + " / " + Number(usage.cap).toFixed(2) + " credits");
     (extraParts || []).forEach(part => parts.push(part));
@@ -209,6 +236,53 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     }
     text(meta, parts.join(" · "));
     row.append(value, track, meta);
+  }
+  const detailOpen = new Set();
+  function balanceBlock(value, label) {
+    const box = document.createElement("div"); box.className = "quota-balance";
+    const v = document.createElement("span"); v.className = "quota-balance-value"; v.textContent = Number(value || 0).toFixed(2);
+    const l = document.createElement("span"); l.className = "quota-balance-label"; l.textContent = label;
+    box.append(v, l); return box;
+  }
+  function badge(text, kind) {
+    const node = document.createElement("span");
+    node.className = kind ? "quota-badge " + kind : "quota-badge";
+    node.textContent = text; return node;
+  }
+  function badgesFor(usage) {
+    const out = [];
+    if (usage.exceeded_window) out.push(badge("Blocked: " + usage.exceeded_window, "is-danger"));
+    if (usage.below_threshold) out.push(badge("Low balance", "is-warn"));
+    if (usage.cancel_at_period_end) out.push(badge("Cancels at period end", "is-warn"));
+    if (usage.pending_phase) out.push(badge("Plan change: " + usage.pending_phase, "is-warn"));
+    if (usage.limited && !usage.exceeded_window) out.push(badge("Rate limited plan"));
+    return out;
+  }
+  function detailItem(parent, value, label) {
+    const item = document.createElement("div"); item.className = "quota-detail-item";
+    const v = document.createElement("span"); v.className = "quota-detail-value"; v.textContent = value;
+    const l = document.createElement("span"); l.className = "quota-detail-label"; l.textContent = label;
+    item.append(v, l); parent.appendChild(item);
+  }
+  function detailSection(usage) {
+    const u = usage.usage;
+    if (!u) return null;
+    const box = document.createElement("div"); box.className = "quota-detail";
+    const pct = value => Number(value || 0) * (Number(value || 0) <= 1 ? 100 : 1);
+    detailItem(box, String(Number(u.total_count || 0)), "Requests");
+    detailItem(box, pct(u.success_rate).toFixed(1) + "%", "Success rate");
+    detailItem(box, String(Number(u.completed_count || 0)), "Completed");
+    detailItem(box, String(Number(u.failed_count || 0)), "Failed");
+    detailItem(box, Number(u.total_tokens_in || 0).toLocaleString(), "Tokens in");
+    detailItem(box, Number(u.total_tokens_out || 0).toLocaleString(), "Tokens out");
+    detailItem(box, Number(u.total_cost || 0).toFixed(2), "Credits spent");
+    if (Number(u.average_cost || 0) > 0) detailItem(box, Number(u.average_cost).toFixed(4), "Per request");
+    if (u.period_basis) {
+      const note = document.createElement("div"); note.className = "quota-detail-note";
+      note.textContent = "Aggregate basis: " + u.period_basis;
+      box.appendChild(note);
+    }
+    return box;
   }
   function render(cards) {
     app.textContent = "";
@@ -229,12 +303,39 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
         section.appendChild(row);
       });
       if (cached) {
+        const balances = document.createElement("div"); balances.className = "quota-balances";
+        const left = Number(cached.credits_left) || 0;
+        balances.appendChild(balanceBlock(left, "Plan credits left"));
+        if (cached.purchased_credits) balances.appendChild(balanceBlock(cached.purchased_credits, "Purchased"));
+        balances.appendChild(balanceBlock(cached.free_credits, "Free"));
+        section.appendChild(balances);
+
         const row = document.createElement("div"); row.className = "quota-row";
         const rowHeader = document.createElement("div"); rowHeader.className = "quota-row-header"; const label = document.createElement("span"); label.className = "quota-label"; label.textContent = "Monthly credits"; rowHeader.appendChild(label); row.appendChild(rowHeader);
-        const left = Number(cached.credits_left) || 0;
         const month = cached.month;
         if (month) { renderUsage(row, month, [left.toFixed(2) + " credits left"], true); } else { const meta = document.createElement("div"); meta.className = "quota-meta"; text(meta, left.toFixed(2) + " credits left (plan unknown)"); row.appendChild(meta); }
         section.appendChild(row);
+
+        const badgeNodes = badgesFor(cached);
+        if (badgeNodes.length) {
+          const wrap = document.createElement("div"); wrap.className = "quota-badges";
+          badgeNodes.forEach(node => wrap.appendChild(node));
+          section.appendChild(wrap);
+        }
+
+        const detail = detailSection(cached);
+        if (detail) {
+          const toggle = document.createElement("button"); toggle.className = "quota-detail-toggle";
+          const open = detailOpen.has(card.key_id);
+          toggle.textContent = open ? "Hide details" : "Details";
+          toggle.setAttribute("aria-expanded", open ? "true" : "false");
+          toggle.onclick = () => {
+            if (detailOpen.has(card.key_id)) detailOpen.delete(card.key_id); else detailOpen.add(card.key_id);
+            render(cards);
+          };
+          section.appendChild(toggle);
+          if (open) section.appendChild(detail);
+        }
       }
       const updated = fetchedAt.get(card.key_id);
       if (updated) { const timestamp = document.createElement("div"); timestamp.className = "quota-meta"; timestamp.textContent = "Updated " + new Date(updated).toLocaleString(); section.appendChild(timestamp); }

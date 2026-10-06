@@ -537,13 +537,33 @@ func TestQuotaPageUsesNativeQuotaStylesAndThemeBridge(t *testing.T) {
 		"quota-track",
 		"quota-fill",
 		".quota-fill.is-exceeded { background: var(--error-color); }",
-		`fill.className = usage.status === "exceeded" ? "quota-fill is-exceeded" : "quota-fill"`,
-		`meta.className = usage.status === "exceeded" ? "quota-meta is-exceeded" : "quota-meta"`,
+		// Colour grading now runs through gradeClass so >=50/75/90% warn before
+		// the vendor blocks the account.
+		`function gradeClass(usage) {`,
+		`fill.className = grade ? "quota-fill " + grade : "quota-fill"`,
+		`meta.className = grade === "is-exceeded" ? "quota-meta is-exceeded" : "quota-meta"`,
 		// The monthly allowance must stay metered like the two rate-limit
 		// windows instead of degrading back to a bare text row.
 		`label.textContent = "Monthly credits"`,
 		`if (month) { renderUsage(row, month, [left.toFixed(2) + " credits left"], true); }`,
 		`[["five_hour", "5-hour window"], ["weekly", "Weekly window"]]`,
+		// M4: three split balances, warning badges, and the period aggregate
+		// behind a Details toggle.
+		`function balanceBlock(value, label) {`,
+		`balances.appendChild(balanceBlock(left, "Plan credits left"))`,
+		`balances.appendChild(balanceBlock(cached.purchased_credits, "Purchased"))`,
+		`balances.appendChild(balanceBlock(cached.free_credits, "Free"))`,
+		`function badgesFor(usage) {`,
+		`badge("Blocked: " + usage.exceeded_window, "is-danger")`,
+		`badge("Low balance", "is-warn")`,
+		`badge("Cancels at period end", "is-warn")`,
+		`function detailSection(usage) {`,
+		`detailItem(box, String(Number(u.total_count || 0)), "Requests")`,
+		`detailItem(box, Number(u.total_tokens_in || 0).toLocaleString(), "Tokens in")`,
+		`"Aggregate basis: " + u.period_basis`,
+		`toggle.textContent = open ? "Hide details" : "Details"`,
+		`.quota-badge.is-danger { color: var(--error-color); border-color: currentColor; }`,
+		`.quota-fill.is-watch { background: var(--warning-color); }`,
 		`if (usage) renderUsage(row, usage, null, name === "weekly");`,
 		`text(meta, left.toFixed(2) + " credits left (plan unknown)")`,
 		`function renderUsage(row, usage, extraParts, withDaysLeft) {`,
@@ -584,7 +604,13 @@ func TestQuotaPageUsesNativeQuotaStylesAndThemeBridge(t *testing.T) {
 	if five < 0 || weekly < five || month < weekly {
 		t.Fatalf("quota rows out of order: five=%d weekly=%d month=%d", five, weekly, month)
 	}
-	if strings.Count(resources.QuotaPage, `document.createElement("button")`) != 1 || strings.Contains(resources.QuotaPage, `textContent = "Refresh card"`) || strings.Contains(resources.QuotaPage, "quota-button") || strings.Contains(resources.QuotaPage, "quota-refresh-small") {
+	// The page may have exactly one REFRESH path. Other buttons are allowed
+	// (M4 adds a Details toggle), so the guard is scoped to refresh controls
+	// rather than to createElement("button") as a whole.
+	if strings.Contains(resources.QuotaPage, `textContent = "Refresh card"`) ||
+		strings.Contains(resources.QuotaPage, "quota-button") ||
+		strings.Contains(resources.QuotaPage, "quota-refresh-small") ||
+		strings.Count(resources.QuotaPage, `quota-refresh"`) != 1 {
 		t.Fatal("quota page does not have exactly one secondary refresh button path")
 	}
 	for _, marker := range []string{"querySelectorAll('head link[rel=\"stylesheet\"], head style')", "cloneNode(true)", "dataset.cpaStyle"} {
