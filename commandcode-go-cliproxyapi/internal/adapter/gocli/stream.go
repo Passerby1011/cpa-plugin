@@ -67,6 +67,11 @@ type HeaderOptions struct {
 	// ProjectDir becomes the x-project-slug header (via SlugifyProjectPath).
 	// Empty means the default fabricated project dir.
 	ProjectDir string
+	// OmitProjectSlug drops x-project-slug entirely. It is how the identity
+	// layer is turned OFF: sending the default slug when the operator disabled
+	// the device block would keep half the identity on. Distinct from an empty
+	// ProjectDir, which still announces the default machine.
+	OmitProjectSlug bool
 	// Version overrides x-command-code-version. Empty means DefaultVersion.
 	Version string
 }
@@ -97,7 +102,9 @@ func GenerateHeadersWithOptions(credential string, opts HeaderOptions) http.Head
 	h.Set("User-Agent", "cli")
 	h.Set("x-command-code-version", version)
 	h.Set("x-cli-environment", "production")
-	h.Set("x-project-slug", SlugifyProjectPath(projectDir))
+	if !opts.OmitProjectSlug {
+		h.Set("x-project-slug", SlugifyProjectPath(projectDir))
+	}
 	h.Set("x-taste-learning", "false")
 	if opts.SessionID != "" {
 		h.Set("x-session-id", opts.SessionID)

@@ -13,6 +13,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultDeviceProjectDir mirrors gocli.DefaultProjectDir. It is duplicated
+// here rather than imported: config is a dependency of the adapter chain
+// (catalog -> config, chatcompletions -> catalog), so importing gocli would
+// create a cycle. The values are pinned equal by TestDeviceProjectDirMatchesGocli.
+const DefaultDeviceProjectDir = `C:\Users\dev\projects\app`
+
 // Defaults (spec 04 §2/§4).
 const (
 	DefaultBaseURL          = "https://api.commandcode.ai/provider/v1"
@@ -112,6 +118,7 @@ type Config struct {
 	Protocols        Protocols
 	RouteOverrides   map[string]RouteOverride
 	Models           ModelFilter
+	Device           Device
 	AllowHTTP        bool
 	RequestTimeout   time.Duration
 	MaxResponseBytes int64
@@ -120,6 +127,46 @@ type Config struct {
 	// Management Center can show its config form), but the plugin serves no
 	// models and refuses execution until a key is supplied.
 	Pending bool
+}
+
+// Device controls the fabricated device identity a go-cli request presents.
+//
+// Why this is configurable at all: CommandCode's upstream risk controls expect
+// requests to come from the vendor CLI running on a real machine. One pool of
+// credentials all announcing the same anonymous host is a pattern; a stable,
+// per-credential device is what a real deployment looks like. The reference
+// implementation (MAXeaglet/commandcode-proxy) established the derivation this
+// plugin reproduces.
+type Device struct {
+	// Enabled turns the identity layer on. It defaults to true: the whole
+	// point of the go-cli transport is to look like a client the upstream
+	// expects, and an identity-less client is the anomaly.
+	Enabled bool
+	// ProjectDir is the fabricated working directory. It feeds both the
+	// envelope's config.workingDir and the x-project-slug header, so the two
+	// can never disagree about which machine this is.
+	ProjectDir string
+	// IdentitySalt shifts which fake machine a credential maps to. Empty is
+	// the reference's default. It is the escape hatch for a credential whose
+	// device has been flagged: changing the salt is allowed, but it is
+	// deliberately a separate knob from the API key.
+	IdentitySalt string
+	// ProjectSlugOverrides pins x-project-slug per credential. Rare; mostly
+	// useful for reproducing a specific client.
+	//
+	// (Left as a plain map rather than a richer type: the slug is derived
+	// from ProjectDir in every normal deployment.)
+	ProjectSlugOverrides map[string]string
+}
+
+// EffectiveProjectDir returns the fabricated project directory, falling back to
+// the gocli package's default so a zero-value config still produces the same
+// identity the reference does.
+func (d Device) EffectiveProjectDir() string {
+	if strings.TrimSpace(d.ProjectDir) != "" {
+		return d.ProjectDir
+	}
+	return DefaultDeviceProjectDir
 }
 
 // TransportMode selects which upstream surface an account talks to.
@@ -222,6 +269,15 @@ type rawModelFilter struct {
 	Deny  []string `yaml:"deny"`
 }
 
+// rawDevice mirrors the device config block. Enabled is a pointer so "unset"
+// (apply the default, which is on) is distinguishable from an explicit false.
+type rawDevice struct {
+	Enabled              *bool             `yaml:"enabled"`
+	ProjectDir           *string           `yaml:"project-dir"`
+	IdentitySalt         *string           `yaml:"identity-salt"`
+	ProjectSlugOverrides map[string]string `yaml:"project-slug-overrides"`
+}
+
 // rawConfig mirrors the YAML shape; pointer fields distinguish "unset"
 // (apply default) from explicitly-set values including "" (validate as-is).
 // Unknown fields are ignored (host may pass extra keys).
@@ -236,6 +292,7 @@ type rawConfig struct {
 	Protocols        rawProtocols             `yaml:"protocols"`
 	RouteOverrides   map[string]RouteOverride `yaml:"route-overrides"`
 	Models           rawModelFilter           `yaml:"models"`
+	Device           rawDevice                `yaml:"device"`
 	AllowHTTP        bool                     `yaml:"allow-http"`
 	RequestTimeout   *string                  `yaml:"request-timeout"`
 	MaxResponseBytes *int64                   `yaml:"max-response-bytes"`
@@ -460,6 +517,12 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 		Models: ModelFilter{
 			Allow: normalizeModelList(raw.Models.Allow),
 			Deny:  normalizeModelList(raw.Models.Deny),
+		},
+		Device: Device{
+			Enabled:              orDefault(raw.Device.Enabled, true),
+			ProjectDir:           strings.TrimSpace(orDefault(raw.Device.ProjectDir, "")),
+			IdentitySalt:         orDefault(raw.Device.IdentitySalt, ""),
+			ProjectSlugOverrides: raw.Device.ProjectSlugOverrides,
 		},
 		AllowHTTP:        raw.AllowHTTP,
 		RequestTimeout:   requestTimeout,

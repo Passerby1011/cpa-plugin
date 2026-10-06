@@ -252,6 +252,17 @@ func configFields() []pluginapi.ConfigField {
 				"Both protocol and endpoint are required.",
 		},
 		{
+			Name: "device",
+			Type: pluginapi.ConfigFieldTypeObject,
+			Description: `Fabricated device identity for go-cli requests, e.g. ` +
+				`{"enabled":true,"project-dir":"C:\\Users\\dev\\projects\\app","identity-salt":""}. ` +
+				"enabled defaults to true: the go-cli transport exists to look like the vendor CLI on a real " +
+				"machine, and the fingerprint, the x-project-slug header and the envelope's workingDir are all " +
+				"derived from this one block so they can never disagree. project-dir defaults to the reference " +
+				"fabricated path; identity-salt only shifts WHICH fake machine a credential maps to (an escape " +
+				"hatch for a flagged credential, not a per-request knob).",
+		},
+		{
 			Name:        "request-timeout",
 			Type:        pluginapi.ConfigFieldTypeString,
 			Description: "Upstream HTTP timeout, e.g. 5m. Also bounds account/quota calls to 30s.",

@@ -214,6 +214,26 @@ func buildUpstreamRequest(route catalog.Route, upstreamModel, sourceFormat strin
 	return nil, errclass.Translation("unsupported route")
 }
 
+// goCLIHeaderOptions renders the wire identity for one go-cli request from the
+// device config. Centralised so the header set and the envelope's config block
+// are derived from the SAME source: a request whose x-project-slug disagrees
+// with its config.workingDir is exactly the kind of inconsistency that makes a
+// client look automated.
+//
+// The identity layer is one switch, not two: when device.enabled is false the
+// project slug is dropped here as well, so turning it off actually falls back
+// to the pre-identity behaviour instead of leaving half of it on.
+func goCLIHeaderOptions(cfg config.Config, sessionID string) gocli.HeaderOptions {
+	opts := gocli.HeaderOptions{SessionID: sessionID}
+	if cfg.Device.Enabled {
+		opts.ProjectDir = cfg.Device.EffectiveProjectDir()
+	} else {
+		// Identity layer off: drop the fabricated project slug entirely.
+		opts.OmitProjectSlug = true
+	}
+	return opts
+}
+
 // buildGoCLIRequest renders the CLI-transport (/alpha/generate) envelope for
 // one request. The envelope is built from an OpenAI chat-completions body, so
 // a non-OpenAI source is translated first — the same body the provider route
@@ -223,14 +243,22 @@ func buildGoCLIRequest(res *resolvedExecution, req executorRequest, sessionID st
 	if eErr != nil {
 		return nil, eErr
 	}
-	envelope, err := gocli.BuildEnvelope(body, gocli.Options{
+	// The fabricated device must be the SAME one the headers announce. When
+	// the identity layer is off the envelope keeps its static defaults.
+	envelopeOpts := gocli.Options{
 		// Thread identity is derived from the resolved session so the same
 		// client session maps onto one upstream thread across turns.
 		ThreadID: gocli.NormalizeThreadID(sessionID),
 		// With no system prompt the CLI substitute is a single space;
 		// otherwise upstream injects a multi-thousand-token default prompt.
 		SystemPlaceholder: true,
-	})
+	}
+	if res.cfg.Device.Enabled {
+		projectDir := res.cfg.Device.EffectiveProjectDir()
+		envelopeOpts.WorkingDir = projectDir
+		envelopeOpts.Environment = gocli.DeviceEnvironment()
+	}
+	envelope, err := gocli.BuildEnvelope(body, envelopeOpts)
 	if err != nil {
 		return nil, errclass.Translation("failed to build CLI envelope: " + err.Error())
 	}
@@ -259,7 +287,7 @@ func (m *Manager) handleExecuteGoCLI(req executorRequest, res *resolvedExecution
 	resp, err := m.bridge.Do(ctx, pluginapi.HTTPRequest{
 		Method:  http.MethodPost,
 		URL:     url,
-		Headers: gocli.GenerateHeaders(res.account.Credential, sessionID),
+		Headers: gocli.GenerateHeadersWithOptions(res.account.Credential, goCLIHeaderOptions(res.cfg, sessionID)),
 		Body:    upstreamBody,
 	})
 	if err != nil {
@@ -616,7 +644,7 @@ func (m *Manager) executeStreamGoCLI(req executorRequest, res *resolvedExecution
 	st, _, id, err := m.bridge.DoStream(ctx, pluginapi.HTTPRequest{
 		Method:  http.MethodPost,
 		URL:     url,
-		Headers: gocli.GenerateHeaders(res.account.Credential, sessionID),
+		Headers: gocli.GenerateHeadersWithOptions(res.account.Credential, goCLIHeaderOptions(res.cfg, sessionID)),
 		Body:    upstreamBody,
 	})
 	debugTrace("executor go-cli stream DoStream status=%d upstreamID=%s err=%v", st, id, err)

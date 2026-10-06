@@ -37,7 +37,10 @@ type Options struct {
 	// cwd; sending a constant keeps one account's requests looking like one
 	// machine rather than leaking the host's paths upstream.
 	WorkingDir string
-	// Environment is the fabricated platform string, e.g. "linux-x64".
+	// Environment is the fabricated platform string. The reference sends the
+	// device profile's platform verbatim ("win32"), not a "linux-x64" style
+	// pair, so the envelope cannot contradict the fingerprint the same
+	// credential reports.
 	Environment string
 	// ThreadID must be a well-formed UUID or the field is omitted.
 	ThreadID string
@@ -116,9 +119,9 @@ func BuildEnvelope(openAIBody []byte, opts Options) ([]byte, error) {
 	}
 	envelope := map[string]any{
 		"config": map[string]any{
-			"workingDir":    orDefault(opts.WorkingDir, `C:\Users\dev\projects\app`),
+			"workingDir":    orDefault(opts.WorkingDir, DefaultProjectDir),
 			"date":          time.Now().Format("2006-01-02"),
-			"environment":   orDefault(opts.Environment, "linux-x64"),
+			"environment":   orDefault(opts.Environment, DeviceEnvironment()),
 			"structure":     []any{},
 			"isGitRepo":     false,
 			"currentBranch": "",

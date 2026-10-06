@@ -63,6 +63,14 @@ func (p DeviceProfile) ProjectDirSlug() string {
 	return SlugifyProjectPath(p.ProjectDir)
 }
 
+// DeviceEnvironment is the envelope's config.environment value. The reference
+// sends the profile's platform verbatim ("win32"), NOT a "linux-x64" style
+// string: an envelope that announces a different OS than the fingerprint is
+// the exact self-contradiction the shared device profile exists to prevent.
+func DeviceEnvironment() string {
+	return DefaultDeviceProfile().Platform
+}
+
 // cpuSpec pairs a fabricated CPU model with the core count that belongs to it,
 // so cpuModel and cpuCount can never be picked independently and contradict.
 type cpuSpec struct {
