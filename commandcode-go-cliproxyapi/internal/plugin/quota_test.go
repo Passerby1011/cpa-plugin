@@ -118,6 +118,14 @@ func TestQuotaRefresh(t *testing.T) {
 		case "https://quota.test/alpha/whoami?limits=1":
 			return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(
 				`{"success":true,"user":{"email":"dev@example.test"},"org":null}`)}), nil
+		case "https://quota.test/alpha/usage/summary":
+			// The period aggregate is its own endpoint. It is answered here
+			// because the panel fetches it alongside the balances; a missing
+			// answer is a fixture gap, not an implementation fault.
+			return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(
+				`{"data":{"totalCount":128,"totalCost":4.25,"averageCost":0.0332,"successRate":0.97,` +
+					`"completedCount":124,"failedCount":4,"totalTokensIn":98000,"totalTokensOut":41000,` +
+					`"totalCredits":18.5,"periodBasis":"current-period"}}`)}), nil
 		}
 		t.Fatalf("unexpected quota URL %q", wire.URL)
 		return nil, nil
@@ -175,7 +183,10 @@ func TestQuotaRefresh(t *testing.T) {
 			t.Errorf("%s called %d times, want 1", url, calls)
 		}
 	}
-	if len(seen) != 3 {
+	// Four account endpoints now: credits, subscriptions, whoami, and the
+	// period aggregate. The count is pinned so a future change that quietly
+	// stops (or starts) calling one of them fails here instead of shipping.
+	if len(seen) != 4 {
 		t.Errorf("endpoints called = %v", seen)
 	}
 }
@@ -213,6 +224,12 @@ func TestQuotaRefreshExhaustedAccount(t *testing.T) {
 		case "https://quota.test/alpha/whoami?limits=1":
 			return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(
 				`{"success":true,"user":{"email":"exhausted@example.test"},"org":null}`)}), nil
+		case "https://quota.test/alpha/usage/summary":
+			// The exhausted account still answers the aggregate endpoint; it
+			// carries activity, not balances, so it is independent of the
+			// window state under test.
+			return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(
+				`{"totalCount":40,"successRate":0.9,"periodBasis":"current-period"}`)}), nil
 		}
 		t.Fatalf("unexpected quota URL %q", wire.URL)
 		return nil, nil

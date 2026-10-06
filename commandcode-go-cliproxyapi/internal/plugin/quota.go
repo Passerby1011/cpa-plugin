@@ -25,6 +25,10 @@ const (
 	accountCreditsPath      = "/alpha/billing/credits"
 	accountSubscriptionPath = "/alpha/billing/subscriptions"
 	accountWhoamiPath       = "/alpha/whoami?limits=1"
+	// accountUsagePath is the period aggregate: request counts, success rate,
+	// token totals and spend. The credits endpoint reports balances only, so
+	// this is the sole source for the panel's detail section.
+	accountUsagePath = "/alpha/usage/summary"
 	// quotaMaxTimeout bounds one account call: the management UI is
 	// interactive, so a stalled upstream must fail fast rather than inherit
 	// the (request-timeout, default 5m) upstream budget.
@@ -46,15 +50,57 @@ type quotaUsage struct {
 	PlanCredits      float64 `json:"plan_credits,omitempty"`
 	CreditsLeft      float64 `json:"credits_left"`
 	PurchasedCredits float64 `json:"purchased_credits,omitempty"`
+	// FreeCredits is the third balance block. The panel shows the credit
+	// position as three separate numbers because they expire differently: plan
+	// credits renew with the period, purchased credits do not, and free
+	// credits are promotional.
+	FreeCredits float64 `json:"free_credits,omitempty"`
+	// BelowThreshold mirrors the vendor's own low-balance flag. It is
+	// server-authoritative and must not be recomputed from the threshold,
+	// because the vendor changes the threshold without a client release.
+	BelowThreshold  bool    `json:"below_threshold,omitempty"`
+	CreditThreshold float64 `json:"credit_threshold,omitempty"`
+	// Limited is the account-level "rate limiting applies" flag. It is a
+	// static property of the plan, NOT a statement that a window is over its
+	// cap — that is ExceededWindow.
+	Limited bool `json:"limited,omitempty"`
+	// ExceededWindow names the window currently blocking the account
+	// ("fiveHour"/"weekly"), or empty. This is the authoritative
+	// "you are blocked right now" signal.
+	ExceededWindow string `json:"exceeded_window,omitempty"`
+	// CancelAtPeriodEnd and PendingPhase are subscription lifecycle flags the
+	// panel surfaces as warning badges.
+	CancelAtPeriodEnd bool   `json:"cancel_at_period_end,omitempty"`
+	PendingPhase      string `json:"pending_phase,omitempty"`
 	// Month is the monthly plan allowance rendered as a window so the page can
 	// meter it like the two rate-limit windows. ResetsAt is the subscription
 	// currentPeriodEnd (the plan's renewal / expiry instant). The window is
 	// absent when the plan is unknown, because CommandCode reports only the
 	// REMAINING monthly credits and a bar without a denominator would be a lie.
-	Month       *quotaWindow `json:"month,omitempty"`
-	FiveHour    quotaWindow  `json:"five_hour"`
-	Weekly      quotaWindow  `json:"weekly"`
-	RefreshedAt string       `json:"refreshed_at"`
+	Month       *quotaWindow       `json:"month,omitempty"`
+	FiveHour    quotaWindow        `json:"five_hour"`
+	Weekly      quotaWindow        `json:"weekly"`
+	Usage       *quotaUsageSummary `json:"usage,omitempty"`
+	RefreshedAt string             `json:"refreshed_at"`
+}
+
+// quotaUsageSummary is the period aggregate from /alpha/usage/summary. It is
+// the only place request counts, success rate and spend come from: the credits
+// endpoint reports balances, not activity.
+type quotaUsageSummary struct {
+	TotalCount     float64 `json:"total_count,omitempty"`
+	TotalCost      float64 `json:"total_cost,omitempty"`
+	AverageCost    float64 `json:"average_cost,omitempty"`
+	SuccessRate    float64 `json:"success_rate,omitempty"`
+	CompletedCount float64 `json:"completed_count,omitempty"`
+	FailedCount    float64 `json:"failed_count,omitempty"`
+	TotalTokensIn  float64 `json:"total_tokens_in,omitempty"`
+	TotalTokensOut float64 `json:"total_tokens_out,omitempty"`
+	TotalCredits   float64 `json:"total_credits,omitempty"`
+	// PeriodBasis names the accounting window the numbers cover (the vendor
+	// reports the billing period), so the panel can label the aggregate
+	// honestly instead of implying "all time".
+	PeriodBasis string `json:"period_basis,omitempty"`
 }
 
 type quotaCard struct {
@@ -121,6 +167,30 @@ type accountWhoami struct {
 	Org *struct {
 		Login string `json:"login"`
 	} `json:"org"`
+}
+
+// accountUsage mirrors /alpha/usage/summary. The payload may arrive wrapped in
+// a "data" object or bare, so the decoder tolerates both (see usageFromJSON).
+//
+// Every field is a pointer-or-omitempty float rather than a plain number: the
+// vendor omits fields it has no data for, and a plain float would render an
+// absent "success rate" as a confident 0%. The panel distinguishes "0" from
+// "unknown", so the distinction has to survive decoding.
+type accountUsage struct {
+	Data *accountUsageData `json:"data"`
+}
+
+type accountUsageData struct {
+	TotalCount     *float64 `json:"totalCount"`
+	TotalCost      *float64 `json:"totalCost"`
+	AverageCost    *float64 `json:"averageCost"`
+	SuccessRate    *float64 `json:"successRate"`
+	CompletedCount *float64 `json:"completedCount"`
+	FailedCount    *float64 `json:"failedCount"`
+	TotalTokensIn  *float64 `json:"totalTokensIn"`
+	TotalTokensOut *float64 `json:"totalTokensOut"`
+	TotalCredits   *float64 `json:"totalCredits"`
+	PeriodBasis    string   `json:"periodBasis"`
 }
 
 // planAllowances is the vendor's own plan table (CommandCode CLI: planId →
@@ -357,7 +427,71 @@ func fetchQuota(ctx context.Context, bridge *HostBridge, baseURL string, timeout
 			}
 		}
 	}
+	// The period aggregate is an independent endpoint: a failure here must not
+	// blank the balances above, so it is folded in best-effort and omitted when
+	// the endpoint has nothing to say.
+	if raw, errUse := get(accountUsagePath); errUse == nil {
+		usage.Usage = usageFromJSON(raw)
+	}
 	return usage, label, email, nil
+}
+
+// usageFromJSON decodes /alpha/usage/summary, tolerating both the wrapped
+// ({"data":{...}}) and bare forms the vendor has been observed to return.
+//
+// Returns nil when there is nothing to report, so the panel renders no detail
+// section rather than an all-zero one: a summary of zeroes and an absent
+// summary are different claims, and only one of them is true.
+func usageFromJSON(raw []byte) *quotaUsageSummary {
+	var wrapped accountUsage
+	data := (*accountUsageData)(nil)
+	if err := json.Unmarshal(raw, &wrapped); err == nil && wrapped.Data != nil {
+		data = wrapped.Data
+	} else {
+		var bare accountUsageData
+		if err := json.Unmarshal(raw, &bare); err == nil {
+			data = &bare
+		}
+	}
+	if data == nil {
+		return nil
+	}
+	out := &quotaUsageSummary{PeriodBasis: strings.TrimSpace(data.PeriodBasis)}
+	// Only a present field is copied down; an absent one stays at its zero so
+	// the panel can tell "reported as 0" from "not reported" by the field's
+	// own omitempty on the way out.
+	if data.TotalCount != nil {
+		out.TotalCount = *data.TotalCount
+	}
+	if data.TotalCost != nil {
+		out.TotalCost = *data.TotalCost
+	}
+	if data.AverageCost != nil {
+		out.AverageCost = *data.AverageCost
+	}
+	if data.SuccessRate != nil {
+		out.SuccessRate = *data.SuccessRate
+	}
+	if data.CompletedCount != nil {
+		out.CompletedCount = *data.CompletedCount
+	}
+	if data.FailedCount != nil {
+		out.FailedCount = *data.FailedCount
+	}
+	if data.TotalTokensIn != nil {
+		out.TotalTokensIn = *data.TotalTokensIn
+	}
+	if data.TotalTokensOut != nil {
+		out.TotalTokensOut = *data.TotalTokensOut
+	}
+	if data.TotalCredits != nil {
+		out.TotalCredits = *data.TotalCredits
+	}
+	if out.TotalCount == 0 && out.TotalCost == 0 && out.SuccessRate == 0 &&
+		out.TotalTokensIn == 0 && out.TotalTokensOut == 0 && out.PeriodBasis == "" {
+		return nil
+	}
+	return out
 }
 
 // monthWindow renders the monthly plan allowance as a window. CommandCode's
