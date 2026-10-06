@@ -97,6 +97,9 @@ go build -buildmode=c-shared -o plugins/windows/amd64/commandcode-go-cliproxyapi
 | `catalog` | object（JSON） | `{"refresh-interval":"15m","stale-while-unavailable":true,"static":["claude-sonnet-4-6"]}`；`static` 为纯 go-cli 池提供模型来源 |
 | `protocols` | object（JSON） | `{"chat-completions":true,"messages":true,"responses":true}` |
 | `route-overrides` | object（JSON） | `{"<模型>":{"protocol":"...","endpoint":"..."}}` |
+| `device.enabled` | bool | `true` | go-cli 请求的伪设备身份层。开启时每个凭据呈现一台稳定的伪机器，并在首次生成前向上游登记（指纹 + 生命周期）。关闭后 `x-project-slug` 与两项上报**全部停止**。 |
+| `device.project-dir` | string | `C:\Users\dev\projects\app` | 伪工作目录。同时喂给信封的 `config.workingDir` 与 `x-project-slug` 头，两者因此不可能互相矛盾。 |
+| `device.identity-salt` | string | 空 | 改变某个凭据「映射到哪台伪机器」。凭据被风控时的逃生口；不参与哈希阶段，也不发给上游。 |
 | `request-timeout` | string | 如 `5m` |
 | `max-response-bytes` | integer | 默认 `67108864` |
 | `allow-http` | boolean | 允许 http:// 上游，仅测试用 |

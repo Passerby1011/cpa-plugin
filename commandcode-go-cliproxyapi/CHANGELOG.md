@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.3.0
+
+对齐参考反代（MAXeaglet/commandcode-proxy）的设备身份层，并补齐 CLI 面的错误语义与
+配额面板的明细。**设备身份层默认开启，可在配置里整体关闭。**
+
+### 新增
+
+- **设备身份层（`device`）**：为每个 API Key 确定性地派生一台稳定的「伪设备」，
+  并在首次 go-cli 生成前向上游登记：
+  `POST /alpha/fingerprint/record`（指纹）与 `POST /alpha/lifecycle-events`
+  （生命周期）。派生算法与参考反代**逐字节一致**，并用从参考实现捕获的黄金向量
+  回归锁定（字段名 `cpu`/`mem`、CPU 池标签 `model|cores` 都属于派生结果的一部分，
+  改错会静默把每个凭据换到另一台机器）。
+- go-cli 请求头补齐：`User-Agent: cli`、`x-command-code-version`、
+  `x-cli-environment`、`x-project-slug`、`x-taste-learning`、`traceparent`。
+- `device` 配置块：`enabled`（默认 true）、`project-dir`、`identity-salt`，
+  并在 WebUI 暴露。
+- 信封 `config.environment` 改为与设备档案同源的 `win32`（原为 `linux-x64`）：
+  「指纹说 Windows、信封说 Linux」正是共用设备档案要消除的自相矛盾。
+- 配额面板：三块余额（套餐/充值/免费）、预警徽章（被拦窗口、低余额、
+  到期取消、套餐变更中）、详情展开区（账期请求数、成功率、Tokens 进出、消耗、
+  单均成本，并标注口径）、50/75/90% 颜色分级。
+- 配额数据层接入 `/alpha/usage/summary`（账期聚合），兼容 `{data:{...}}` 与外层
+  直出两种形态；端口失败不影响余额显示。
+
+### 修复
+
+- **`device.enabled=false` 是单一开关**：关闭后 `x-project-slug`、指纹与生命周期
+  上报**全部停止**，而不是只停掉一半（半套身份比没有更容易被识别）。
+- **CLI 状态码映射生效**：`402 -> 429`、`403 -> 401`、`422 -> 400`、`500 -> 502`、
+  `503 -> 503`。此前 402（额度墙）会原样透给客户端，SDK 既不退避也不重试。
+- **零输出守卫接入非流式路径**：CLI 流正常收尾但没有任何可见输出时，
+  按 429 报错而不是把空回答当成功交给客户端。
+- `identity-salt` 现在真正参与派生（此前只是解析、无效果）。
+- 移除从未被读取的 `project-slug-overrides`（误导性配置）。
+
+### 说明
+
+- `go build ./... && go vet ./... && go test ./...` 全绿；`-race`（CGO 开启）
+  覆盖 `internal/plugin`、`internal/adapter/gocli`、`internal/config`。
+- 设备身份层的派生结果已与参考实现做**跨实现逐字节比对**（4/4 用例一致）。
+- **尚未实现**：参考反代的传输层闪断透明重试、流式空闲看门狗、全局在途上限。
+  这些是已识别的缺口，不是已完成项。
+- 仍未在真实 CommandCode 凭据上做端到端实测（本机无该凭据），标记 **NOT_VERIFIED**。
+
 ## 0.2.0
 
 ### 变更

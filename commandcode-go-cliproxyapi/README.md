@@ -188,6 +188,9 @@ plugins:
 | `catalog.static` | `[]string` | `[]` | Static model-id list used when the live `{base-url}/models` cannot be fetched — most often a pool with **no provider-mode account**, since `/models` belongs to the Provider API, which refuses Go-plan keys. On a failed refresh it is used only after `stale-while-unavailable` has had its chance, so a coarser static table never overwrites a good snapshot. |
 | `protocols.*` | `bool` | `true` | Route kill switches. A disabled protocol excludes its models with a diagnostic. |
 | `route-overrides` | `map` | `{}` | `{ model: { protocol, endpoint } }` pins a model onto another upstream route. `endpoint` is required. |
+| `device.enabled` | `bool` | `true` | Fabricated device identity for go-cli requests. On, each credential presents a stable fake machine and announces it (fingerprint + lifecycle) before its first generate. Off drops the project slug AND stops both announcements. |
+| `device.project-dir` | `string` | `C:\Users\dev\projects\app` | Fabricated working directory. Feeds BOTH the envelope's `config.workingDir` and the `x-project-slug` header, so they cannot disagree. |
+| `device.identity-salt` | `string` | `""` | Shifts WHICH fake machine a credential maps to. The escape hatch for a flagged credential; it never reaches the hash stage and is not sent upstream. |
 | `request-timeout` | `duration` | `5m` | Upstream HTTP timeout (also bounds account/quota calls to 30s). |
 | `max-response-bytes` | `int64` | `67108864` | Maximum non-streaming response body size. |
 | `allow-http` | `bool` | `false` | Permit `http://` upstreams for local testing. |
