@@ -425,7 +425,7 @@ func TestQuotaUnknownKeyAndResource(t *testing.T) {
 		t.Fatalf("unknown response = %+v err=%v calls=%v", resp, err, f.callsOf(pluginabi.MethodHostHTTPDo))
 	}
 	resource, err := m.HandleManagement(context.Background(), pluginapi.ManagementRequest{Method: http.MethodGet, Path: "/v0/resource/plugins/" + pluginName + "/quota"})
-	if err != nil || resource.StatusCode != 0 || resource.Headers.Get("Content-Type") != "text/html; charset=utf-8" || !strings.Contains(string(resource.Body), "CommandCode Quota") || strings.Contains(string(resource.Body), key) {
+	if err != nil || resource.StatusCode != 0 || resource.Headers.Get("Content-Type") != "text/html; charset=utf-8" || !strings.Contains(string(resource.Body), "CommandCode 配额") || strings.Contains(string(resource.Body), key) {
 		t.Fatalf("resource response = %+v err=%v", resource, err)
 	}
 }
@@ -485,7 +485,7 @@ func TestQuotaPageIsStaticAndSecretFree(t *testing.T) {
 	if resources.QuotaPage == "" || strings.Contains(resources.QuotaPage, testKey) || strings.Contains(resources.QuotaPage, "setInterval") || strings.Contains(resources.QuotaPage, "reset button") {
 		t.Fatal("quota page contains a secret, polling, or reset action")
 	}
-	if !strings.Contains(resources.QuotaPage, "textContent") || !strings.Contains(resources.QuotaPage, "Remember password") {
+	if !strings.Contains(resources.QuotaPage, "textContent") || !strings.Contains(resources.QuotaPage, "记住密码") {
 		t.Fatal("quota page missing safe rendering or login guidance")
 	}
 }
@@ -544,32 +544,32 @@ func TestQuotaPageUsesNativeQuotaStylesAndThemeBridge(t *testing.T) {
 		`meta.className = grade === "is-exceeded" ? "quota-meta is-exceeded" : "quota-meta"`,
 		// The monthly allowance must stay metered like the two rate-limit
 		// windows instead of degrading back to a bare text row.
-		`label.textContent = "Monthly credits"`,
-		`if (month) { renderUsage(row, month, [left.toFixed(2) + " credits left"], true); }`,
-		`[["five_hour", "5-hour window"], ["weekly", "Weekly window"]]`,
+		`label.textContent = "月度额度"`,
+		`if (month) { renderUsage(row, month, ["剩余 " + left.toFixed(2) + " 额度"], true); }`,
+		`[["five_hour", "5 小时窗口"], ["weekly", "每周窗口"]]`,
 		// M4: three split balances, warning badges, and the period aggregate
 		// behind a Details toggle.
 		`function balanceBlock(value, label) {`,
-		`balances.appendChild(balanceBlock(left, "Plan credits left"))`,
-		`balances.appendChild(balanceBlock(cached.purchased_credits, "Purchased"))`,
-		`balances.appendChild(balanceBlock(cached.free_credits, "Free"))`,
+		`balances.appendChild(balanceBlock(left, "剩余套餐额度"))`,
+		`balances.appendChild(balanceBlock(cached.purchased_credits, "充值额度"))`,
+		`balances.appendChild(balanceBlock(cached.free_credits, "赠送额度"))`,
 		`function badgesFor(usage) {`,
-		`badge("Blocked: " + usage.exceeded_window, "is-danger")`,
-		`badge("Low balance", "is-warn")`,
-		`badge("Cancels at period end", "is-warn")`,
+		`badge("已被拦截：" + windowText(usage.exceeded_window), "is-danger")`,
+		`badge("余额偏低", "is-warn")`,
+		`badge("本期末取消", "is-warn")`,
 		`function detailSection(usage) {`,
-		`detailItem(box, String(Number(u.total_count || 0)), "Requests")`,
-		`detailItem(box, Number(u.total_tokens_in || 0).toLocaleString(), "Tokens in")`,
-		`"Aggregate basis: " + u.period_basis`,
-		`toggle.textContent = open ? "Hide details" : "Details"`,
+		`detailItem(box, String(Number(u.total_count || 0)), "请求数")`,
+		`detailItem(box, Number(u.total_tokens_in || 0).toLocaleString(), "输入 Token")`,
+		`"统计口径：" + u.period_basis`,
+		`toggle.textContent = open ? "收起详情" : "详情"`,
 		`.quota-badge.is-danger { color: var(--error-color); border-color: currentColor; }`,
 		`.quota-fill.is-watch { background: var(--warning-color); }`,
 		`if (usage) renderUsage(row, usage, null, name === "weekly");`,
-		`text(meta, left.toFixed(2) + " credits left (plan unknown)")`,
+		`text(meta, "剩余 " + left.toFixed(2) + " 额度（套餐未知）")`,
 		`function renderUsage(row, usage, extraParts, withDaysLeft) {`,
 		`(extraParts || []).forEach(part => parts.push(part));`,
 		`const days = Math.max(0, Math.ceil((reset.getTime() - Date.now()) / 864e5));`,
-		`parts.push(days === 1 ? "1 day left" : days + " days left");`,
+		`parts.push("剩余 " + days + " 天");`,
 		"repeat(auto-fill, minmax(380px, 1fr))",
 		"@media (max-width: 768px)",
 		`[data-theme="white"]`,
@@ -598,16 +598,17 @@ func TestQuotaPageUsesNativeQuotaStylesAndThemeBridge(t *testing.T) {
 		}
 	}
 	page := resources.QuotaPage
-	five := strings.Index(page, `["five_hour", "5-hour window"]`)
-	weekly := strings.Index(page, `["weekly", "Weekly window"]`)
-	month := strings.Index(page, `label.textContent = "Monthly credits"`)
+	five := strings.Index(page, `["five_hour", "5 小时窗口"]`)
+	weekly := strings.Index(page, `["weekly", "每周窗口"]`)
+	month := strings.Index(page, `label.textContent = "月度额度"`)
 	if five < 0 || weekly < five || month < weekly {
 		t.Fatalf("quota rows out of order: five=%d weekly=%d month=%d", five, weekly, month)
 	}
 	// The page may have exactly one REFRESH path. Other buttons are allowed
 	// (M4 adds a Details toggle), so the guard is scoped to refresh controls
 	// rather than to createElement("button") as a whole.
-	if strings.Contains(resources.QuotaPage, `textContent = "Refresh card"`) ||
+	// 反向守卫：不得出现第二套刷新按钮类名或第二处刷新文案。
+	if strings.Contains(resources.QuotaPage, `textContent = "Refresh"`) ||
 		strings.Contains(resources.QuotaPage, "quota-button") ||
 		strings.Contains(resources.QuotaPage, "quota-refresh-small") ||
 		strings.Count(resources.QuotaPage, `quota-refresh"`) != 1 {

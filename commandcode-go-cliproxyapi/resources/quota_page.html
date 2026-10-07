@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CommandCode Quota</title>
+<title>CommandCode 配额</title>
 <style>
 :root {
   --bg-primary: #f0eee8;
@@ -56,7 +56,7 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
 .credential-name { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 16px; font-weight: 600; }
 .quota-row { padding: 14px 0; border-top: 1px solid var(--border-color); }
 .quota-row-header, .quota-meta { display: flex; justify-content: space-between; gap: 12px; }
-.quota-label { font-weight: 600; text-transform: capitalize; }
+.quota-label { font-weight: 600; }
 .quota-percent { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .quota-track { height: 8px; margin: 8px 0 6px; overflow: hidden; border-radius: 999px; background: var(--bg-tertiary); }
 .quota-fill { height: 100%; border-radius: inherit; background: var(--success-color); transition: width .2s ease; }
@@ -96,8 +96,8 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
 </head>
 <body>
 <div class="quota-page">
-  <header class="quota-header"><h1 class="quota-title">CommandCode Quota</h1><p class="quota-description">Usage for each configured credential. New accounts refresh automatically.</p></header>
-  <main id="app"><p class="quota-muted">Loading credentials...</p></main>
+  <header class="quota-header"><h1 class="quota-title">CommandCode 配额</h1><p class="quota-description">每个已配置凭据的用量。新账号会自动刷新。</p></header>
+  <main id="app"><p class="quota-muted">正在加载凭据…</p></main>
 </div>
 <script>
 (() => {
@@ -174,7 +174,7 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
       render(cards);
     }).catch(err => {
       inFlight.delete(card.key_id);
-      errors.set(card.key_id, err.message || "Refresh failed");
+      errors.set(card.key_id, err.message || "刷新失败");
       render(cards);
     });
   }
@@ -200,11 +200,20 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     if (key) headers.Authorization = "Bearer " + key;
     return fetch(endpoint, {method: "POST", headers, body: JSON.stringify(body)}).then(async response => {
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Request failed");
+      if (!response.ok) throw new Error(data.error || "请求失败");
       return data;
     });
   }
   function text(parent, value) { const node = document.createElement("span"); node.textContent = value == null || value === "" ? "-" : value; parent.appendChild(node); }
+  // 状态词与窗口名转中文。未知值原样透出，避免把新状态吞成空白。
+  function statusText(status) {
+    const map = {ok: "正常", exceeded: "已超限", unlimited: "不限量"};
+    return map[status] || status || "正常";
+  }
+  function windowText(name) {
+    const map = {fiveHour: "5 小时窗口", five_hour: "5 小时窗口", weekly: "每周窗口"};
+    return map[name] || name;
+  }
   function gradeClass(usage) {
     if (usage.status === "exceeded") return "is-exceeded";
     const gradePercent = Number(usage.percent) || 0;
@@ -220,18 +229,18 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     const fill = document.createElement("div"); fill.className = grade ? "quota-fill " + grade : "quota-fill";
     const percent = Math.max(0, Math.min(100, Number(usage.percent) || 0));
     fill.style.width = percent + "%";
-    track.setAttribute("role", "progressbar"); track.setAttribute("aria-valuemin", "0"); track.setAttribute("aria-valuemax", "100"); track.setAttribute("aria-valuenow", String(percent)); track.setAttribute("aria-label", "Quota used"); track.appendChild(fill);
+    track.setAttribute("role", "progressbar"); track.setAttribute("aria-valuemin", "0"); track.setAttribute("aria-valuemax", "100"); track.setAttribute("aria-valuenow", String(percent)); track.setAttribute("aria-label", "已用配额"); track.appendChild(fill);
     value.textContent = percent + "%";
     const meta = document.createElement("div"); meta.className = grade === "is-exceeded" ? "quota-meta is-exceeded" : "quota-meta";
-    const parts = [usage.status || "ok"];
-    if (Number(usage.cap) > 0) parts.push((Number(usage.used) || 0).toFixed(2) + " / " + Number(usage.cap).toFixed(2) + " credits");
+    const parts = [statusText(usage.status)];
+    if (Number(usage.cap) > 0) parts.push((Number(usage.used) || 0).toFixed(2) + " / " + Number(usage.cap).toFixed(2) + " 额度");
     (extraParts || []).forEach(part => parts.push(part));
     if (usage.resets_at) {
       const reset = new Date(usage.resets_at);
-      parts.push("resets " + reset.toLocaleString());
+      parts.push("重置 " + reset.toLocaleString());
       if (withDaysLeft && !Number.isNaN(reset.getTime())) {
         const days = Math.max(0, Math.ceil((reset.getTime() - Date.now()) / 864e5));
-        parts.push(days === 1 ? "1 day left" : days + " days left");
+        parts.push("剩余 " + days + " 天");
       }
     }
     text(meta, parts.join(" · "));
@@ -251,11 +260,11 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
   }
   function badgesFor(usage) {
     const out = [];
-    if (usage.exceeded_window) out.push(badge("Blocked: " + usage.exceeded_window, "is-danger"));
-    if (usage.below_threshold) out.push(badge("Low balance", "is-warn"));
-    if (usage.cancel_at_period_end) out.push(badge("Cancels at period end", "is-warn"));
-    if (usage.pending_phase) out.push(badge("Plan change: " + usage.pending_phase, "is-warn"));
-    if (usage.limited && !usage.exceeded_window) out.push(badge("Rate limited plan"));
+    if (usage.exceeded_window) out.push(badge("已被拦截：" + windowText(usage.exceeded_window), "is-danger"));
+    if (usage.below_threshold) out.push(badge("余额偏低", "is-warn"));
+    if (usage.cancel_at_period_end) out.push(badge("本期末取消", "is-warn"));
+    if (usage.pending_phase) out.push(badge("套餐变更：" + usage.pending_phase, "is-warn"));
+    if (usage.limited && !usage.exceeded_window) out.push(badge("套餐受限流约束"));
     return out;
   }
   function detailItem(parent, value, label) {
@@ -269,24 +278,24 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     if (!u) return null;
     const box = document.createElement("div"); box.className = "quota-detail";
     const pct = value => Number(value || 0) * (Number(value || 0) <= 1 ? 100 : 1);
-    detailItem(box, String(Number(u.total_count || 0)), "Requests");
-    detailItem(box, pct(u.success_rate).toFixed(1) + "%", "Success rate");
-    detailItem(box, String(Number(u.completed_count || 0)), "Completed");
-    detailItem(box, String(Number(u.failed_count || 0)), "Failed");
-    detailItem(box, Number(u.total_tokens_in || 0).toLocaleString(), "Tokens in");
-    detailItem(box, Number(u.total_tokens_out || 0).toLocaleString(), "Tokens out");
-    detailItem(box, Number(u.total_cost || 0).toFixed(2), "Credits spent");
-    if (Number(u.average_cost || 0) > 0) detailItem(box, Number(u.average_cost).toFixed(4), "Per request");
+    detailItem(box, String(Number(u.total_count || 0)), "请求数");
+    detailItem(box, pct(u.success_rate).toFixed(1) + "%", "成功率");
+    detailItem(box, String(Number(u.completed_count || 0)), "成功");
+    detailItem(box, String(Number(u.failed_count || 0)), "失败");
+    detailItem(box, Number(u.total_tokens_in || 0).toLocaleString(), "输入 Token");
+    detailItem(box, Number(u.total_tokens_out || 0).toLocaleString(), "输出 Token");
+    detailItem(box, Number(u.total_cost || 0).toFixed(2), "已消耗额度");
+    if (Number(u.average_cost || 0) > 0) detailItem(box, Number(u.average_cost).toFixed(4), "单次均值");
     if (u.period_basis) {
       const note = document.createElement("div"); note.className = "quota-detail-note";
-      note.textContent = "Aggregate basis: " + u.period_basis;
+      note.textContent = "统计口径：" + u.period_basis;
       box.appendChild(note);
     }
     return box;
   }
   function render(cards) {
     app.textContent = "";
-    if (!cards.length) { const p = document.createElement("p"); p.className = "quota-muted"; p.setAttribute("role", "status"); p.textContent = "No configured credentials."; app.appendChild(p); return; }
+    if (!cards.length) { const p = document.createElement("p"); p.className = "quota-muted"; p.setAttribute("role", "status"); p.textContent = "尚未配置任何凭据。"; app.appendChild(p); return; }
     const grid = document.createElement("div"); grid.className = "quota-grid";
     cards.forEach(card => {
       const section = document.createElement("section"); section.className = "quota-card";
@@ -294,26 +303,26 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
       const cached = values.get(card.key_id);
       const badge = document.createElement("span"); badge.className = "credential-badge"; badge.textContent = (cached && cached.plan) || "CC"; badge.setAttribute("aria-hidden", "true");
       const title = document.createElement("h2"); title.className = "credential-name"; title.textContent = labels.get(card.key_id) || card.label; header.append(badge, title); section.appendChild(header);
-      [["five_hour", "5-hour window"], ["weekly", "Weekly window"]].forEach(entry => {
+      [["five_hour", "5 小时窗口"], ["weekly", "每周窗口"]].forEach(entry => {
         const name = entry[0];
         const row = document.createElement("div"); row.className = "quota-row";
         const rowHeader = document.createElement("div"); rowHeader.className = "quota-row-header"; const label = document.createElement("span"); label.className = "quota-label"; label.textContent = entry[1]; rowHeader.appendChild(label); row.appendChild(rowHeader);
         const usage = values.get(card.key_id) && values.get(card.key_id)[name];
-        if (usage) renderUsage(row, usage, null, name === "weekly"); else { const pending = document.createElement("div"); pending.className = "quota-meta"; pending.textContent = "Not refreshed"; row.appendChild(pending); }
+        if (usage) renderUsage(row, usage, null, name === "weekly"); else { const pending = document.createElement("div"); pending.className = "quota-meta"; pending.textContent = "尚未刷新"; row.appendChild(pending); }
         section.appendChild(row);
       });
       if (cached) {
         const balances = document.createElement("div"); balances.className = "quota-balances";
         const left = Number(cached.credits_left) || 0;
-        balances.appendChild(balanceBlock(left, "Plan credits left"));
-        if (cached.purchased_credits) balances.appendChild(balanceBlock(cached.purchased_credits, "Purchased"));
-        balances.appendChild(balanceBlock(cached.free_credits, "Free"));
+        balances.appendChild(balanceBlock(left, "剩余套餐额度"));
+        if (cached.purchased_credits) balances.appendChild(balanceBlock(cached.purchased_credits, "充值额度"));
+        balances.appendChild(balanceBlock(cached.free_credits, "赠送额度"));
         section.appendChild(balances);
 
         const row = document.createElement("div"); row.className = "quota-row";
-        const rowHeader = document.createElement("div"); rowHeader.className = "quota-row-header"; const label = document.createElement("span"); label.className = "quota-label"; label.textContent = "Monthly credits"; rowHeader.appendChild(label); row.appendChild(rowHeader);
+        const rowHeader = document.createElement("div"); rowHeader.className = "quota-row-header"; const label = document.createElement("span"); label.className = "quota-label"; label.textContent = "月度额度"; rowHeader.appendChild(label); row.appendChild(rowHeader);
         const month = cached.month;
-        if (month) { renderUsage(row, month, [left.toFixed(2) + " credits left"], true); } else { const meta = document.createElement("div"); meta.className = "quota-meta"; text(meta, left.toFixed(2) + " credits left (plan unknown)"); row.appendChild(meta); }
+        if (month) { renderUsage(row, month, ["剩余 " + left.toFixed(2) + " 额度"], true); } else { const meta = document.createElement("div"); meta.className = "quota-meta"; text(meta, "剩余 " + left.toFixed(2) + " 额度（套餐未知）"); row.appendChild(meta); }
         section.appendChild(row);
 
         const badgeNodes = badgesFor(cached);
@@ -327,7 +336,7 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
         if (detail) {
           const toggle = document.createElement("button"); toggle.className = "quota-detail-toggle";
           const open = detailOpen.has(card.key_id);
-          toggle.textContent = open ? "Hide details" : "Details";
+          toggle.textContent = open ? "收起详情" : "详情";
           toggle.setAttribute("aria-expanded", open ? "true" : "false");
           toggle.onclick = () => {
             if (detailOpen.has(card.key_id)) detailOpen.delete(card.key_id); else detailOpen.add(card.key_id);
@@ -338,16 +347,16 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
         }
       }
       const updated = fetchedAt.get(card.key_id);
-      if (updated) { const timestamp = document.createElement("div"); timestamp.className = "quota-meta"; timestamp.textContent = "Updated " + new Date(updated).toLocaleString(); section.appendChild(timestamp); }
+      if (updated) { const timestamp = document.createElement("div"); timestamp.className = "quota-meta"; timestamp.textContent = "更新时间 " + new Date(updated).toLocaleString(); section.appendChild(timestamp); }
       const actions = document.createElement("div"); actions.className = "quota-actions";
-      const button = document.createElement("button"); button.className = "quota-refresh"; button.textContent = inFlight.has(card.key_id) ? "Refreshing..." : "Refresh"; button.disabled = inFlight.has(card.key_id); button.setAttribute("aria-label", "Refresh " + card.label);
+      const button = document.createElement("button"); button.className = "quota-refresh"; button.textContent = inFlight.has(card.key_id) ? "刷新中…" : "刷新"; button.disabled = inFlight.has(card.key_id); button.setAttribute("aria-label", "刷新 " + card.label);
       const error = document.createElement("span"); error.className = "quota-error"; error.setAttribute("role", "status"); error.textContent = errors.get(card.key_id) || "";
       button.onclick = () => { refreshCard(card, cards); };
       actions.append(button, error); section.appendChild(actions); grid.appendChild(section);
     });
     app.appendChild(grid);
   }
-  if (!auth()) { app.textContent = ""; const p = document.createElement("p"); p.className = "quota-error"; p.setAttribute("role", "status"); p.textContent = "Enable Remember password in Management Center to use this page."; app.appendChild(p); return; }
+  if (!auth()) { app.textContent = ""; const p = document.createElement("p"); p.className = "quota-error"; p.setAttribute("role", "status"); p.textContent = "请在管理面板中开启「记住密码」后使用本页。"; app.appendChild(p); return; }
   request({}).then(result => {
     const cards = result.cards || [];
     const configured = new Set(cards.map(card => card.key_id));
@@ -362,7 +371,7 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     missing.forEach(card => inFlight.add(card.key_id));
     render(cards);
     missing.forEach(card => refreshCard(card, cards, true));
-  }).catch(err => { app.textContent = ""; const p = document.createElement("p"); p.className = "quota-error"; p.setAttribute("role", "status"); p.textContent = err.message || "Unable to load credentials."; app.appendChild(p); });
+  }).catch(err => { app.textContent = ""; const p = document.createElement("p"); p.className = "quota-error"; p.setAttribute("role", "status"); p.textContent = err.message || "无法加载凭据。"; app.appendChild(p); });
 })();
 </script>
 </body>

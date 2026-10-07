@@ -28,7 +28,7 @@ const ProviderID = "commandcode"
 // -ldflags "-X .../internal/plugin.pluginVersion=<version>".
 const pluginName = "commandcode-go-cliproxyapi"
 
-var pluginVersion = "0.3.0"
+var pluginVersion = "0.3.1"
 
 // SetVersion overrides the reported plugin version; the build injects it via
 // main.version (-ldflags). An empty value keeps the vendored default.
