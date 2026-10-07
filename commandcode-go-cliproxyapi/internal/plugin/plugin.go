@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
@@ -28,7 +29,7 @@ const ProviderID = "commandcode"
 // -ldflags "-X .../internal/plugin.pluginVersion=<version>".
 const pluginName = "commandcode-go-cliproxyapi"
 
-var pluginVersion = "0.3.1"
+var pluginVersion = "0.4.0"
 
 // SetVersion overrides the reported plugin version; the build injects it via
 // main.version (-ldflags). An empty value keeps the vendored default.
@@ -62,6 +63,16 @@ type Manager struct {
 
 	// device throttles the per-credential fingerprint/lifecycle announcement.
 	device *deviceAnnouncer
+
+	// inflight counts requests currently being served, for the optional global
+	// in-flight cap. It lives on the Manager (not a package global) so two
+	// Manager instances — as tests build — do not share a budget.
+	inflight atomic.Int64
+
+	// remoteMu guards the memoised remote model list. Separate from mu so a
+	// slow remote fetch never blocks request-path readers of the config.
+	remoteMu sync.Mutex
+	remote   *remoteCatalogCache
 
 	// lifeMu serializes whole register/reconfigure/shutdown sequences so
 	// their stop-wait-install steps cannot interleave into orphaned tickers.
@@ -266,6 +277,34 @@ func configFields() []pluginapi.ConfigField {
 				"hatch for a flagged credential, not a per-request knob).",
 		},
 		{
+			Name: "catalog-remote",
+			Type: pluginapi.ConfigFieldTypeString,
+			Description: "可选：模型列表远程来源 URL。Go 套餐无法访问 Provider API 的 /models，" +
+				"且 /alpha/* 上没有任何模型列表端点（实测全 404），因此无法从上游自动发现模型。" +
+				"填一个会被解析出模型 id 的 URL（例如参考反代的 proxy.mjs），模型列表就会跟着它走。" +
+				"注意这不是上游自动发现，而是跟踪第三方文件：默认关闭，catalog.static 仍是它的兜底；" +
+				"拉取失败会保留上一次成功的列表。",
+		},
+		{
+			Name: "retry",
+			Type: pluginapi.ConfigFieldTypeObject,
+			Description: `上游闪断透明重试，例如 {"max":2,"base-backoff":"400ms"}。` +
+				"仅重试传输层闪断（连接被重置等），且只在尚未向下游吐出任何字节时进行；" +
+				"429/503 这类上游语义信号绝不重试。max=0 关闭重试。",
+		},
+		{
+			Name: "watchdog",
+			Type: pluginapi.ConfigFieldTypeObject,
+			Description: `流式空闲看门狗，例如 {"enabled":true,"stream":"30s","non-stream":"90s"}。` +
+				"只计两次上游读取之间的间隔（每收到一个 chunk 重置），不是整个请求时长；" +
+				"厂商 CLI 对上游没有 idle 超时，用总时长上限会误杀合法的长思考请求。",
+		},
+		{
+			Name:        "max-inflight",
+			Type:        pluginapi.ConfigFieldTypeInteger,
+			Description: "全局在途请求上限；超限返回 503。默认 0=不限（并发控制通常交给前面的反向代理）。",
+		},
+		{
 			Name:        "request-timeout",
 			Type:        pluginapi.ConfigFieldTypeString,
 			Description: "Upstream HTTP timeout, e.g. 5m. Also bounds account/quota calls to 30s.",
@@ -402,7 +441,7 @@ func (m *Manager) handleLifecycle(request []byte) ([]byte, error) {
 			_ = m.bridge.Log("info", "commandcode plugin registered without api-keys; configure it in the Management Center", nil)
 		}
 	} else {
-		refreshErr = refreshOnce(context.Background(), mgr, m.bridge, registerRefreshTimeout, cfg)
+		refreshErr = m.refreshOnce(context.Background(), mgr, m.bridge, registerRefreshTimeout, cfg)
 	}
 	debugTrace("lifecycle refresh_complete model_count=%d refresh_error=%t pending=%t", len(mgr.Models()), refreshErr != nil, cfg.Pending)
 	// Retire any running loop and wait for its exit outside m.mu: a mid-refresh
@@ -539,7 +578,7 @@ func (m *Manager) startRefreshLoop(cfg config.Config, mgr *catalog.Manager, inte
 							_ = m.bridge.Log("error", "catalog refresh panicked", nil)
 						}
 					}()
-					refreshOnce(stopCtx, mgr, m.bridge, cfg.RequestTimeout, cfg)
+					m.refreshOnce(stopCtx, mgr, m.bridge, cfg.RequestTimeout, cfg)
 				}()
 			}
 		}
@@ -587,7 +626,15 @@ func (m *Manager) closeStop() chan struct{} {
 //
 // Warnings log a redacted category label from the catalog package via
 // host.log, never key material (FR-011).
+// refreshOnceFn is the pre-remote-catalog entry point, kept so existing tests
+// (and any future caller with no Manager) still compile. It delegates to a
+// throwaway Manager, which is safe because the only Manager state the
+// refresh chain touches is the remote-catalog memo.
 func refreshOnce(parent context.Context, mgr *catalog.Manager, bridge *HostBridge, timeout time.Duration, cfg config.Config) error {
+	return NewManager(bridge).refreshOnce(parent, mgr, bridge, timeout, cfg)
+}
+
+func (m *Manager) refreshOnce(parent context.Context, mgr *catalog.Manager, bridge *HostBridge, timeout time.Duration, cfg config.Config) error {
 	accounts := cfg.EffectiveAccounts()
 	if len(accounts) == 0 {
 		// Pending registration: nothing to authenticate a catalog fetch
@@ -607,9 +654,25 @@ func refreshOnce(parent context.Context, mgr *catalog.Manager, bridge *HostBridg
 	}
 	if credential == "" {
 		// No provider-mode account: the live /models endpoint is unreachable
-		// (it belongs to the Provider API, which refuses Go-plan keys). Serve
-		// the configured static list so a go-cli-only deployment still
-		// publishes models instead of an empty catalog.
+		// (it belongs to the Provider API, which refuses Go-plan keys), and the
+		// upstream exposes no model-list route on /alpha/* either. The remote
+		// source (when configured) is the only way to get a current list; the
+		// static table is the floor beneath it.
+		if cfg.Catalog.Remote != "" {
+			ids, errRemote := m.fetchRemoteCatalog(parent, cfg.Catalog.Remote, cfg.Catalog.RemoteRefreshInterval)
+			if errRemote == nil && len(ids) > 0 {
+				mgr.SeedStatic(ids)
+				if bridge != nil {
+					_ = bridge.Log("info", "catalog served from the remote model source", map[string]any{"models": len(ids)})
+				}
+				return nil
+			}
+			// Fall through to static. A remote failure must never leave the
+			// deployment with no models when a static floor is configured.
+			if bridge != nil {
+				_ = bridge.Log("warn", "remote catalog unavailable; falling back to the static model list", map[string]any{"error": errRemote.Error(), "static": len(cfg.Catalog.Static)})
+			}
+		}
 		if len(cfg.Catalog.Static) > 0 {
 			mgr.SeedStatic(cfg.Catalog.Static)
 			if bridge != nil {
@@ -618,7 +681,7 @@ func refreshOnce(parent context.Context, mgr *catalog.Manager, bridge *HostBridg
 			return nil
 		}
 		if bridge != nil {
-			_ = bridge.Log("info", "no provider-mode account and no static catalog configured; model list will be empty", nil)
+			_ = bridge.Log("info", "no provider-mode account, no remote source and no static catalog configured; model list will be empty", nil)
 		}
 		return nil
 	}

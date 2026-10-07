@@ -26,6 +26,14 @@ const (
 	DefaultRefreshInterval  = 15 * time.Minute
 	DefaultRequestTimeout   = 5 * time.Minute
 	DefaultMaxResponseBytes = int64(67108864) // 64 MiB
+	// DefaultRetryMax is the reference implementation's default: 2 retries
+	// (3 attempts total) of a pre-first-byte transport flip.
+	DefaultRetryMax = 2
+	// DefaultRetryBackoff is the first backoff step; attempt N waits N*this.
+	DefaultRetryBackoff = 400 * time.Millisecond
+	// DefaultStreamIdle / DefaultNonStreamIdle are the reference's idle budgets.
+	DefaultStreamIdle    = 30 * time.Second
+	DefaultNonStreamIdle = 90 * time.Second
 )
 
 type ModelPrefix struct {
@@ -45,6 +53,20 @@ type Catalog struct {
 	// the Provider API (and therefore /models) refuses Go-plan keys. Empty
 	// means no static fallback.
 	Static []string
+	// Remote is an optional URL that gets fetched and parsed for model ids.
+	// It exists because a go-cli-only pool cannot reach /models at all, and
+	// the upstream exposes no model-list endpoint on /alpha/* either (probed:
+	// all 404), so there is nothing to poll upstream. The reference proxy
+	// keeps its model table as a literal list in its source, so this feature
+	// points at that source and extracts the ids from it.
+	//
+	// This is NOT upstream autodiscovery and the docs say so: it tracks a
+	// third-party file whose format can change. Hence it is OFF by default
+	// and Static remains the fallback underneath it.
+	Remote string
+	// RemoteRefreshInterval throttles re-fetching Remote. Zero means use the
+	// catalog refresh interval.
+	RemoteRefreshInterval time.Duration
 }
 
 type Protocols struct {
@@ -119,6 +141,9 @@ type Config struct {
 	RouteOverrides   map[string]RouteOverride
 	Models           ModelFilter
 	Device           Device
+	Retry            Retry
+	Watchdog         Watchdog
+	MaxInflight      int
 	AllowHTTP        bool
 	RequestTimeout   time.Duration
 	MaxResponseBytes int64
@@ -161,6 +186,37 @@ func (d Device) EffectiveProjectDir() string {
 		return d.ProjectDir
 	}
 	return DefaultDeviceProjectDir
+}
+
+// Retry controls the transparent retry of transport-level upstream flips.
+//
+// The upstream drops connections under load (undici reports "terminated",
+// usually caused by other side closed). When that happens BEFORE any byte has
+// been written downstream, the client never saw the request start, so redoing
+// it is invisible to the caller. Once a byte has been emitted the semantics are
+// committed and a retry would duplicate content — that case is never retried,
+// here or anywhere else.
+type Retry struct {
+	// Max is the number of RETRIES (so Max+1 total attempts). 0 disables the
+	// mechanism. Default 2, matching the reference implementation.
+	Max int
+	// BaseBackoff is the first backoff step; attempt N waits BaseBackoff*N.
+	BaseBackoff time.Duration
+}
+
+// Watchdog bounds the gap between upstream reads, NOT the total request time.
+//
+// The vendor CLI has no upstream idle timeout at all, so a legitimate long
+// reasoning pause can run for minutes; a total-duration cap would kill healthy
+// requests. Only "no new bytes arrived for X" is suspicious, and the timer
+// resets on every chunk. Enabled defaults to true, matching the reference.
+type Watchdog struct {
+	Enabled bool
+	// Stream is the idle budget for a streaming response.
+	Stream time.Duration
+	// NonStream is the idle budget for a buffered (non-streaming) response.
+	// More generous than Stream: nothing is delivered until the end anyway.
+	NonStream time.Duration
 }
 
 // TransportMode selects which upstream surface an account talks to.
@@ -271,6 +327,21 @@ type rawDevice struct {
 	IdentitySalt *string `yaml:"identity-salt"`
 }
 
+// rawRetry mirrors the retry block. Max is a pointer so an explicit 0
+// (disable) is distinguishable from unset (apply the default of 2).
+type rawRetry struct {
+	Max         *int    `yaml:"max"`
+	BaseBackoff *string `yaml:"base-backoff"`
+}
+
+// rawWatchdog mirrors the watchdog block. Enabled is a pointer so an explicit
+// false (disable) is distinguishable from unset (default on).
+type rawWatchdog struct {
+	Enabled   *bool   `yaml:"enabled"`
+	Stream    *string `yaml:"stream"`
+	NonStream *string `yaml:"non-stream"`
+}
+
 // rawConfig mirrors the YAML shape; pointer fields distinguish "unset"
 // (apply default) from explicitly-set values including "" (validate as-is).
 // Unknown fields are ignored (host may pass extra keys).
@@ -286,6 +357,9 @@ type rawConfig struct {
 	RouteOverrides   map[string]RouteOverride `yaml:"route-overrides"`
 	Models           rawModelFilter           `yaml:"models"`
 	Device           rawDevice                `yaml:"device"`
+	Retry            rawRetry                 `yaml:"retry"`
+	Watchdog         rawWatchdog              `yaml:"watchdog"`
+	MaxInflight      *int                     `yaml:"max-inflight"`
 	AllowHTTP        bool                     `yaml:"allow-http"`
 	RequestTimeout   *string                  `yaml:"request-timeout"`
 	MaxResponseBytes *int64                   `yaml:"max-response-bytes"`
@@ -394,6 +468,8 @@ type rawCatalog struct {
 	RefreshInterval       *string   `yaml:"refresh-interval"`
 	StaleWhileUnavailable *bool     `yaml:"stale-while-unavailable"`
 	Static                *[]string `yaml:"static"`
+	Remote                *string   `yaml:"remote"`
+	RemoteRefreshInterval *string   `yaml:"remote-refresh-interval"`
 }
 
 type rawProtocols struct {
@@ -484,6 +560,24 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 	if requestTimeout <= 0 {
 		return Config{}, fmt.Errorf("request-timeout: must be positive")
 	}
+
+	retryBackoff, err := parseDuration("retry.base-backoff", raw.Retry.BaseBackoff, DefaultRetryBackoff)
+	if err != nil {
+		return Config{}, err
+	}
+	streamIdle, err := parseDuration("watchdog.stream", raw.Watchdog.Stream, DefaultStreamIdle)
+	if err != nil {
+		return Config{}, err
+	}
+	nonStreamIdle, err := parseDuration("watchdog.non-stream", raw.Watchdog.NonStream, DefaultNonStreamIdle)
+	if err != nil {
+		return Config{}, err
+	}
+
+	remoteRefresh, err := parseDuration("catalog.remote-refresh-interval", raw.Catalog.RemoteRefreshInterval, 0)
+	if err != nil {
+		return Config{}, err
+	}
 	c := Config{
 		BaseURL: orDefault(raw.BaseURL, DefaultBaseURL),
 		ModelPrefix: ModelPrefix{
@@ -500,6 +594,8 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 			RefreshInterval:       refreshInterval,
 			StaleWhileUnavailable: orDefault(raw.Catalog.StaleWhileUnavailable, true),
 			Static:                staticModelList(raw.Catalog.Static),
+			Remote:                strings.TrimSpace(orDefault(raw.Catalog.Remote, "")),
+			RemoteRefreshInterval: remoteRefresh,
 		},
 		Protocols: Protocols{
 			ChatCompletions: orDefault(raw.Protocols.ChatCompletions, true),
@@ -516,6 +612,16 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 			ProjectDir:   strings.TrimSpace(orDefault(raw.Device.ProjectDir, "")),
 			IdentitySalt: orDefault(raw.Device.IdentitySalt, ""),
 		},
+		Retry: Retry{
+			Max:         orDefault(raw.Retry.Max, DefaultRetryMax),
+			BaseBackoff: retryBackoff,
+		},
+		Watchdog: Watchdog{
+			Enabled:   orDefault(raw.Watchdog.Enabled, true),
+			Stream:    streamIdle,
+			NonStream: nonStreamIdle,
+		},
+		MaxInflight:      orDefault(raw.MaxInflight, 0),
 		AllowHTTP:        raw.AllowHTTP,
 		RequestTimeout:   requestTimeout,
 		MaxResponseBytes: orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),

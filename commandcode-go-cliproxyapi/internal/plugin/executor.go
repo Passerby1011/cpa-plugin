@@ -146,6 +146,13 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	if err := json.Unmarshal(request, &req); err != nil {
 		return ErrEnvelope("invalid_request", "malformed executor request body"), nil
 	}
+
+	// Optional global in-flight cap (off unless max-inflight > 0).
+	releaseInflight, admitted := m.acquireInflight(m.inflightMax())
+	if !admitted {
+		return inflightRejection(), nil
+	}
+	defer releaseInflight()
 	debugTrace("executor invoked model=%s source_format=%s stream=%t original_body_%s payload_%s", req.Model, req.SourceFormat, req.Stream, debugBodyMeta(req.OriginalRequest), debugBodyMeta(req.Payload))
 	if req.Stream {
 		return m.executeStream(req)
@@ -283,18 +290,35 @@ func (m *Manager) handleExecuteGoCLI(req executorRequest, res *resolvedExecution
 		return classEnvelope(eErr), nil
 	}
 	debugTrace("executor sending non-stream url=%s body_len=%d mode=go-cli", url, len(upstreamBody))
-	ctx, cancel := context.WithTimeout(context.Background(), res.cfg.RequestTimeout)
-	defer cancel()
-	resp, err := m.bridge.Do(ctx, pluginapi.HTTPRequest{
-		Method:  http.MethodPost,
-		URL:     url,
-		Headers: gocli.GenerateHeadersWithOptions(res.account.Credential, goCLIHeaderOptions(res.cfg, sessionID)),
-		Body:    upstreamBody,
-	})
-	if err != nil {
-		m.releaseAccount(res, 0)
-		debugTrace("executor go-cli non-stream network error: %v", err)
-		return classEnvelope(errclass.FromNetwork(err)), nil
+	// Transparent retry of a pre-first-byte transport flip. The whole response
+	// is buffered before anything reaches the client, so a failed attempt was
+	// never observed downstream and redoing it cannot duplicate content. Only
+	// transport-level drops qualify; an upstream status (429/503/...) is a
+	// deliberate signal and is never retried here.
+	policy := newRetryPolicy(res.cfg.Retry.Max, res.cfg.Retry.BaseBackoff)
+	var resp pluginapi.HTTPResponse
+	var err error
+	for attempt := 1; ; attempt++ {
+		if attempt > 1 {
+			time.Sleep(policy.backoffFor(attempt - 1))
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), res.cfg.RequestTimeout)
+		resp, err = m.bridge.Do(ctx, pluginapi.HTTPRequest{
+			Method:  http.MethodPost,
+			URL:     url,
+			Headers: gocli.GenerateHeadersWithOptions(res.account.Credential, goCLIHeaderOptions(res.cfg, sessionID)),
+			Body:    upstreamBody,
+		})
+		cancel()
+		if err == nil {
+			break
+		}
+		debugTrace("executor go-cli non-stream network error attempt=%d: %v", attempt, err)
+		if attempt > policy.max || !isRetryableTransportFlip(err.Error()) {
+			m.releaseAccount(res, 0)
+			return classEnvelope(errclass.FromNetwork(err)), nil
+		}
+		debugTrace("executor go-cli non-stream retrying after transport flip attempt=%d/%d", attempt, policy.max+1)
 	}
 	m.releaseAccount(res, resp.StatusCode)
 	debugTrace("executor go-cli received non-stream status=%d body_len=%d", resp.StatusCode, len(resp.Body))
@@ -342,6 +366,50 @@ func (m *Manager) handleExecuteGoCLI(req executorRequest, res *resolvedExecution
 		return classEnvelope(eErr), nil
 	}
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: converted, Headers: resp.Headers}), nil
+}
+
+// acquireInflight admits one request against the optional global in-flight cap.
+//
+// The cap exists for the "bare proxy, no upstream limiter" deployment: without
+// it, N concurrent requests each buffer a full response and the process can be
+// OOM-killed. It is OFF by default (max <= 0), matching the reference, because
+// concurrency control normally belongs to the reverse proxy in front (nginx
+// limit_conn), which is the only layer that knows what the host can take.
+//
+// The returned release function is idempotent: a request has several exit paths
+// and a double release would free a slot another request is using. Streaming
+// callers must pass it to the pump goroutine, because the handler returns long
+// before the stream finishes.
+func (m *Manager) acquireInflight(max int) (release func(), ok bool) {
+	if max <= 0 {
+		return func() {}, true
+	}
+	if m.inflight.Add(1) > int64(max) {
+		m.inflight.Add(-1)
+		return func() {}, false
+	}
+	var once sync.Once
+	return func() { once.Do(func() { m.inflight.Add(-1) }) }, true
+}
+
+// inflightMax reads the configured cap. Read under the same lock that guards
+// cfg so a reconfigure cannot be observed half-applied.
+func (m *Manager) inflightMax() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cfg.MaxInflight
+}
+
+// inflightRejection is the envelope a request past the cap receives: a 503 with
+// Retry-After semantics, so a client SDK backs off and retries rather than
+// treating it as a permanent failure.
+func inflightRejection() []byte {
+	return classEnvelope(&errclass.Error{
+		Class:      errclass.ClassUpstream,
+		Message:    "commandcode: too many requests in flight; retry shortly",
+		StatusCode: http.StatusServiceUnavailable,
+		Retryable:  true,
+	})
 }
 
 // generateURL resolves the CLI endpoint, folding the adapter's plain error
@@ -594,12 +662,20 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 		return classEnvelope(eErr), nil
 	}
 	debugTrace("executor session mode=%s source_format=%s x_commandcode_session=%s fallback=%t", "stream", req.SourceFormat, sessionID, sessionID == emptyCommandCodeSessionID)
+	// Optional global in-flight cap. Acquired BEFORE the upstream is opened
+	// and released by the pump, which outlives this handler.
+	releaseInflight, admitted := m.acquireInflight(res.cfg.MaxInflight)
+	if !admitted {
+		m.releaseAccount(res, 0)
+		return inflightRejection(), nil
+	}
 	if res.goCli {
 		m.announceDeviceIfDue(context.Background(), res.cfg.Device, res.cfg.BaseURL, res.account.Credential)
-		return m.executeStreamGoCLI(req, res, sessionID)
+		return m.executeStreamGoCLI(req, res, sessionID, releaseInflight)
 	}
 	upstreamBody, eErr := buildUpstreamRequest(res.rec.Protocol, res.rec.UpstreamID, req.SourceFormat, req.OriginalRequest, res.rec.Thinking)
 	if eErr != nil {
+		releaseInflight()
 		m.releaseAccount(res, 0)
 		return classEnvelope(eErr), nil
 	}
@@ -616,10 +692,12 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 	})
 	debugTrace("executor stream DoStream status=%d upstreamID=%s err=%v", st, id, err)
 	if err != nil {
+		releaseInflight()
 		m.releaseAccount(res, 0)
 		return classEnvelope(errclass.FromNetwork(err)), nil
 	}
 	if st >= 400 {
+		releaseInflight()
 		m.releaseAccount(res, st)
 		var body []byte
 		if id != "" {
@@ -648,7 +726,7 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 		if m.bridge != nil {
 			defer m.bridge.inFlight.Done()
 		}
-		m.pumpStream(downID, id, res, req.SourceFormat)
+		m.pumpStream(downID, id, res, req.SourceFormat, releaseInflight)
 	}()
 	return okEnvelope(struct{}{}), nil
 }
@@ -657,14 +735,16 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 // upstream is a plain SSE stream; pumpStream translates it with the gocli
 // converter. Pre-first-byte failures (URL, envelope, HTTP >=400) still return
 // as envelopes so CPA can failover before any emission.
-func (m *Manager) executeStreamGoCLI(req executorRequest, res *resolvedExecution, sessionID string) ([]byte, error) {
+func (m *Manager) executeStreamGoCLI(req executorRequest, res *resolvedExecution, sessionID string, releaseInflight func()) ([]byte, error) {
 	url, eErr := generateURL(res.cfg.BaseURL)
 	if eErr != nil {
+		releaseInflight()
 		m.releaseAccount(res, 0)
 		return classEnvelope(eErr), nil
 	}
 	upstreamBody, eErr := buildGoCLIRequest(res, req, sessionID)
 	if eErr != nil {
+		releaseInflight()
 		m.releaseAccount(res, 0)
 		return classEnvelope(eErr), nil
 	}
@@ -710,12 +790,19 @@ func (m *Manager) executeStreamGoCLI(req executorRequest, res *resolvedExecution
 		if m.bridge != nil {
 			defer m.bridge.inFlight.Done()
 		}
-		m.pumpStream(downID, id, res, req.SourceFormat)
+		m.pumpStream(downID, id, res, req.SourceFormat, releaseInflight)
 	}()
 	return okEnvelope(struct{}{}), nil
 }
 
-func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, sourceFormat string) {
+func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, sourceFormat string, releaseInflight func()) {
+	// The in-flight slot is released by the PUMP, not the handler: the handler
+	// returns as soon as the stream is opened, so releasing there would free
+	// the slot while the response is still being delivered.
+	if releaseInflight != nil {
+		defer releaseInflight()
+	}
+
 	// The account was acquired by resolveExecution and stays in-flight for the
 	// whole stream; release it exactly once when the pump ends (cleanly, on
 	// truncation, or on any early failure exit below).
@@ -742,6 +829,35 @@ func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, 
 	})
 	defer watchdog.Stop()
 
+	// Idle watchdog: bounds the GAP between upstream reads, not the total
+	// request duration. The vendor CLI applies no upstream idle timeout, so a
+	// legitimate long reasoning pause can run for minutes and a total-only cap
+	// would kill healthy requests; conversely an upstream that has silently
+	// stopped sending would otherwise hold the stream (and the account lease)
+	// until the much larger request-timeout above. The timer resets on every
+	// chunk, so only a genuine silence trips it.
+	var idleTripped atomic.Bool
+	idleTimer := (*time.Timer)(nil)
+	if res.cfg.Watchdog.Enabled && res.cfg.Watchdog.Stream > 0 {
+		idleTimer = time.AfterFunc(res.cfg.Watchdog.Stream, func() {
+			defer func() {
+				if r := recover(); r != nil && m.bridge != nil {
+					_ = m.bridge.Log("error", "stream idle watchdog panicked", nil)
+				}
+			}()
+			idleTripped.Store(true)
+			_ = m.bridge.StreamClose(upstreamID)
+		})
+		defer idleTimer.Stop()
+	}
+	// armIdle restarts the silence budget. Called after every successful read,
+	// including reads that carried no payload (the loop may see a heartbeat).
+	armIdle := func() {
+		if idleTimer != nil {
+			idleTimer.Reset(res.cfg.Watchdog.Stream)
+		}
+	}
+
 	conv := newStreamConverter(res.rec.Protocol, sourceFormat, res.goCli)
 	var (
 		total          int64
@@ -752,6 +868,19 @@ func (m *Manager) pumpStream(downID, upstreamID string, res *resolvedExecution, 
 		payload, readErrMsg, closed, err := m.bridge.StreamRead(upstreamID)
 		debugTrace("executor stream read chunk_len=%d closed=%t readErrMsg=%q err=%v", len(payload), closed, readErrMsg, err)
 		upstreamClosed = closed
+		// Any read that returns restarts the silence budget: a chunk arrived,
+		// a clean close arrived, or a transport error arrived. All three are
+		// progress as far as "is the upstream still alive" is concerned.
+		armIdle()
+		if idleTripped.Load() {
+			// Deliberately NOT a retry: a silent upstream is reported to the
+			// client as a retryable rate-limit so its own SDK backs off, rather
+			// than the proxy replaying a request the upstream may still be
+			// working on.
+			debugTrace("executor stream idle timeout after %.0fs of silence", res.cfg.Watchdog.Stream.Seconds())
+			closeStreams(errclass.Redact("upstream stream idle timeout"))
+			return
+		}
 		if aborted.Load() {
 			closeStreams(errclass.Redact("stream exceeded request-timeout"))
 			return
