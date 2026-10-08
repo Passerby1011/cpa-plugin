@@ -316,3 +316,54 @@ func TestStringifyAndFirstStringField(t *testing.T) {
 		t.Fatalf("firstStringField = %q", got)
 	}
 }
+
+// Regression: the manual button (and POST /daily-activity) must work with the
+// auto toggle OFF — that is the default on a fresh install. The original bug
+// ran the scheduled entry point, which returns immediately unless
+// daily_activity_auto is on, so the button silently did nothing.
+func TestManualDailyActivityIgnoresAutoToggle(t *testing.T) {
+	clearDailyActivityState()
+	// Toggle explicitly off (the default), then run the manual path.
+	dailyActivityAutoMu.Lock()
+	old := dailyActivityAuto
+	dailyActivityAuto = false
+	dailyActivityAutoMu.Unlock()
+	defer func() {
+		dailyActivityAutoMu.Lock()
+		dailyActivityAuto = old
+		dailyActivityAutoMu.Unlock()
+	}()
+
+	// The robust way to tell "gated" from "ran but found no accounts" without a
+	// host bridge: probe the gate directly. listDailyActivityTargets is the
+	// shared selection step both paths run after the gate.
+	scheduledRan, _ := dailyActivitySweepAllowed(false)
+	if scheduledRan {
+		t.Fatal("scheduled sweep must be gated while the toggle is off")
+	}
+	manualRan, _ := dailyActivitySweepAllowed(true)
+	if !manualRan {
+		t.Fatal("manual sweep must NOT be gated by daily_activity_auto")
+	}
+}
+
+// The scheduled sweep must remain gated: an off toggle means no attempts at all.
+func TestScheduledDailyActivityRespectsToggle(t *testing.T) {
+	dailyActivityAutoMu.Lock()
+	old := dailyActivityAuto
+	dailyActivityAuto = false
+	dailyActivityAutoMu.Unlock()
+	defer func() {
+		dailyActivityAutoMu.Lock()
+		dailyActivityAuto = old
+		dailyActivityAutoMu.Unlock()
+	}()
+
+	allowed, _ := dailyActivitySweepAllowed(false)
+	if allowed {
+		t.Fatal("toggle off must refuse the scheduled sweep")
+	}
+	if got := runAutoDailyActivity(false); got.Attempts != 0 || got.Claimed != 0 {
+		t.Fatalf("toggle off must produce no attempts, got %#v", got)
+	}
+}

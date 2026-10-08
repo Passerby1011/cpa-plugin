@@ -98,7 +98,7 @@ func schedulerLoop(stop chan struct{}) {
 				runAutoGrowthTasks()
 			}
 			if runDailyActivity {
-				runAutoDailyActivity()
+				runAutoDailyActivity(false)
 			}
 			if runKeepalive {
 				runTokenKeepalive()

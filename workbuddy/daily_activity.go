@@ -501,15 +501,31 @@ type dailyActivityResult struct {
 	Attempts int `json:"attempts"`
 }
 
-// runAutoDailyActivity is the scheduled Global daily-activity sweep. CN and
-// enterprise accounts are skipped here (they earn credits through the CN
-// check-in / growth paths). Accounts already rewarded today are skipped.
-func runAutoDailyActivity() dailyActivityResult {
-	result := dailyActivityResult{}
+// dailyActivitySweepAllowed reports whether a sweep may run. force=true is the
+// manual path (panel button / POST /daily-activity) and always passes; the
+// scheduled path defers to the daily_activity_auto toggle, which is opt-in
+// (default false) — a manual trigger must never be swallowed by it.
+func dailyActivitySweepAllowed(force bool) (bool, bool) {
+	if force {
+		return true, true
+	}
 	dailyActivityAutoMu.RLock()
 	enabled := dailyActivityAuto
 	dailyActivityAutoMu.RUnlock()
-	if !enabled {
+	return enabled, false
+}
+
+// runAutoDailyActivity is the Global daily-activity sweep. CN and enterprise
+// accounts are skipped here (they earn credits through the CN check-in / growth
+// paths). Accounts already rewarded today are skipped.
+//
+// force=true is the manual path (the panel button, or POST /daily-activity):
+// it runs regardless of the daily_activity_auto toggle, which only governs the
+// scheduled sweep. Without this the button silently no-ops on a fresh install
+// where the toggle is still off — the toggle is opt-in by default.
+func runAutoDailyActivity(force bool) dailyActivityResult {
+	result := dailyActivityResult{}
+	if allowed, _ := dailyActivitySweepAllowed(force); !allowed {
 		return result
 	}
 
@@ -557,9 +573,11 @@ func runAutoDailyActivity() dailyActivityResult {
 	return result
 }
 
-// handleManualDailyActivity backs POST /daily-activity.
+// handleManualDailyActivity backs POST /daily-activity. Manual invocation is
+// always allowed — the caller asked for it explicitly, so the auto toggle does
+// not gate it (mirrors handleManualTravel).
 func handleManualDailyActivity(_ pluginapi.ManagementRequest) map[string]any {
-	result := runAutoDailyActivity()
+	result := runAutoDailyActivity(true)
 	return map[string]any{
 		"success": result.Failed == 0,
 		"total":   result.Total,

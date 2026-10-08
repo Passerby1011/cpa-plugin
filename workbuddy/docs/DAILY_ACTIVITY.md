@@ -103,6 +103,8 @@ plugins:
 面板上的开关是**运行时**切换（CPA host 不提供插件配置写入回调），重启后以
 `config_yaml` 为准——与 `checkin_auto` 同款行为。
 
+**手动与自动是两条独立路径**：面板「每日活跃打卡(Global)」按钮（`POST /daily-activity`）**不受开关约束**，随时可点；`daily_activity-auto` 只管 09:00 的定时巡检。（0.13.1 修复：此前手动路径误用自动入口，开关关闭时按钮静默无效。）
+
 ## 范围边界
 
 - 仅 **Global 个人账号**（`dailyActivityEligible`）。
