@@ -249,6 +249,9 @@ func (m *Manager) HandleManagement(ctx context.Context, req pluginapi.Management
 	if req.Method == http.MethodGet && req.Path == "/v0/resource/plugins/"+pluginName+"/quota" {
 		return pluginapi.ManagementResponse{Headers: http.Header{"Content-Type": []string{"text/html; charset=utf-8"}}, Body: []byte(resources.QuotaPage)}, nil
 	}
+	if req.Method == http.MethodPost && req.Path == "/v0/management"+accountsPath {
+		return m.handleAddAccount(ctx, req.Body), nil
+	}
 	if req.Method != http.MethodPost || req.Path != "/v0/management/plugins/"+pluginName+"/quota-usage" {
 		return pluginapi.ManagementResponse{StatusCode: http.StatusNotFound, Body: []byte(`{"error":"not found"}`)}, nil
 	}
@@ -260,7 +263,7 @@ func (m *Manager) HandleManagement(ctx context.Context, req pluginapi.Management
 	}
 	m.mu.RLock()
 	baseURL, timeout := m.cfg.BaseURL, m.cfg.RequestTimeout
-	keys := append([]config.Account(nil), m.cfg.EffectiveAccounts()...)
+	keys := append([]config.Account(nil), m.poolAccounts(m.cfg)...)
 	m.mu.RUnlock()
 	if body.KeyID == "" {
 		// List is deliberately cheap: no upstream account calls. The page

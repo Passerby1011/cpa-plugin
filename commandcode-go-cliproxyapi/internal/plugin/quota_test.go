@@ -22,8 +22,18 @@ func TestManagementRegistration(t *testing.T) {
 		Resources []struct{ Path, Menu, Description string } `json:"resources"`
 	}
 	decodeResult(t, mustHandle(t, m, pluginabi.MethodManagementRegister, []byte(`{}`)), &got)
-	if len(got.Routes) != 1 || got.Routes[0].Method != http.MethodPost || got.Routes[0].Path != "/plugins/"+pluginName+"/quota-usage" {
-		t.Fatalf("routes = %+v", got.Routes)
+	// Two routes: the quota read, and adding a credential (the page's write).
+	wantRoutes := map[string]string{
+		"/plugins/" + pluginName + "/quota-usage": http.MethodPost,
+		accountsPath: http.MethodPost,
+	}
+	if len(got.Routes) != len(wantRoutes) {
+		t.Fatalf("routes = %+v, want %d entries", got.Routes, len(wantRoutes))
+	}
+	for _, route := range got.Routes {
+		if wantRoutes[route.Path] != route.Method {
+			t.Fatalf("unexpected route %s %s", route.Method, route.Path)
+		}
 	}
 	if len(got.Resources) != 1 || got.Resources[0].Path != "/quota" || got.Resources[0].Menu != "CommandCode Quota" {
 		t.Fatalf("resources = %+v", got.Resources)

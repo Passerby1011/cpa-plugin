@@ -52,8 +52,26 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
 .quota-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; }
 .quota-card { padding: 20px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-primary); box-shadow: var(--shadow); }
 .quota-card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
-.credential-badge { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; color: #fff; background: var(--primary-color); font-size: 12px; font-weight: 700; }
+.credential-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 8px; border-radius: 999px; color: #fff; background: var(--primary-color); font-size: 12px; font-weight: 700; }
 .credential-name { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 16px; font-weight: 600; }
+/* Plan type, spelled out. The round badge above already carries the plan, but
+   it is a bare acronym that operators read as the account label; this chip
+   states it in words, and shows 套餐未知 instead of hiding an unknown plan. */
+.credential-plan { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.credential-plan.is-unknown { color: var(--text-tertiary); font-weight: 500; }
+/* Add-key form: collapsed by default so this stays a quota view first. */
+.quota-add { margin: 0 0 16px; }
+.quota-add-toggle { padding: 7px 14px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--bg-primary); color: var(--text-secondary); font-size: 13px; font-weight: 600; cursor: pointer; }
+.quota-add-toggle:hover { border-color: var(--primary-color); color: var(--primary-color); }
+.quota-add-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-secondary); }
+.quota-add-input { padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-size: 13px; font-family: inherit; }
+#addKey { flex: 1 1 260px; min-width: 200px; }
+#addLabel { flex: 0 1 160px; }
+.quota-add-submit { padding: 7px 16px; border: 1px solid var(--primary-color); border-radius: 6px; background: var(--primary-color); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; }
+.quota-add-submit:disabled { opacity: .55; cursor: default; }
+.quota-add-status { font-size: 12px; color: var(--text-secondary); }
+.quota-add-status.is-error { color: var(--error-color); }
+.quota-add-status.is-ok { color: var(--success-color); }
 .quota-row { padding: 14px 0; border-top: 1px solid var(--border-color); }
 .quota-row-header, .quota-meta { display: flex; justify-content: space-between; gap: 12px; }
 .quota-label { font-weight: 600; }
@@ -97,6 +115,19 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
 <body>
 <div class="quota-page">
   <header class="quota-header"><h1 class="quota-title">CommandCode 配额</h1><p class="quota-description">每个已配置凭据的用量。新账号会自动刷新。</p></header>
+  <section class="quota-add">
+    <button type="button" class="quota-add-toggle" id="addToggle" aria-expanded="false" aria-controls="addForm">＋ 添加 Key</button>
+    <form class="quota-add-form" id="addForm" hidden>
+      <input class="quota-add-input" id="addKey" type="password" autocomplete="off" spellcheck="false" placeholder="CommandCode key（user_…）" aria-label="CommandCode key">
+      <input class="quota-add-input" id="addLabel" type="text" autocomplete="off" spellcheck="false" placeholder="备注（可选）" aria-label="备注">
+      <select class="quota-add-input" id="addMode" aria-label="传输模式">
+        <option value="go-cli">go-cli（Go 套餐）</option>
+        <option value="provider">provider（Provider 套餐）</option>
+      </select>
+      <button type="submit" class="quota-add-submit" id="addSubmit">添加</button>
+      <span class="quota-add-status" id="addStatus" role="status"></span>
+    </form>
+  </section>
   <main id="app"><p class="quota-muted">正在加载凭据…</p></main>
 </div>
 <script>
@@ -126,6 +157,7 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
 (() => {
   const app = document.getElementById("app");
   const endpoint = "/v0/management/plugins/commandcode-go-cliproxyapi/quota-usage";
+  const accountsEndpoint = "/v0/management/plugins/commandcode-go-cliproxyapi/accounts";
   const storageKey = "commandcode-go-cliproxyapi:quota";
   const values = new Map();
   const labels = new Map();
@@ -194,16 +226,17 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
       return "";
     } catch (_) { return ""; }
   }
-  function request(body) {
+  function send(url, body) {
     const headers = {"Content-Type": "application/json"};
     const key = auth();
     if (key) headers.Authorization = "Bearer " + key;
-    return fetch(endpoint, {method: "POST", headers, body: JSON.stringify(body)}).then(async response => {
+    return fetch(url, {method: "POST", headers, body: JSON.stringify(body)}).then(async response => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "请求失败");
       return data;
     });
   }
+  function request(body) { return send(endpoint, body); }
   function text(parent, value) { const node = document.createElement("span"); node.textContent = value == null || value === "" ? "-" : value; parent.appendChild(node); }
   // 状态词与窗口名转中文。未知值原样透出，避免把新状态吞成空白。
   function statusText(status) {
@@ -293,7 +326,9 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     }
     return box;
   }
+  let cardsCount = 0;
   function render(cards) {
+    cardsCount = cards.length;
     app.textContent = "";
     if (!cards.length) { const p = document.createElement("p"); p.className = "quota-muted"; p.setAttribute("role", "status"); p.textContent = "尚未配置任何凭据。"; app.appendChild(p); return; }
     const grid = document.createElement("div"); grid.className = "quota-grid";
@@ -301,8 +336,16 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
       const section = document.createElement("section"); section.className = "quota-card";
       const header = document.createElement("div"); header.className = "quota-card-header";
       const cached = values.get(card.key_id);
-      const badge = document.createElement("span"); badge.className = "credential-badge"; badge.textContent = (cached && cached.plan) || "CC"; badge.setAttribute("aria-hidden", "true");
-      const title = document.createElement("h2"); title.className = "credential-name"; title.textContent = labels.get(card.key_id) || card.label; header.append(badge, title); section.appendChild(header);
+      const plan = cached && cached.plan;
+      const badge = document.createElement("span"); badge.className = "credential-badge"; badge.textContent = plan || "CC"; badge.setAttribute("aria-hidden", "true");
+      const title = document.createElement("h2"); title.className = "credential-name"; title.textContent = labels.get(card.key_id) || card.label;
+      // Spell the plan out next to the account label: the round badge is an
+      // acronym an operator reads as the label, and an unknown plan must read
+      // 套餐未知 rather than silently showing nothing.
+      const planChip = document.createElement("span"); planChip.className = "credential-plan" + (plan ? "" : " is-unknown");
+      const allowance = cached && Number(cached.plan_credits) > 0 ? " · 月额度 " + Number(cached.plan_credits).toFixed(0) : "";
+      planChip.textContent = plan ? "套餐 " + plan + allowance : "套餐未知";
+      header.append(badge, title, planChip); section.appendChild(header);
       [["five_hour", "5 小时窗口"], ["weekly", "每周窗口"]].forEach(entry => {
         const name = entry[0];
         const row = document.createElement("div"); row.className = "quota-row";
@@ -357,7 +400,8 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     app.appendChild(grid);
   }
   if (!auth()) { app.textContent = ""; const p = document.createElement("p"); p.className = "quota-error"; p.setAttribute("role", "status"); p.textContent = "请在管理面板中开启「记住密码」后使用本页。"; app.appendChild(p); return; }
-  request({}).then(result => {
+  function loadCards() {
+    return request({}).then(result => {
     const cards = result.cards || [];
     const configured = new Set(cards.map(card => card.key_id));
     Object.keys(cache).forEach(keyID => {
@@ -372,6 +416,49 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     render(cards);
     missing.forEach(card => refreshCard(card, cards, true));
   }).catch(err => { app.textContent = ""; const p = document.createElement("p"); p.className = "quota-error"; p.setAttribute("role", "status"); p.textContent = err.message || "无法加载凭据。"; app.appendChild(p); });
+  }
+  // Add-key form. The host gives a plugin no way to write its own config, so
+  // the key is stored as a CPA auth record: the host persists and schedules it,
+  // and the plugin folds auth-record credentials into its pool. That is what
+  // makes a key added here usable at once, without hand-editing config.
+  (() => {
+    const toggle = document.getElementById("addToggle");
+    const form = document.getElementById("addForm");
+    const keyInput = document.getElementById("addKey");
+    const labelInput = document.getElementById("addLabel");
+    const modeSelect = document.getElementById("addMode");
+    const submit = document.getElementById("addSubmit");
+    const status = document.getElementById("addStatus");
+    if (!toggle || !form || !keyInput || !submit || !status) return;
+    const setStatus = (message, kind) => { status.textContent = message || ""; status.className = "quota-add-status" + (kind ? " is-" + kind : ""); };
+    toggle.addEventListener("click", () => {
+      const opening = form.hidden;
+      form.hidden = !opening;
+      toggle.setAttribute("aria-expanded", String(opening));
+      if (opening) keyInput.focus();
+    });
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      const credential = keyInput.value.trim();
+      if (!credential) { setStatus("请填写 CommandCode key。", "error"); keyInput.focus(); return; }
+      // A credential added to an EMPTY configuration still needs a host
+      // config reload before its models appear: the host reads a plugin's
+      // model list at startup / config load, not when an auth record is
+      // written mid-flight. Detected here so the hint is only shown then.
+      const wasEmpty = cardsCount === 0;
+      submit.disabled = true;
+      setStatus("正在添加…", "");
+      send(accountsEndpoint, {credential, label: labelInput.value.trim(), mode: modeSelect.value}).then(result => {
+        keyInput.value = ""; labelInput.value = "";
+        const done = "已添加：" + (result.label || result.key_id || "成功");
+        setStatus(wasEmpty ? done + "　请重启 CPA（或重新保存插件配置）以让模型列表出现。" : done, "ok");
+        return loadCards();
+      }).catch(err => {
+        setStatus(err.message || "添加失败。", "error");
+      }).then(() => { submit.disabled = false; });
+    });
+  })();
+  loadCards();
 })();
 </script>
 </body>

@@ -99,7 +99,7 @@ func (m *Manager) resolveExecution(req executorRequest) (*resolvedExecution, []b
 	cfg, mgr, pool := m.cfg, m.mgr, m.pool
 	m.mu.RUnlock()
 
-	accounts := cfg.EffectiveAccounts()
+	accounts := m.poolAccounts(cfg)
 	if len(accounts) == 0 {
 		// Registered but not configured. Say so plainly instead of failing
 		// with a confusing "no routable catalog" further down.

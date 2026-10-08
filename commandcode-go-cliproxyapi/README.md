@@ -210,6 +210,22 @@ The `CommandCode Quota` page (Management Center → plugins) reads the account s
 
 `{authority}` is derived from `base-url` by trimming its provider path (`/provider/v1`). Each card is refreshed manually and independently; the page never polls, and quota values never influence routing.
 
+Each card's header states the **plan type** (`套餐 Go`, `套餐 GOAT`, …) with the plan's
+monthly allowance, and shows `套餐未知` rather than nothing when the subscription could
+not be read. The plan comes from the same `planId` the table above already fetches.
+
+The page can also **add a key** ("＋ 添加 Key"): credential, optional label, and transport
+mode (`go-cli` for Go-plan keys — the default — or `provider`). The host gives a plugin no
+way to write its own config, so the key is stored as a **CPA auth record** and the plugin
+folds auth-record credentials into its account pool; entries in `accounts` keep working
+unchanged, and the two sources are unioned (config wins on a duplicate). The credential is
+never echoed back in a response, a log line, or an error.
+
+> One caveat when starting from an **empty** configuration: the host reads a plugin's model
+> list at startup / config load only, so after adding the *first* key the model list appears
+> after a CPA restart (or one config re-save). The page says so in that case. With a config
+> account already present, an added key takes effect immediately.
+
 ### Reasoning effort
 
 CommandCode publishes **no capability API**: `{base-url}/models` returns only `id`, `object`, `created`, `owned_by`, `name` and `context_length`, and its `/alpha/*` account surface has no models or capabilities route. The per-model effort lists that exist live inside the vendor's own clients (the `command-code` CLI and the web app both ship a static table), and the upstream gateway itself accepts every value in the union `low | medium | high | xhigh | max` regardless of the per-model list.

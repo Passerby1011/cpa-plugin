@@ -29,7 +29,7 @@ const ProviderID = "commandcode"
 // -ldflags "-X .../internal/plugin.pluginVersion=<version>".
 const pluginName = "commandcode-go-cliproxyapi"
 
-var pluginVersion = "0.4.5"
+var pluginVersion = "0.4.6"
 
 // SetVersion overrides the reported plugin version; the build injects it via
 // main.version (-ldflags). An empty value keeps the vendored default.
@@ -72,6 +72,13 @@ type Manager struct {
 	// lifeMu serializes whole register/reconfigure/shutdown sequences so
 	// their stop-wait-install steps cannot interleave into orphaned tickers.
 	lifeMu sync.Mutex
+
+	// credMu guards the auth-record credential snapshot. It is a SEPARATE
+	// lock from mu so refreshAuthCredentials (which does host round-trips)
+	// never blocks request-path readers of the config snapshot.
+	credMu          sync.Mutex
+	authCreds       []config.Account
+	authCredsLoaded bool
 
 	mu  sync.RWMutex
 	cfg config.Config
@@ -367,7 +374,13 @@ func (m *Manager) registerManagement(request []byte) ([]byte, error) {
 		Routes: []struct {
 			Method string `json:"method"`
 			Path   string `json:"path"`
-		}{{Method: "POST", Path: "/plugins/" + pluginName + "/quota-usage"}},
+		}{
+			{Method: "POST", Path: "/plugins/" + pluginName + "/quota-usage"},
+			// Adding a credential is a WRITE the page performs; the host
+			// exposes no plugin-config write, so the key is stored as an auth
+			// record and folded into the pool from there.
+			{Method: "POST", Path: accountsPath},
+		},
 		Resources: []struct {
 			Path        string `json:"path"`
 			Menu        string `json:"menu"`
@@ -428,6 +441,14 @@ func (m *Manager) handleLifecycle(request []byte) ([]byte, error) {
 			return ErrEnvelope("auth_materialize_failed", errAuth.Error()), nil
 		}
 	}
+	// Learn the credentials stored as auth records - that is where a key added
+	// from the quota page lives. A failure is logged, not fatal: the config's
+	// own accounts remain a complete credential set without it.
+	if m.bridge != nil {
+		if errCred := m.refreshAuthCredentials(context.Background(), m.bridge); errCred != nil {
+			debugTrace("lifecycle auth_credential_refresh_error=%s", errCred.Error())
+		}
+	}
 	// A pending registration (no credentials yet) must not touch the network:
 	// there is no credential to fetch a catalog with, and the /models call
 	// would just fail. Register successfully with an empty catalog so the
@@ -441,14 +462,18 @@ func (m *Manager) handleLifecycle(request []byte) ([]byte, error) {
 	}
 	mgr := catalog.New(cfg, client)
 	var refreshErr error
-	if cfg.Pending {
+	// "Has a credential" must count BOTH sources. A deployment whose keys were
+	// all added from the quota page keeps them as auth records, and keying this
+	// decision on the config alone would leave its catalog permanently empty -
+	// the page would add a working credential and no models would appear.
+	if len(m.poolAccounts(cfg)) == 0 {
 		if m.bridge != nil {
-			_ = m.bridge.Log("info", "commandcode plugin registered without api-keys; configure it in the Management Center", nil)
+			_ = m.bridge.Log("info", "commandcode plugin registered without credentials; add one in the plugin config or on the Quota page", nil)
 		}
 	} else {
 		refreshErr = m.refreshOnce(context.Background(), mgr, m.bridge, registerRefreshTimeout, cfg)
 	}
-	debugTrace("lifecycle refresh_complete model_count=%d refresh_error=%t pending=%t", len(mgr.Models()), refreshErr != nil, cfg.Pending)
+	debugTrace("lifecycle refresh_complete model_count=%d refresh_error=%t pool=%d", len(mgr.Models()), refreshErr != nil, len(m.poolAccounts(cfg)))
 	// Retire any running loop and wait for its exit outside m.mu: a mid-refresh
 	// tick must never stall readers holding RLock (F4). lifeMu keeps the
 	// stop-wait-install sequence atomic against other lifecycles.
@@ -640,7 +665,7 @@ func refreshOnce(parent context.Context, mgr *catalog.Manager, bridge *HostBridg
 }
 
 func (m *Manager) refreshOnce(parent context.Context, mgr *catalog.Manager, bridge *HostBridge, timeout time.Duration, cfg config.Config) error {
-	accounts := cfg.EffectiveAccounts()
+	accounts := m.poolAccounts(cfg)
 	if len(accounts) == 0 {
 		// Pending registration: nothing to authenticate a catalog fetch
 		// with, and indexing below would panic. Serving stays empty until a

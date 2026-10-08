@@ -87,6 +87,49 @@ func (b *HostBridge) AuthSave(ctx context.Context, req pluginapi.HostAuthSaveReq
 	return nil
 }
 
+// AuthGet returns ONE credential record's physical JSON by its auth index.
+//
+// Unlike AuthList, which deliberately omits secrets, this returns the file
+// exactly as stored - including the credential. It is what lets the plugin
+// treat CPA's auth store as a credential source: a key added from the quota
+// page is saved there and read back here, so it becomes usable without the
+// operator hand-editing the plugin's config.
+//
+// Callers must never place the returned JSON (or any field of it) in a Log
+// message, an error string, or a client response.
+func (b *HostBridge) AuthGet(ctx context.Context, authIndex string) (pluginapi.HostAuthGetResponse, error) {
+	var out pluginapi.HostAuthGetResponse
+	idx := strings.TrimSpace(authIndex)
+	if idx == "" {
+		return out, fmt.Errorf("host auth get failed: empty auth index")
+	}
+	payload, err := json.Marshal(pluginapi.HostAuthGetRequest{AuthIndex: idx})
+	if err != nil {
+		return out, fmt.Errorf("host auth get failed: invalid request")
+	}
+	raw, err := b.callWithTimeout(ctx, pluginabi.MethodHostAuthGet, payload)
+	if err != nil {
+		if strings.Contains(err.Error(), "timed out") {
+			return out, fmt.Errorf("host auth get failed: timed out")
+		}
+		return out, fmt.Errorf("host auth get failed")
+	}
+	env, err := decodeEnvelope(raw)
+	if err != nil {
+		return out, fmt.Errorf("host auth get failed: %w", err)
+	}
+	if !env.OK {
+		// Host error text is not trusted and may echo credential JSON.
+		return out, fmt.Errorf("host auth get failed")
+	}
+	if len(env.Result) > 0 {
+		if err := json.Unmarshal(env.Result, &out); err != nil {
+			return out, fmt.Errorf("host auth get failed: undecodable response body")
+		}
+	}
+	return out, nil
+}
+
 // AuthList returns the auth records currently known by CPA without modifying
 // their files. Callers use stable names/IDs to avoid overwriting CPA-managed
 // metadata during plugin registration.
