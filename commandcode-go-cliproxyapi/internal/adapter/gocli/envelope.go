@@ -364,6 +364,18 @@ func sha1Of(s string) [20]byte {
 // NormalizeThreadID returns a UUID-shaped thread id derived from an arbitrary
 // session key, so the same client session maps to the same upstream thread.
 // A value that is already a UUID is returned unchanged.
+//
+// The derived id must be a REAL UUID, not merely UUID-shaped: the upstream
+// validates it strictly and rejects the whole request with
+// `400 Invalid UUID at "threadId"`. Two bits carry that meaning and cannot be
+// left to the digest:
+//
+//   - the version nibble (first hex of group 3) must be non-zero;
+//   - the VARIANT nibble (first hex of group 4) must be one of 8, 9, a, b.
+//
+// Taking group 4 straight from the digest made ~3 of every 4 sessions
+// invalid, so the same request succeeded or failed purely by luck of the
+// hash - which is exactly the intermittent 400 this derivation used to cause.
 func NormalizeThreadID(sessionKey string) string {
 	sessionKey = strings.TrimSpace(sessionKey)
 	if sessionKey == "" {
@@ -375,6 +387,10 @@ func NormalizeThreadID(sessionKey string) string {
 	// Deterministic UUIDv5-shaped id: the shape is what the upstream accepts;
 	// the derivation only has to be stable per session.
 	sum := sha1Of("commandcode-gocli-thread/" + sessionKey)
-	hexs := fmt.Sprintf("%x", sum)
-	return hexs[0:8] + "-" + hexs[8:12] + "-5" + hexs[13:16] + "-" + hexs[16:20] + "-" + hexs[20:32]
+
+	var b [16]byte
+	copy(b[:], sum[:16])
+	b[6] = (b[6] & 0x0f) | 0x50 // version 5
+	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

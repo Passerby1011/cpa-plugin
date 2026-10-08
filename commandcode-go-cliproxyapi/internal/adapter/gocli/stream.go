@@ -236,14 +236,25 @@ func classifyCLIError(ev *cliEvent) *errclass.Error {
 	return errclass.UpstreamFallback(detail)
 }
 
-// cliSSEData extracts a data-line payload; ok is false for comments,
-// keep-alives, event: lines, and blank lines.
+// cliSSEData extracts the payload from one line of the CLI transport's
+// stream.
+//
+// The endpoint emits NDJSON - one bare JSON object per line, with no `data:`
+// prefix. Accepting only the SSE form silently discarded EVERY line, so the
+// finish event was never seen and a perfectly good upstream response was
+// failed downstream as "stream ended without a finish event".
+//
+// The prefixed form is still accepted because it costs nothing and keeps the
+// parser working if the vendor ever switches to SSE framing.
 func cliSSEData(line string) (string, bool) {
-	rest, ok := strings.CutPrefix(line, "data:")
-	if !ok {
-		return "", false
+	trimmed := strings.TrimSpace(line)
+	if rest, ok := strings.CutPrefix(trimmed, "data:"); ok {
+		return strings.TrimSpace(rest), true
 	}
-	return strings.TrimSpace(rest), true
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return trimmed, true
+	}
+	return "", false
 }
 
 // Converter incrementally parses the CLI transport's SSE stream into the

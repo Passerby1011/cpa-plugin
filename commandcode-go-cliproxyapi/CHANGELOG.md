@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.5
+
+修复**两个让 go-cli 通道事实上不可用**的缺陷：请求时好时坏的 400，以及流式响应永远收不了尾。
+
+### 缺陷 1：`threadId` 不是合法 UUID（~75% 请求被拒）
+
+`NormalizeThreadID` 从 session 摘要派生线程 id 时，第 4 段直接取了 `hexs[16:20]`，
+**没有设置 RFC 4122 的 variant 位**。上游对 `threadId` 做严格 UUID 校验，第 4 段
+必须以 `8/9/a/b` 开头 —— 也就是只有 4/16 的取值合法。
+
+**后果**：约 **3/4 的请求**被上游以
+`400 Invalid UUID at "threadId"` 拒绝，同一个请求**是否成功取决于哈希撞上哪一位**。
+实测 2000 个 session 中 1498 个（75%）生成非法 id。
+
+**修复**：按 UUIDv5 正确构造 —— 版本位 `0x50`、variant 位 `| 0x80`。
+
+### 缺陷 2：流式帧解析只认 `data:` 前缀，上游发的是裸 NDJSON
+
+`cliSSEData` 要求每行以 `data:` 开头，否则整行丢弃。而 `/alpha/generate` 实际发送的是
+**NDJSON**（`{"type":"start"}` 直接一行，无前缀）。
+
+**后果**：**每一行都被丢弃**，包括终止事件 `finish` —— 于是即便上游成功返回，
+插件也会报 `500 upstream CLI stream ended without a finish event`。
+
+**修复**：同时接受裸 JSON 行与 `data:` 前缀行（后者保留以兼容未来切换）。
+
+### 验证（真机，非仅单测）
+
+- 在 Docker 里起**本地 CPA + 0.4.5 插件**，把 `base-url` 指向一个记录代理，
+  **抓取插件发出的真实请求与上游完整响应**（前几轮定位不到，就是因为手工探针
+  用了真 UUID，而真实链路的 id 是哈希派生的）；
+- 修复前：上游 `400 Invalid UUID at "threadId"`；
+- 修复后：**HTTP 200 + 完整流式响应**，`threadId` 形如
+  `fe1475f6-fba6-5da7-9d58-...`（variant 合法）；
+- 新增 6 个测试 + **变异验证**：还原缺陷后
+  `TestNormalizeThreadIDIsAStrictUUID` 报 "1498 of 2000 ... not strict UUIDs"，
+  精确复现线上比例。
+
 ## 0.4.4
 
 修复**工具调用必 400** 的缺陷：`Invalid option: expected one of "user"|"assistant"`。
