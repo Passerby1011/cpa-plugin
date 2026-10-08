@@ -115,8 +115,8 @@ func TestRemoteCatalogIsUsedForGoCliOnlyPool(t *testing.T) {
 		return hostErr("test", "unrouted"), nil
 	}
 
-	yaml := "catalog:\n" +
-		"  remote: \"https://example.test/remote-models.mjs\"\n" +
+	// 面板把每个 ConfigField 存成顶层键，真实落盘是扁平的 `catalog-remote`。
+	yaml := "catalog-remote: \"https://example.test/remote-models.mjs\"\n" +
 		"accounts:\n" +
 		"  - label: go\n" +
 		"    mode: go-cli\n" +
@@ -169,8 +169,9 @@ func TestRemoteCatalogFailureFallsBackToStatic(t *testing.T) {
 		return hostErr("test", "unrouted"), nil
 	}
 
-	yaml := "catalog:\n" +
-		"  remote: \"https://example.test/remote-models.mjs\"\n" +
+	// 面板把每个 ConfigField 存成顶层键，真实落盘是扁平的 `catalog-remote`。
+	yaml := "catalog-remote: \"https://example.test/remote-models.mjs\"\n" +
+		"catalog:\n" +
 		"  static:\n" +
 		"    - claude-sonnet-4-6\n" +
 		"accounts:\n" +
@@ -216,8 +217,8 @@ func TestRemoteCatalogFailureKeepsLastGood(t *testing.T) {
 		return hostErr("test", "unrouted"), nil
 	}
 
-	yaml := "catalog:\n" +
-		"  remote: \"https://example.test/remote-models.mjs\"\n" +
+	// 面板把每个 ConfigField 存成顶层键，真实落盘是扁平的 `catalog-remote`。
+	yaml := "catalog-remote: \"https://example.test/remote-models.mjs\"\n" +
 		"accounts:\n" +
 		"  - label: go\n" +
 		"    mode: go-cli\n" +

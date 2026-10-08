@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.1
+
+修复 0.4.0 的一个**发布即带病**的缺陷：`catalog.remote` 在 WebUI 里填了也不生效。
+
+- **根因**：管理面板把每个 ConfigField 存成**顶层键**（`Name is the configuration key
+  under plugins.configs.<pluginID>`，见宿主 `sdk/pluginapi/types.go`），所以实际落盘是
+  扁平的 `catalog-remote:`。而解析只认**嵌套**写法 `catalog: { remote: }`，键名对不上，
+  URL 被静默丢弃 → 不拉取 → 退回 static → static 也空 → **模型列表全空，且无任何报错**。
+- **修复**：`catalog-remote` 现在两种写法都认（扁平 / 嵌套），**扁平优先**（它才是面板
+  真正写入的那个，操作者在 UI 上的修改必须能覆盖文件里的旧值）。
+- `retry` / `watchdog` / `max-inflight` 三个字段本就与面板键名一致（顶层），**不受影响**；
+  本轮同时加了测试钉住"面板键名 == 接受的 YAML 键"这一契约。
+
+**为什么 0.4.0 没测出来**：0.4.0 的集成测试用的是嵌套写法，与面板真实写法不一致，
+于是测试绿而面板路径坏。修复后集成测试改用手面板真实写法，并已验证：把修复还原成
+错误代码时，两个测试都会精确失败（`flat catalog-remote was dropped`）。
+
 ## 0.4.0
 
 补齐参考反代的**三项传输层能力**，并新增**模型列表远程同步**。

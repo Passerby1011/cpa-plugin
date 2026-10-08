@@ -346,23 +346,29 @@ type rawWatchdog struct {
 // (apply default) from explicitly-set values including "" (validate as-is).
 // Unknown fields are ignored (host may pass extra keys).
 type rawConfig struct {
-	BaseURL          *string                  `yaml:"base-url"`
-	CatalogURL       *string                  `yaml:"catalog-url"`
-	ModelPrefix      rawPrefix                `yaml:"model-prefix"`
-	APIKeys          []rawKey                 `yaml:"api-keys"`
-	Accounts         []rawAccount             `yaml:"accounts"`
-	Pool             rawPool                  `yaml:"pool"`
-	Catalog          rawCatalog               `yaml:"catalog"`
-	Protocols        rawProtocols             `yaml:"protocols"`
-	RouteOverrides   map[string]RouteOverride `yaml:"route-overrides"`
-	Models           rawModelFilter           `yaml:"models"`
-	Device           rawDevice                `yaml:"device"`
-	Retry            rawRetry                 `yaml:"retry"`
-	Watchdog         rawWatchdog              `yaml:"watchdog"`
-	MaxInflight      *int                     `yaml:"max-inflight"`
-	AllowHTTP        bool                     `yaml:"allow-http"`
-	RequestTimeout   *string                  `yaml:"request-timeout"`
-	MaxResponseBytes *int64                   `yaml:"max-response-bytes"`
+	BaseURL     *string      `yaml:"base-url"`
+	CatalogURL  *string      `yaml:"catalog-url"`
+	ModelPrefix rawPrefix    `yaml:"model-prefix"`
+	APIKeys     []rawKey     `yaml:"api-keys"`
+	Accounts    []rawAccount `yaml:"accounts"`
+	Pool        rawPool      `yaml:"pool"`
+	Catalog     rawCatalog   `yaml:"catalog"`
+	// The management UI stores each ConfigField under its own top-level key
+	// ("Name is the configuration key under plugins.configs.<pluginID>"), so the
+	// remote source arrives as a flat `catalog-remote`, not as nested
+	// `catalog.remote`. Both spellings are accepted; the flat one is what the
+	// panel actually writes and wins when both are present.
+	CatalogRemoteFlat *string                  `yaml:"catalog-remote"`
+	Protocols         rawProtocols             `yaml:"protocols"`
+	RouteOverrides    map[string]RouteOverride `yaml:"route-overrides"`
+	Models            rawModelFilter           `yaml:"models"`
+	Device            rawDevice                `yaml:"device"`
+	Retry             rawRetry                 `yaml:"retry"`
+	Watchdog          rawWatchdog              `yaml:"watchdog"`
+	MaxInflight       *int                     `yaml:"max-inflight"`
+	AllowHTTP         bool                     `yaml:"allow-http"`
+	RequestTimeout    *string                  `yaml:"request-timeout"`
+	MaxResponseBytes  *int64                   `yaml:"max-response-bytes"`
 }
 
 // rawAccount is one pool entry. Like rawKey it accepts a bare credential
@@ -594,7 +600,7 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 			RefreshInterval:       refreshInterval,
 			StaleWhileUnavailable: orDefault(raw.Catalog.StaleWhileUnavailable, true),
 			Static:                staticModelList(raw.Catalog.Static),
-			Remote:                strings.TrimSpace(orDefault(raw.Catalog.Remote, "")),
+			Remote:                strings.TrimSpace(firstNonEmpty(raw.CatalogRemoteFlat, raw.Catalog.Remote)),
 			RemoteRefreshInterval: remoteRefresh,
 		},
 		Protocols: Protocols{
@@ -801,6 +807,18 @@ func orDefault[T any](p *T, def T) T {
 		return *p
 	}
 	return def
+}
+
+// firstNonEmpty returns the first non-blank string among the candidates.
+// Used to accept both the flat config key the management UI writes
+// (`catalog-remote`) and the nested block spelling (`catalog.remote`).
+func firstNonEmpty(candidates ...*string) string {
+	for _, c := range candidates {
+		if c != nil && strings.TrimSpace(*c) != "" {
+			return *c
+		}
+	}
+	return ""
 }
 
 // poolStrategy normalizes the strategy name, defaulting to sticky.
