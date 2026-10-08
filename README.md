@@ -1,14 +1,14 @@
 # CPA 插件仓库
 
 [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) 插件集合。当前提供
-**WorkBuddy Global**（OAuth Provider）与 **CommandCode Go/GOAT/Pro/Max**
+**WorkBuddy / CodeBuddy**（OAuth Provider）与 **CommandCode Go/GOAT/Pro/Max**
 （套餐 Provider + 配额页）。
 
 ## 插件
 
 | ID | 说明 | 源码 |
 |---|---|---|
-| `workbuddy-global` | WorkBuddy 国际版（`workbuddy.ai`）OAuth、动态模型、executor、积分生命周期、积分面板 | [workbuddy-global/](workbuddy-global/) |
+| `workbuddy` | WorkBuddy / CodeBuddy 双通道（CN `copilot.tencent.com` + 国际 `workbuddy.ai`）：OAuth、动态模型、executor、CN 每日签到、**国际版每日活跃 30/50 积分领取**、积分生命周期、积分面板 | [workbuddy/](workbuddy/) |
 | `commandcode-go-cliproxyapi` | CommandCode Go/GOAT/Pro/Max 套餐单一 provider（`commandcode/` 前缀）：OpenAI/Anthropic/Responses 三协议、推理保真、Key 池调度、配额页 | [commandcode-go-cliproxyapi/](commandcode-go-cliproxyapi/) |
 
 ## 多架构 Release
@@ -29,18 +29,18 @@ checksums.txt
 命名规则与官方一致：`ArchiveName(id, version, goos, goarch) = {id}_{version}_{goos}_{goarch}.zip`
 （见 CLIProxyAPI `internal/pluginstore`）。
 
-CI：push / PR 全量构建（只出 artifacts）；tag `<id>-v*`（如 `workbuddy-global-v0.11.0`）
+CI：push / PR 全量构建（只出 artifacts）；tag `<id>-v*`（如 `workbuddy-v0.12.1`）
 或 dispatch 触发**该插件独立版本**的 Release。
 
 ## 安装（linux/amd64 示例）
 
 ```bash
 # 从 Release 下载
-unzip workbuddy-global_0.11.0_linux_amd64.zip
+unzip workbuddy_0.12.1_linux_amd64.zip
 # 扁平 plugins 目录（常见 docker 挂载）
-cp workbuddy-global.so /path/to/cliproxyapi/plugins/workbuddy-global.so
+cp workbuddy.so /path/to/cliproxyapi/plugins/workbuddy.so
 # 或平台子目录布局
-# mkdir -p plugins/linux/amd64 && cp workbuddy-global.so plugins/linux/amd64/
+# mkdir -p plugins/linux/amd64 && cp workbuddy.so plugins/linux/amd64/
 ```
 
 ```yaml
@@ -50,7 +50,7 @@ plugins:
   # 写 "plugins" 会解析成 /CLIProxyAPI/plugins 从而找不到 .so
   dir: "/path/to/cliproxyapi/plugins"
   configs:
-    workbuddy-global:
+    workbuddy:
       enabled: true
 ```
 
@@ -65,10 +65,10 @@ CI 自动刷新（`.github/scripts/sync-registry.py`），用户在商店 UI 即
 https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/registry.json
 ```
 
-添加后在商店 UI 安装/更新 **WorkBuddy Global** 或 **CommandCode Go/GOAT/Pro/Max**。
+添加后在商店 UI 安装/更新 **WorkBuddy** 或 **CommandCode Go/GOAT/Pro/Max**。
 
 > **首次使用注意**：`registry.json` 里的 `artifacts` 由发版 CI 回填。在
-> `workbuddy-global-v*` 首个 Release 产出之前，该字段为空数组，而 CPA 对
+> `workbuddy-v*` 首个 Release 产出之前，该字段为空数组，而 CPA 对
 > `direct` 类型强制要求至少一个 artifact（`pluginstore/registry.go` 的
 > `ValidateInstallPlan`），此时整个源会被判为无效并报
 > `plugins[0]: direct install requires at least one artifact`。
@@ -86,7 +86,7 @@ https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/registry.json
 - **版本注入**：构建用 `-ldflags "-X main.version=<version>"` 注入版本，插件在
   `main.go` 的 `version` 变量 + `init()` 里转发给内部包；`<id>/VERSION` 是版本源。
 - **发版**：`make -C <id> tag`（读 `<id>/VERSION`）→ 推 tag → CI 出多平台产物 +
-  回填 `registry.json`。`workbuddy-global` 走 CI 矩阵；`commandcode-go-cliproxyapi`
+  回填 `registry.json`。`workbuddy` 走 CI 矩阵；`commandcode-go-cliproxyapi`
   本版为本地构建 + Release 上传（见 `scripts/release-commandcode.py`）。
 - **`commandcode-go-cliproxyapi` 的 `api-keys` 为必填**：缺失时宿主报
   `plugin.register failed: api-keys: at least one key is required`，面板显示
