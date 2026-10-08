@@ -162,6 +162,31 @@ func BuildEnvelope(openAIBody []byte, opts Options) ([]byte, error) {
 // preceding reasoning, so dropping these parts breaks multi-turn tool use.
 func convertMessages(raw []gjson.Result) ([]any, error) {
 	out := make([]any, 0, len(raw))
+
+	// toolCallId → toolName, harvested from every assistant tool_call first.
+	//
+	// A "tool" message only carries the call id; the upstream requires the
+	// matching tool NAME on its tool-result block and rejects the whole request
+	// with 400 when it is missing ("expected string, received undefined"). The
+	// name lives on the earlier assistant message, so it has to be resolved
+	// with a prepass: a single forward pass cannot see it yet.
+	//
+	// This is why a plain chat works while anything that uses tools fails -
+	// which is every real agent client (Claude Code, Codex).
+	toolNames := make(map[string]string)
+	for _, m := range raw {
+		if strings.TrimSpace(m.Get("role").String()) != "assistant" {
+			continue
+		}
+		for _, tc := range m.Get("tool_calls").Array() {
+			id := strings.TrimSpace(tc.Get("id").String())
+			if id == "" {
+				continue
+			}
+			toolNames[id] = tc.Get("function.name").String()
+		}
+	}
+
 	for _, m := range raw {
 		role := strings.TrimSpace(m.Get("role").String())
 		switch role {
@@ -180,11 +205,19 @@ func convertMessages(raw []gjson.Result) ([]any, error) {
 			}
 			out = append(out, map[string]any{"role": "assistant", "content": parts})
 		case "tool":
+			callID := m.Get("tool_call_id").String()
+			// Fall back to the message's own name, then to "" - the field must
+			// be a string, so a nil/absent value is not an option.
+			name := toolNames[callID]
+			if name == "" {
+				name = m.Get("name").String()
+			}
 			out = append(out, map[string]any{
 				"role": "tool",
 				"content": []map[string]any{{
 					"type":       "tool-result",
-					"toolCallId": m.Get("tool_call_id").String(),
+					"toolCallId": callID,
+					"toolName":   name,
 					"output":     map[string]any{"type": "text", "value": textOf(m.Get("content"))},
 				}},
 			})

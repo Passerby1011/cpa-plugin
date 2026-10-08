@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.4
+
+修复**工具调用必 400** 的缺陷：`Invalid option: expected one of "user"|"assistant"`。
+
+### 根因
+
+`/alpha/generate` 的 `tool-result` 内容块要求 **`toolName` 是必填 string**，
+但 `convertMessages` 的 `case "tool"` 只写了 `type` / `toolCallId` / `output`。
+
+- 缺 `toolName` → 上游整请求 400（报文里表现为 messages 的 role/content
+  校验失败，很容易误判成 role 问题）；
+- 而 `toolName` 只在**更早的 assistant 消息**里（OpenAI 的 tool 消息只带
+  `tool_call_id`），单次正序遍历取不到 → 需要预扫描建立
+  `toolCallId → toolName` 映射。
+
+**症状之所以诡异**：普通对话正常，**只要用工具就 400**——因为只有工具调用
+才会产生 tool 消息。Claude Code、Codex 这类重度用工具的客户端因此必炸。
+
+### 修复
+
+- `convertMessages` 增加预扫描，从所有 assistant 的 `tool_calls` 建立
+  `toolCallId → toolName` 映射；
+- `tool-result` 补上 `toolName`，解析顺序为 映射 → 消息自带 `name` → `""`，
+  **保证始终是 string**（缺字段/`null` 就是上游拒绝的原因）；
+- 参考实现 `commandcode-proxy` 同样有 `toolNameMap` 回溯，本次与其对齐。
+
+### 验证（真机端到端，非仅单测）
+
+- **用修复后的 Go 代码产生的真实信封**直接打上游 `/alpha/generate`
+  （含 system + 工具调用 + tool-result）→ **HTTP 200，49 个事件正常收尾**；
+- 同一信封**去掉 `toolName`** → 复现老板的 400，报文一致；
+- 3 个新单测 + 变异验证：移除 `toolName` 后三个测试精确失败。
+
 ## 0.4.3
 
 修复**所有真实请求都无法调用**的致命缺陷：`auth_not_found: no auth available`。
