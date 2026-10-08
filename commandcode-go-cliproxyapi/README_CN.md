@@ -196,6 +196,7 @@ plugins:
 | `catalog.refresh-interval` | `duration` | `15m` | 目录轮询周期（最小 `1m`）。 |
 | `catalog.stale-while-unavailable` | `bool` | `true` | 刷新失败时继续提供上一份有效目录。 |
 | `catalog.static` | `[]string` | `[]` | 静态模型 id 表。仅在拿不到实时 `/models` 时启用——最常见的是**池里没有 provider 账号**（`/models` 属于 Provider API，会拒绝 Go 套餐 key）。填了它，纯 `go-cli` 单账号也能发布 `/v1/models`。 |
+| `plan-filter` | *(自动)* | 开 | 自 0.4.2 起实时模型目录按套餐过滤：只发布池内账号实际可调用的模型（多账号取并集；未知套餐/未知模型一律保留，服务器仍是最终闸门）。由各 go-cli 账号的订阅自动驱动，无需配置。被过滤的模型会以"not included in the account's plan"出现在 unsupported 诊断里。 |
 | `protocols.*` | `bool` | `true` | 路由总开关；关闭的协议会带着诊断信息排除其模型。 |
 | `route-overrides` | `map` | `{}` | `{ 模型: { protocol, endpoint } }`，把某个模型钉到别的上游路由；`endpoint` 必填。 |
 | `request-timeout` | `duration` | `5m` | 上游 HTTP 超时（配额/账号请求另按 30s 上限）。 |

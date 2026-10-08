@@ -146,8 +146,22 @@ func wrapWithCatalog(catalogBody string, next func(string, []byte) ([]byte, erro
 		var wire map[string]any
 		_ = json.Unmarshal(payload, &wire)
 		if method == pluginabi.MethodHostHTTPDo {
-			if url, _ := wire["url"].(string); strings.HasSuffix(url, "/models") {
+			url, _ := wire["url"].(string)
+			if strings.HasSuffix(url, "/models") {
 				return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(catalogBody)}), nil
+			}
+			// The plan gate reads an account's subscription and credit balance
+			// before every catalog refresh. Tests that only care about the
+			// catalog must not have to can these two routes, so answer them
+			// with a plan that gates nothing (an unknown planId fails open) -
+			// anything that wants to exercise gating overrides these.
+			if strings.HasSuffix(url, "/alpha/billing/subscriptions") {
+				return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK,
+					Body: []byte(`{"success":true,"data":{"planId":"test-ungated"}}`)}), nil
+			}
+			if strings.HasSuffix(url, "/alpha/billing/credits") {
+				return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK,
+					Body: []byte(`{"credits":{"monthlyCredits":0,"purchasedCredits":0,"freeCredits":0}}`)}), nil
 			}
 		}
 		return next(method, payload)

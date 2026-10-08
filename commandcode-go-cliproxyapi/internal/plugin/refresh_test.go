@@ -54,6 +54,27 @@ func (r *authRecorder) call(method string, payload []byte) ([]byte, error) {
 	if method != pluginabi.MethodHostHTTPDo {
 		return hostOK(map[string]any{}), nil
 	}
+	// The plan gate's billing reads are answered FIRST and from their own
+	// canned bodies: catalogFetch exists to control what a /models fetch does
+	// (fail, succeed, alternate), and routing billing traffic into it would
+	// (a) count a billing call as a catalog attempt and (b) hand catalog JSON
+	// to the subscription decoder. An individual-go planId is used rather than
+	// an unknown one so the pool's tier is KNOWN: a fixture that cannot say
+	// what the account's plan is would make the gate publish everything and
+	// then log a warning about it, which is exactly what the log-count
+	// assertions below must not have to expect.
+	var wireURL struct {
+		URL string `json:"url"`
+	}
+	_ = json.Unmarshal(payload, &wireURL)
+	switch {
+	case strings.HasSuffix(wireURL.URL, accountSubscriptionPath):
+		return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK,
+			Body: []byte(`{"success":true,"data":{"planId":"individual-go"}}`)}), nil
+	case strings.HasSuffix(wireURL.URL, accountCreditsPath):
+		return hostOK(pluginapi.HTTPResponse{StatusCode: http.StatusOK,
+			Body: []byte(`{"credits":{"monthlyCredits":10,"purchasedCredits":0,"freeCredits":0}}`)}), nil
+	}
 	if r.catalogFetch != nil {
 		return r.catalogFetch()
 	}
@@ -323,19 +344,22 @@ func TestRefreshStaticFallbackMatrix(t *testing.T) {
 		wantLogs int
 	}{
 		{
-			name: "go-cli-only pool seeds static",
-			desc: "no provider account -> the Go-plan-only pool still publishes the static list",
-			// Prefix off keeps the expected ids equal to the configured ones.
+			name: "go-cli-only pool fetches live catalog",
+			desc: "a Go-plan-only pool CAN reach /models, so the live catalog wins over static (0.4.2)",
+			// A Go key calls /models successfully; before 0.4.2 this pool was
+			// wrongly locked out of live discovery and served static instead.
 			yaml:     refreshGoCliYAML + "catalog:\n  static:\n    - claude-sonnet-4-6\n    - deepseek/deepseek-v4-pro\nmodel-prefix:\n  enabled: false\n",
-			wantIDs:  []string{"claude-sonnet-4-6", "deepseek/deepseek-v4-pro"},
-			wantLogs: 1,
+			catalog:  alwaysOKCatalog(`{"data":[{"id":"live-model"}]}`),
+			wantIDs:  []string{"live-model"},
+			wantLogs: 0,
 		},
 		{
 			name: "go-cli-only pool without static stays empty",
-			desc: "no provider account and no static list -> empty catalog, info log, no error",
+			desc: "no static list and an empty live catalog -> empty catalog, no error",
 			yaml: refreshGoCliYAML,
-			// The go-cli branch still reports why the catalog is empty.
-			wantLogs: 1,
+			// A successful-but-empty live fetch: nothing to publish, no error.
+			catalog:  alwaysOKCatalog(`{"data":[]}`),
+			wantLogs: 0,
 		},
 		{
 			name: "live success wins over static",
@@ -445,15 +469,17 @@ func TestRefreshStaleFallbackDiagnostics(t *testing.T) {
 	}
 }
 
-// TestRefreshStaticFallbackDiagnostics pins the static-path wording, which
-// must name the static list (not the stale snapshot) as the source.
+// TestRefreshStaticFallbackDiagnostics pins the exact fallback wording on the
+// static path. The live fetch is forced to fail: since 0.4.2 a go-cli account
+// reaches /models successfully, so a static fallback only happens when the
+// fetch itself fails.
 func TestRefreshStaticFallbackDiagnostics(t *testing.T) {
 	cfg, err := config.Load([]byte(refreshGoCliYAML +
 		"catalog:\n  static:\n    - static/only-model\n"))
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	rec := &authRecorder{}
+	rec := &authRecorder{catalogFetch: upstreamFailure}
 	bridge := NewHostBridge(rec.call)
 	mgr := catalog.New(cfg, bridge)
 
@@ -465,7 +491,7 @@ func TestRefreshStaticFallbackDiagnostics(t *testing.T) {
 		t.Fatalf("host.log calls = %d (%v), want 1", len(entries), entries)
 	}
 	entry := entries[0]
-	if entry["level"] != "info" ||
+	if entry["level"] != "warn" ||
 		!strings.Contains(entry["message"].(string), "catalog served from the configured static model list") {
 		t.Fatalf("log entry = %v", entry)
 	}
@@ -507,24 +533,27 @@ func TestStaticFallbackHonorsModelFilter(t *testing.T) {
 // still resolves.
 func TestStaticFallbackHonorsModelPrefix(t *testing.T) {
 	yaml := refreshGoCliYAML +
-		"catalog:\n  static:\n    - claude-sonnet-4-6\n" +
+		"catalog:\n  static:\n    - fixture/plan-unknown-model\n" +
 		"model-prefix:\n  enabled: true\n  value: proxy\n"
 	cfg, err := config.Load([]byte(yaml))
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
 	rec := &authRecorder{}
+	// 显式让实时拉取失败，才能验证 static 兜底：
+	// go-cli 账号自 0.4.2 起也能访问 /models，不再自动落到 static。
+	rec.catalogFetch = upstreamFailure
 	bridge := NewHostBridge(rec.call)
 	mgr := catalog.New(cfg, bridge)
 	if err := refreshOnce(context.Background(), mgr, bridge, time.Second, cfg); err != nil {
 		t.Fatalf("refreshOnce: %v", err)
 	}
 
-	assertPublishedIDs(t, catalogPublishedIDs(mgr), []string{"proxy/claude-sonnet-4-6"})
-	if _, ok := mgr.Lookup("proxy/claude-sonnet-4-6"); !ok {
+	assertPublishedIDs(t, catalogPublishedIDs(mgr), []string{"proxy/fixture/plan-unknown-model"})
+	if _, ok := mgr.Lookup("proxy/fixture/plan-unknown-model"); !ok {
 		t.Fatal("prefixed static id does not resolve")
 	}
-	if _, ok := mgr.Lookup("claude-sonnet-4-6"); !ok {
+	if _, ok := mgr.Lookup("fixture/plan-unknown-model"); !ok {
 		t.Fatal("bare static id does not resolve")
 	}
 }
@@ -535,7 +564,7 @@ func TestStaticFallbackHonorsModelPrefix(t *testing.T) {
 // empty while the diagnostic keeps the excluded ids visible.
 func TestStaticFallbackHonorsProtocolSwitch(t *testing.T) {
 	yaml := refreshGoCliYAML +
-		"catalog:\n  static:\n    - claude-sonnet-4-6\n    - deepseek/deepseek-v4-pro\n" +
+		"catalog:\n  static:\n    - fixture/plan-unknown-a\n    - fixture/plan-unknown-b\n" +
 		"protocols:\n  chat-completions: false\n" +
 		"model-prefix:\n  enabled: false\n"
 	cfg, err := config.Load([]byte(yaml))
@@ -543,6 +572,9 @@ func TestStaticFallbackHonorsProtocolSwitch(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	rec := &authRecorder{}
+	// 显式让实时拉取失败，才能验证 static 兜底：
+	// go-cli 账号自 0.4.2 起也能访问 /models，不再自动落到 static。
+	rec.catalogFetch = upstreamFailure
 	bridge := NewHostBridge(rec.call)
 	mgr := catalog.New(cfg, bridge)
 	if err := refreshOnce(context.Background(), mgr, bridge, time.Second, cfg); err != nil {
@@ -575,6 +607,9 @@ func TestStaticFallbackDeduplicatesIDs(t *testing.T) {
 		t.Fatalf("load config: %v", err)
 	}
 	rec := &authRecorder{}
+	// 显式让实时拉取失败，才能验证 static 兜底：
+	// go-cli 账号自 0.4.2 起也能访问 /models，不再自动落到 static。
+	rec.catalogFetch = upstreamFailure
 	bridge := NewHostBridge(rec.call)
 	mgr := catalog.New(cfg, bridge)
 	if err := refreshOnce(context.Background(), mgr, bridge, time.Second, cfg); err != nil {
@@ -609,7 +644,10 @@ func TestStaticFallbackEmptyListPublishesNothing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("load config: %v", err)
 			}
-			rec := &authRecorder{}
+			// 实时拉取成功但返回空目录；配合空 static 列表，结果必须为空且无错误。
+			// （go-cli 账号自 0.4.2 起会真的去拉实时接口，所以这里不能让它失败——
+			//  失败会按设计把错误抛给调用方。）
+			rec := &authRecorder{catalogFetch: alwaysOKCatalog(`{"data":[]}`)}
 			bridge := NewHostBridge(rec.call)
 			mgr := catalog.New(cfg, bridge)
 			if err := refreshOnce(context.Background(), mgr, bridge, time.Second, cfg); err != nil {

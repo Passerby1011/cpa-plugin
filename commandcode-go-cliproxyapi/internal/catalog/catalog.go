@@ -144,6 +144,17 @@ type Manager struct {
 	index map[string]ModelRecord
 	unsup []UnsupportedModel
 	warns []string
+
+	// planGate, when set, decides which upstream model ids may be published.
+	// It is applied at snapshot build (inside swap), so a hidden model is
+	// absent from every surface at once - model list, model.static,
+	// model.for_auth and executor lookup - exactly like a models.allow/deny
+	// exclusion, and it lands in the same unsupported diagnostics.
+	//
+	// It lives here rather than at the publish site because the snapshot is
+	// what every consumer reads through; filtering only on the way out would
+	// leave the executor able to route a model the list never advertised.
+	planGate func(upstreamID string) bool
 }
 
 // New returns a Manager serving cfg through the host client.
@@ -296,6 +307,17 @@ func (m *Manager) swap(entries []rawModel, extraWarns ...string) {
 				})
 				continue
 			}
+		}
+		// The plan gate runs after route resolution (so a demoted model still
+		// reports the more specific route diagnostic) and lands in the same
+		// unsupported list as models.allow/deny, so a filtered model is
+		// explained rather than silently missing.
+		if m.planGate != nil && !m.planGate(e.ID) {
+			unsup = append(unsup, UnsupportedModel{
+				UpstreamID: e.ID,
+				Reason:     "not included in the account's plan",
+			})
+			continue
 		}
 		if !m.protocolEnabled(route) {
 			// Flags apply at snapshot build; a stale snapshot kept per
@@ -486,6 +508,16 @@ func (m *Manager) Unsupported() []UnsupportedModel {
 	out := make([]UnsupportedModel, len(m.unsup))
 	copy(out, m.unsup)
 	return out
+}
+
+// SetPlanGate installs the plan filter applied at snapshot build. A nil gate
+// (the default) publishes every routable model. The gate takes effect on the
+// next swap, not on this call, because it must run together with route
+// resolution.
+func (m *Manager) SetPlanGate(gate func(upstreamID string) bool) {
+	m.mu.Lock()
+	m.planGate = gate
+	m.mu.Unlock()
 }
 
 // Warnings returns dedup and override diagnostics.

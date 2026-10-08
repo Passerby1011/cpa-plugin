@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.4.2
+
+模型列表改为**上游实时来源 + 套餐过滤**，并修复 go-cli 池被锁在实时发现之外的核心缺陷。
+
+### 根因（两个都实测确认）
+
+1. **误判纠正**：此前认为 `/models` 拒绝 Go 套餐——实测 Go key 访问
+   `provider/v1/models` 返回 **HTTP 200**。真正的问题在插件：catalog 凭据只从
+   provider 模式账号取，**纯 go-cli 池从未发起过实时拉取**，只能靠手填 static 或
+   第三方文件。
+2. **第三方文件过期**：参考反代的模型表（26 个）最后更新 2026-10-01，而实时接口
+   已有 **87 个**（含 claude-sonnet-5-5、gpt-6.1-sol、Kimi-K3、GLM-5.3、Qwen3.8-Max
+   等新模型）。
+
+### 变更
+
+- **go-cli 账号现在也会拉实时 catalog**：凭据选择改为「provider 优先，其次任意
+  可用账号」，Go 池自动获得 87 个最新模型。
+- **新增套餐过滤（`internal/planfilter`）**：实时接口不按套餐过滤（`?plan=go`
+  被忽略，仍返回 87），插件本地按套餐表过滤，**只发布当前套餐能用的模型**。
+  - 依据 `@mars-sea/dsh-commandcode-provider@0.12.4` 的官方判定逻辑
+    （`modelVisibleInPlan` / `modelVisibleForAnyAccount`），85 条套餐表逐字镜像；
+  - **多账号/多套餐取并集**（任一账号可用即发布）；
+  - **fail-open**：未知套餐、未知模型、有按量额度时一律保留——宁可多显示一个
+    （服务器 403 兜底），绝不隐藏一个能跑的；
+  - 过滤在 catalog 快照构建时应用，隐藏的模型进入 unsupported 诊断
+    （reason: `not included in the account's plan`），列表、查找、执行口径一致。
+- **移除 `catalog.remote`**：第三方文件方案整体删除（配置字段、拉取器、解析器、
+  WebUI 字段），实时接口才是权威来源。
+- 实测校准：Go 套餐在 87 个实时模型中可见 **55 个**（52 个 Go 档 + 3 个表外
+  fail-open），golden 测试逐条钉死。
+
+### 兼容性
+
+- `catalog.static` 仍是兜底（实时失败时使用）；`retry`/`watchdog`/`max-inflight`
+  不变；配置文件里遗留的 `catalog-remote` 键会被忽略（无害）。
+
 ## 0.4.1
 
 修复 0.4.0 的一个**发布即带病**的缺陷：`catalog.remote` 在 WebUI 里填了也不生效。

@@ -53,20 +53,6 @@ type Catalog struct {
 	// the Provider API (and therefore /models) refuses Go-plan keys. Empty
 	// means no static fallback.
 	Static []string
-	// Remote is an optional URL that gets fetched and parsed for model ids.
-	// It exists because a go-cli-only pool cannot reach /models at all, and
-	// the upstream exposes no model-list endpoint on /alpha/* either (probed:
-	// all 404), so there is nothing to poll upstream. The reference proxy
-	// keeps its model table as a literal list in its source, so this feature
-	// points at that source and extracts the ids from it.
-	//
-	// This is NOT upstream autodiscovery and the docs say so: it tracks a
-	// third-party file whose format can change. Hence it is OFF by default
-	// and Static remains the fallback underneath it.
-	Remote string
-	// RemoteRefreshInterval throttles re-fetching Remote. Zero means use the
-	// catalog refresh interval.
-	RemoteRefreshInterval time.Duration
 }
 
 type Protocols struct {
@@ -346,29 +332,23 @@ type rawWatchdog struct {
 // (apply default) from explicitly-set values including "" (validate as-is).
 // Unknown fields are ignored (host may pass extra keys).
 type rawConfig struct {
-	BaseURL     *string      `yaml:"base-url"`
-	CatalogURL  *string      `yaml:"catalog-url"`
-	ModelPrefix rawPrefix    `yaml:"model-prefix"`
-	APIKeys     []rawKey     `yaml:"api-keys"`
-	Accounts    []rawAccount `yaml:"accounts"`
-	Pool        rawPool      `yaml:"pool"`
-	Catalog     rawCatalog   `yaml:"catalog"`
-	// The management UI stores each ConfigField under its own top-level key
-	// ("Name is the configuration key under plugins.configs.<pluginID>"), so the
-	// remote source arrives as a flat `catalog-remote`, not as nested
-	// `catalog.remote`. Both spellings are accepted; the flat one is what the
-	// panel actually writes and wins when both are present.
-	CatalogRemoteFlat *string                  `yaml:"catalog-remote"`
-	Protocols         rawProtocols             `yaml:"protocols"`
-	RouteOverrides    map[string]RouteOverride `yaml:"route-overrides"`
-	Models            rawModelFilter           `yaml:"models"`
-	Device            rawDevice                `yaml:"device"`
-	Retry             rawRetry                 `yaml:"retry"`
-	Watchdog          rawWatchdog              `yaml:"watchdog"`
-	MaxInflight       *int                     `yaml:"max-inflight"`
-	AllowHTTP         bool                     `yaml:"allow-http"`
-	RequestTimeout    *string                  `yaml:"request-timeout"`
-	MaxResponseBytes  *int64                   `yaml:"max-response-bytes"`
+	BaseURL          *string                  `yaml:"base-url"`
+	CatalogURL       *string                  `yaml:"catalog-url"`
+	ModelPrefix      rawPrefix                `yaml:"model-prefix"`
+	APIKeys          []rawKey                 `yaml:"api-keys"`
+	Accounts         []rawAccount             `yaml:"accounts"`
+	Pool             rawPool                  `yaml:"pool"`
+	Catalog          rawCatalog               `yaml:"catalog"`
+	Protocols        rawProtocols             `yaml:"protocols"`
+	RouteOverrides   map[string]RouteOverride `yaml:"route-overrides"`
+	Models           rawModelFilter           `yaml:"models"`
+	Device           rawDevice                `yaml:"device"`
+	Retry            rawRetry                 `yaml:"retry"`
+	Watchdog         rawWatchdog              `yaml:"watchdog"`
+	MaxInflight      *int                     `yaml:"max-inflight"`
+	AllowHTTP        bool                     `yaml:"allow-http"`
+	RequestTimeout   *string                  `yaml:"request-timeout"`
+	MaxResponseBytes *int64                   `yaml:"max-response-bytes"`
 }
 
 // rawAccount is one pool entry. Like rawKey it accepts a bare credential
@@ -474,8 +454,6 @@ type rawCatalog struct {
 	RefreshInterval       *string   `yaml:"refresh-interval"`
 	StaleWhileUnavailable *bool     `yaml:"stale-while-unavailable"`
 	Static                *[]string `yaml:"static"`
-	Remote                *string   `yaml:"remote"`
-	RemoteRefreshInterval *string   `yaml:"remote-refresh-interval"`
 }
 
 type rawProtocols struct {
@@ -580,7 +558,6 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 		return Config{}, err
 	}
 
-	remoteRefresh, err := parseDuration("catalog.remote-refresh-interval", raw.Catalog.RemoteRefreshInterval, 0)
 	if err != nil {
 		return Config{}, err
 	}
@@ -600,8 +577,6 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 			RefreshInterval:       refreshInterval,
 			StaleWhileUnavailable: orDefault(raw.Catalog.StaleWhileUnavailable, true),
 			Static:                staticModelList(raw.Catalog.Static),
-			Remote:                strings.TrimSpace(firstNonEmpty(raw.CatalogRemoteFlat, raw.Catalog.Remote)),
-			RemoteRefreshInterval: remoteRefresh,
 		},
 		Protocols: Protocols{
 			ChatCompletions: orDefault(raw.Protocols.ChatCompletions, true),
@@ -807,18 +782,6 @@ func orDefault[T any](p *T, def T) T {
 		return *p
 	}
 	return def
-}
-
-// firstNonEmpty returns the first non-blank string among the candidates.
-// Used to accept both the flat config key the management UI writes
-// (`catalog-remote`) and the nested block spelling (`catalog.remote`).
-func firstNonEmpty(candidates ...*string) string {
-	for _, c := range candidates {
-		if c != nil && strings.TrimSpace(*c) != "" {
-			return *c
-		}
-	}
-	return ""
 }
 
 // poolStrategy normalizes the strategy name, defaulting to sticky.

@@ -29,7 +29,7 @@ const ProviderID = "commandcode"
 // -ldflags "-X .../internal/plugin.pluginVersion=<version>".
 const pluginName = "commandcode-go-cliproxyapi"
 
-var pluginVersion = "0.4.1"
+var pluginVersion = "0.4.2"
 
 // SetVersion overrides the reported plugin version; the build injects it via
 // main.version (-ldflags). An empty value keeps the vendored default.
@@ -68,11 +68,6 @@ type Manager struct {
 	// in-flight cap. It lives on the Manager (not a package global) so two
 	// Manager instances — as tests build — do not share a budget.
 	inflight atomic.Int64
-
-	// remoteMu guards the memoised remote model list. Separate from mu so a
-	// slow remote fetch never blocks request-path readers of the config.
-	remoteMu sync.Mutex
-	remote   *remoteCatalogCache
 
 	// lifeMu serializes whole register/reconfigure/shutdown sequences so
 	// their stop-wait-install steps cannot interleave into orphaned tickers.
@@ -275,15 +270,6 @@ func configFields() []pluginapi.ConfigField {
 				"derived from this one block so they can never disagree. project-dir defaults to the reference " +
 				"fabricated path; identity-salt only shifts WHICH fake machine a credential maps to (an escape " +
 				"hatch for a flagged credential, not a per-request knob).",
-		},
-		{
-			Name: "catalog-remote",
-			Type: pluginapi.ConfigFieldTypeString,
-			Description: "可选：模型列表远程来源 URL。Go 套餐无法访问 Provider API 的 /models，" +
-				"且 /alpha/* 上没有任何模型列表端点（实测全 404），因此无法从上游自动发现模型。" +
-				"填一个会被解析出模型 id 的 URL（例如参考反代的 proxy.mjs），模型列表就会跟着它走。" +
-				"注意这不是上游自动发现，而是跟踪第三方文件：默认关闭，catalog.static 仍是它的兜底；" +
-				"拉取失败会保留上一次成功的列表。",
 		},
 		{
 			Name: "retry",
@@ -642,37 +628,29 @@ func (m *Manager) refreshOnce(parent context.Context, mgr *catalog.Manager, brid
 		// credential is saved and a reconfigure runs.
 		return nil
 	}
-	// The catalog is fetched with a provider-mode credential: /models is part
-	// of the Provider API, which a Go-plan key cannot call. When the pool has
-	// no provider account, the catalog is left to the static model table.
+	// The catalog is fetched with any usable credential. /models is served by
+	// the Provider API, and a Go-plan key can call it too (verified: HTTP 200),
+	// so a go-cli-only pool must NOT be locked out of live discovery - that was
+	// the bug that left such pools with no models at all.
 	credential := ""
 	for _, a := range accounts {
-		if a.Mode == config.TransportProvider {
+		if a.Mode == config.TransportProvider && a.Credential != "" {
 			credential = a.Credential
 			break
 		}
 	}
 	if credential == "" {
-		// No provider-mode account: the live /models endpoint is unreachable
-		// (it belongs to the Provider API, which refuses Go-plan keys), and the
-		// upstream exposes no model-list route on /alpha/* either. The remote
-		// source (when configured) is the only way to get a current list; the
-		// static table is the floor beneath it.
-		if cfg.Catalog.Remote != "" {
-			ids, errRemote := m.fetchRemoteCatalog(parent, cfg.Catalog.Remote, cfg.Catalog.RemoteRefreshInterval)
-			if errRemote == nil && len(ids) > 0 {
-				mgr.SeedStatic(ids)
-				if bridge != nil {
-					_ = bridge.Log("info", "catalog served from the remote model source", map[string]any{"models": len(ids)})
-				}
-				return nil
-			}
-			// Fall through to static. A remote failure must never leave the
-			// deployment with no models when a static floor is configured.
-			if bridge != nil {
-				_ = bridge.Log("warn", "remote catalog unavailable; falling back to the static model list", map[string]any{"error": errRemote.Error(), "static": len(cfg.Catalog.Static)})
+		for _, a := range accounts {
+			if a.Credential != "" {
+				credential = a.Credential
+				break
 			}
 		}
+	}
+	if credential == "" {
+		// Nothing to authenticate a catalog fetch with. The static table is the
+		// only source left; an empty one means an empty list until a credential
+		// is saved.
 		if len(cfg.Catalog.Static) > 0 {
 			mgr.SeedStatic(cfg.Catalog.Static)
 			if bridge != nil {
@@ -681,12 +659,15 @@ func (m *Manager) refreshOnce(parent context.Context, mgr *catalog.Manager, brid
 			return nil
 		}
 		if bridge != nil {
-			_ = bridge.Log("info", "no provider-mode account, no remote source and no static catalog configured; model list will be empty", nil)
+			_ = bridge.Log("info", "no usable credential and no static catalog configured; model list will be empty", nil)
 		}
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
+	// Install the plan filter before the refresh so the snapshot is built with
+	// it: a pool should not advertise models its accounts cannot call.
+	mgr.SetPlanGate(m.buildPlanGate(parent, cfg, bridge))
 	err := mgr.Refresh(ctx, credential)
 	if err != nil {
 		// Fallback order matters: a usable snapshot already being served wins
