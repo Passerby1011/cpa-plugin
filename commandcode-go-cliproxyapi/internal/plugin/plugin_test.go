@@ -76,6 +76,19 @@ func (f *fakeCaller) call(method string, payload []byte) ([]byte, error) {
 	return raw, err
 }
 
+// savedAuthFiles returns the set of auth file names the host was asked to
+// persist. Distinct names for one credential are exactly the duplicate-record
+// bug this guards against, so callers assert on names, not call counts.
+func (f *fakeCaller) savedAuthFiles() map[string]struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]struct{}, len(f.authFiles))
+	for name := range f.authFiles {
+		out[name] = struct{}{}
+	}
+	return out
+}
+
 func hostEnvelopeOK(raw []byte) bool {
 	var env pluginabi.Envelope
 	return json.Unmarshal(raw, &env) == nil && env.OK
@@ -662,12 +675,15 @@ func TestReconfigureWithKeysActivatesPlugin(t *testing.T) {
 	}
 }
 
-// TestLifecycleDoesNotWriteCPAAuthFiles pins the 0.2.0 architecture change:
-// credentials live in this plugin's own pool, so register/reconfigure must
-// never touch CPA's auth store. Writing auth files was exactly what dragged
-// the plugin onto the host OAuth login page, where the only possible outcome
-// was "failed to generate authorization url".
-func TestLifecycleDoesNotWriteCPAAuthFiles(t *testing.T) {
+// TestLifecycleMaterializesAuthRecordsForThePool pins the fix for the bug that
+// made every real request fail with "auth_not_found: no auth available".
+//
+// The host finds an executor by walking its OWN auth table, so a plugin whose
+// credentials exist only in its own pool is never reached. Registering the pool
+// as auth records is what makes the provider schedulable. This test asserted
+// the OPPOSITE before the fix - which is why the suite stayed green while the
+// provider was unusable end to end.
+func TestLifecycleMaterializesAuthRecordsForThePool(t *testing.T) {
 	first, second := "user_first-key", "user_second-key"
 	yamlText := "api-keys:\n  - value: " + first + "\n  - value: " + second + "\n"
 	f := &fakeCaller{responder: catalogResponder(true, testCatalogJSON)}
@@ -677,37 +693,108 @@ func TestLifecycleDoesNotWriteCPAAuthFiles(t *testing.T) {
 	if _, err := m.HandleCall("plugin.register", lifecycleRequestBody(yamlText)); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	// Both keys are live straight from config, with no auth-file round trip.
-	m.mu.RLock()
-	afterRegister := len(m.cfg.EffectiveAccounts())
-	m.mu.RUnlock()
-	if afterRegister != 2 {
-		t.Fatalf("effective accounts after register = %d, want 2", afterRegister)
+
+	// Both credentials must be handed to the host exactly once.
+	saves := f.callsOf(pluginabi.MethodHostAuthSave)
+	if len(saves) != 2 {
+		t.Fatalf("auth saves after register = %d, want 2 (the host cannot schedule what it cannot see)", len(saves))
+	}
+	seenIDs := map[string]bool{}
+	for _, call := range saves {
+		var wire pluginapi.HostAuthSaveRequest
+		if err := json.Unmarshal(call.payload, &wire); err != nil {
+			t.Fatalf("auth payload: %v", err)
+		}
+		var record struct {
+			Type   string `json:"type"`
+			ID     string `json:"id"`
+			Label  string `json:"label"`
+			APIKey string `json:"api_key"`
+		}
+		if err := json.Unmarshal(wire.JSON, &record); err != nil {
+			t.Fatalf("auth record: %v", err)
+		}
+		// The provider name must be the model prefix the host routes by.
+		if record.Type != ProviderID {
+			t.Errorf("record type = %q, want %q", record.Type, ProviderID)
+		}
+		if record.APIKey != first && record.APIKey != second {
+			t.Errorf("record does not carry a pool credential")
+		}
+		// The identity is digest-derived and never embeds the secret.
+		hash := authKeyHash(record.APIKey)
+		if record.ID != authRecordIDFromHash(hash) {
+			t.Errorf("record id = %q, want digest-derived %q", record.ID, authRecordIDFromHash(hash))
+		}
+		if wire.Name != authFileNameFromHash(hash) {
+			t.Errorf("record name = %q, want %q", wire.Name, authFileNameFromHash(hash))
+		}
+		if strings.Contains(record.ID, record.APIKey) || strings.Contains(wire.Name, record.APIKey) || strings.Contains(record.Label, record.APIKey) {
+			t.Errorf("secret leaked into the auth identity")
+		}
+		seenIDs[record.ID] = true
+	}
+	if len(seenIDs) != 2 {
+		t.Fatalf("auth records are not distinct per credential: %v", seenIDs)
 	}
 
-	if _, err := m.HandleCall("plugin.reconfigure", lifecycleRequestBody("api-keys:\n  - value: "+second+"\n")); err != nil {
+	// Re-registering an unchanged pool must be idempotent: the records are
+	// already known, so no duplicate auth entries accumulate.
+	before := len(f.callsOf(pluginabi.MethodHostAuthSave))
+	if _, err := m.HandleCall("plugin.reconfigure", lifecycleRequestBody(yamlText)); err != nil {
 		t.Fatalf("reconfigure: %v", err)
 	}
-
-	if got := len(f.callsOf(pluginabi.MethodHostAuthSave)); got != 0 {
-		t.Fatalf("auth saves = %d, want 0 (credentials are plugin-owned)", got)
-	}
-	if got := len(f.callsOf(pluginabi.MethodHostAuthList)); got != 0 {
-		t.Fatalf("auth list calls = %d, want 0", got)
-	}
-
-	// The reconfigure replaced the pool with the single remaining key.
-	m.mu.RLock()
-	accounts := m.cfg.EffectiveAccounts()
-	m.mu.RUnlock()
-	if len(accounts) != 1 || accounts[0].Credential != second {
-		t.Fatalf("effective accounts after reconfigure = %+v, want just %q", accounts, second)
+	if after := len(f.callsOf(pluginabi.MethodHostAuthSave)); after != before {
+		t.Errorf("idempotent reconfigure saved %d more records", after-before)
 	}
 }
 
-// TestLifecycleSurvivesAuthStoreFailure: a broken CPA auth directory must not
-// affect the plugin now that it does not use that store at all.
-func TestLifecycleSurvivesAuthStoreFailure(t *testing.T) {
+// TestNoAuthProviderCapabilityStaysOff pins that the fix did NOT re-add the
+// OAuth capability. Writing auth records and advertising an interactive login
+// flow are separate concerns: re-adding the capability brings back the dead
+// "failed to generate authorization url" entry on the host login page.
+func TestNoAuthProviderCapabilityStaysOff(t *testing.T) {
+	f := &fakeCaller{responder: catalogResponder(true, testCatalogJSON)}
+	m := NewManager(NewHostBridge(f.call))
+	t.Cleanup(func() { _, _ = m.HandleCall("plugin.shutdown", nil) })
+	raw, err := m.HandleCall("plugin.register", lifecycleRequestBody("api-keys:\n  - value: user_x\n"))
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	env, err := decodeEnvelope(raw)
+	if err != nil {
+		t.Fatalf("envelope: %v", err)
+	}
+	var reg registrationResult
+	if err := json.Unmarshal(env.Result, &reg); err != nil {
+		t.Fatalf("registration result: %v", err)
+	}
+	if !reg.Capabilities.ModelProvider {
+		t.Fatal("model_provider capability must stay on")
+	}
+	// capabilities carries no auth_provider field at all, so the wire must not
+	// contain one either - presence would make the host publish an OAuth entry.
+	var wire struct {
+		Capabilities map[string]any `json:"capabilities"`
+	}
+	if err := json.Unmarshal(env.Result, &wire); err != nil {
+		t.Fatalf("capabilities: %v", err)
+	}
+	if v, present := wire.Capabilities["auth_provider"]; present && v != false {
+		t.Fatalf("auth_provider must be absent or false, got %v", v)
+	}
+}
+
+// TestLifecycleFailsWhenAuthStoreIsUnavailable pins the corrected contract: a
+// registration that cannot publish its credentials must NOT report success.
+//
+// The previous version of this test asserted the opposite - that a broken auth
+// store was harmless - which was only true while the plugin wrote no auth
+// records at all, i.e. while the provider was unusable. Registering with a
+// credential but leaving the host unable to schedule it is the exact state that
+// produced "auth_not_found: no auth available" on every request, so it has to
+// surface at configure time instead.
+func TestLifecycleFailsWhenAuthStoreIsUnavailable(t *testing.T) {
 	f := &fakeCaller{responder: func(method string, payload []byte) ([]byte, error) {
 		if method == pluginabi.MethodHostAuthList {
 			return hostErr("auth_unavailable", "auth directory unavailable"), nil
@@ -729,11 +816,11 @@ func TestLifecycleSurvivesAuthStoreFailure(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 	env := decodeEnv(t, resp)
-	if !env.OK {
-		t.Fatalf("register failed over an unrelated auth-store error: %+v", env.Error)
+	if env.OK {
+		t.Fatal("register reported success although no credential could be published to the host")
 	}
-	if got := len(f.callsOf(pluginabi.MethodHostAuthSave)); got != 0 {
-		t.Fatalf("auth saves = %d, want 0", got)
+	if env.Error == nil || !strings.Contains(env.Error.Code, "auth") {
+		t.Fatalf("error should name the auth failure, got %+v", env.Error)
 	}
 }
 
@@ -1107,8 +1194,13 @@ func TestOverlappingLifecyclesLeaveSingleTicker(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	if got := len(f.callsOf(pluginabi.MethodHostAuthSave)); got != 0 {
-		t.Fatalf("overlapping lifecycle auth saves = %d, want 0 (credentials are plugin-owned)", got)
+	// The two lifecycles may race, but auth materialization must stay
+	// idempotent: the harness records each saved file by name, so a duplicated
+	// record would show up as two distinct names for one credential. One
+	// credential in testValidYAML therefore means exactly one auth file.
+	files := f.savedAuthFiles()
+	if len(files) != 1 {
+		t.Fatalf("overlapping lifecycles saved %d auth files (%v), want 1", len(files), files)
 	}
 	done := m.closeStop()
 	if done == nil {

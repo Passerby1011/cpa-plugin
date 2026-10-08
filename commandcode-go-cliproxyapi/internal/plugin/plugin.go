@@ -29,7 +29,7 @@ const ProviderID = "commandcode"
 // -ldflags "-X .../internal/plugin.pluginVersion=<version>".
 const pluginName = "commandcode-go-cliproxyapi"
 
-var pluginVersion = "0.4.2"
+var pluginVersion = "0.4.3"
 
 // SetVersion overrides the reported plugin version; the build injects it via
 // main.version (-ldflags). An empty value keeps the vendored default.
@@ -407,9 +407,28 @@ func (m *Manager) handleLifecycle(request []byte) ([]byte, error) {
 	m.lifeMu.Lock()
 	defer m.lifeMu.Unlock()
 	debugTrace("lifecycle config_loaded accounts=%d prefix_enabled=%t prefix=%s", len(cfg.EffectiveAccounts()), cfg.ModelPrefix.Enabled, cfg.ModelPrefix.Value)
-	// No auth materialization: credentials live in this plugin's own pool.
-	// Writing CPA auth files was what dragged us onto the OAuth login page.
-	// A pending registration (no api-keys yet) must not touch the network:
+	// Materialize the pool into CPA auth records. This is required, not
+	// cosmetic: the host's auth selection walks ITS OWN auth table to find a
+	// candidate executor, so a provider with no auth record is never reached -
+	// every request fails with "auth_not_found: no auth available" before the
+	// plugin's executor runs. The credential still lives in this plugin's
+	// pool; the auth record exists so the host can schedule it.
+	//
+	// This is deliberately NOT the auth_provider capability: declaring that
+	// additionally publishes an interactive OAuth login entry, whose only
+	// possible outcome here is "failed to generate authorization url". Writing
+	// records and advertising a login flow are separate concerns, and only the
+	// latter is unwanted.
+	//
+	// A pending registration has no credentials, so there is nothing to
+	// materialize; skip the host round-trip entirely.
+	if !cfg.Pending && m.bridge != nil {
+		if errAuth := m.materializeAuthRecords(context.Background(), cfg); errAuth != nil {
+			debugTrace("lifecycle auth_materialize_error=%s", errAuth.Error())
+			return ErrEnvelope("auth_materialize_failed", errAuth.Error()), nil
+		}
+	}
+	// A pending registration (no credentials yet) must not touch the network:
 	// there is no credential to fetch a catalog with, and the /models call
 	// would just fail. Register successfully with an empty catalog so the
 	// Management Center can render the config form; the reconfigure that

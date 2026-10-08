@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.4.3
+
+修复**所有真实请求都无法调用**的致命缺陷：`auth_not_found: no auth available`。
+
+### 根因（0.2.0 的连带误删）
+
+0.2.0 为了去掉宿主上那个永远失败的 OAuth 登录入口，删除了 `auth_provider`
+capability —— 这一步**是对的**。但同一次改动把 `materializeAuthRecords()`
+（遍历账号、为每个凭据写一条 CPA auth 记录）一并删掉了，而它**与 OAuth 无关**：
+
+- **host 靠自己的 auth 表挑选执行器**（`pickNextMixed` 遍历 `m.auths` 按
+  provider 匹配；`model_router` 用 `HasProviderAuth(provider)` 判断可用性）；
+- 插件不写 auth 记录 → 宿主认为 `commandcode` 没有任何可用凭据 →
+  请求在**到达插件执行器之前**就被拒，返回
+  `auth_not_found: no auth available`；
+- 模型列表和配额页照常工作（走 `model_provider` 能力，另一条路），
+  所以故障看起来像路由问题，实际是**少了一次注册**。
+
+更糟的是，0.2.0 把测试改成了**断言这个错误行为**
+（`TestLifecycleDoesNotWriteCPAAuthFiles`），所以门禁一直全绿。该提交自述也写着
+"Real Go-plan credential end-to-end is NOT verified" —— 这个缺陷从未被端到端发现。
+
+### 修复
+
+- 恢复 auth 记录物化，并适配新的 `accounts` 池（不只是旧的 `api-keys`）：
+  `register` / `reconfigure` 时为每个有效凭据生成
+  `{type: commandcode, id: commandcode-key-<sha256前12>, api_key}` 并经
+  `host.auth.save` 写入。凭据仍以插件池为权威，auth 记录只让宿主能调度它。
+- **不恢复** `auth_provider` capability：写记录与开放 OAuth 登录是两件事，
+  只有后者不需要（新增测试钉住 capability 里没有 `auth_provider`）。
+- 幂等：按凭据摘要派生 id/文件名，宿主已存在则跳过，重复 register 不产生重复记录；
+  已存在的记录不覆盖，保留宿主写入的元数据。
+- 身份不泄露密钥：id/文件名/标签只用摘要，标签用 `label (摘要前12)`。
+- **auth 存储不可用时注册必须失败**（此前返回成功，结果是"配好了但用不了"）。
+
+### 验证
+
+- 变异验证：把 auth 物化禁用回 bug 状态，两个新测试**精确失败**
+  （`auth saves = 0, want 2`、`register reported success although no credential could be published`）；
+- 全量 12 包 0 失败，build/vet/gofmt 干净。
+
 ## 0.4.2
 
 模型列表改为**上游实时来源 + 套餐过滤**，并修复 go-cli 池被锁在实时发现之外的核心缺陷。
