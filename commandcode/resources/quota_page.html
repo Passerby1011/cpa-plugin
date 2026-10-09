@@ -143,7 +143,7 @@ select.field-input{flex:0 0 auto;min-width:150px}
 <body>
 <div class="wrap">
   <h1>CommandCode 配额</h1>
-  <div class="sub">套餐额度 · 5 小时 / 每周 / 每月窗口 · 每个凭据独立刷新</div>
+  <div class="sub">套餐额度 · 5 小时 / 每周 / 每月窗口 · 每个凭据独立刷新 · 卡片标注凭据来源</div>
   <div class="bar">
     <button id="refreshAll">刷新数据</button>
     <button class="sec" id="addToggle" aria-expanded="false" aria-controls="addForm">＋ 添加 Key</button>
@@ -363,6 +363,15 @@ select.field-input{flex:0 0 auto;min-width:150px}
       '<div class="pb-meta">剩余 ' + fmt(left) + ' · 已用 ' + fmt(month.used) + ' · 额度池 ' + fmt(month.cap) +
       (at ? ' · ' + esc(at) : '') + '</div></div>';
   }
+  // Where a credential is declared decides how it is removed, so the card says
+  // it outright: a key from the plugin CONFIG cannot be deleted on this page (or
+  // by deleting an auth file - the config would recreate it), while a key added
+  // here lives in a CPA auth record.
+  function sourceBadge(card) {
+    if (card.source === "config") return '<span class="badge" title="来自插件配置 accounts；要删除请编辑插件配置">来源 配置</span>';
+    if (card.source === "auth") return '<span class="badge" title="来自 CPA 认证文件；可在「认证文件」页删除">来源 认证文件</span>';
+    return "";
+  }
   function planBadge(usage) {
     if (!usage || !usage.plan) return '<span class="badge unknown">套餐未知</span>';
     // Just the plan type. The monthly allowance is deliberately NOT repeated
@@ -471,7 +480,7 @@ select.field-input{flex:0 0 auto;min-width:150px}
     const updated = fetchedAt.get(card.key_id);
     return '<div class="card">' +
       '<h2><span class="card-name" title="' + esc(displayName) + '">' + esc(displayName) + '</span>' +
-      '<span class="card-badges">' + planBadge(usage) + (usage ? badgesFor(usage) : "") + '</span></h2>' +
+      '<span class="card-badges">' + planBadge(usage) + sourceBadge(card) + (usage ? badgesFor(usage) : "") + '</span></h2>' +
       '<div class="uid">' + esc(card.key_id) + (card.label ? ' · ' + esc(card.label) : '') + '</div>' +
       body +
       (updated ? '<div class="pb-meta">更新时间 ' + esc(new Date(updated).toLocaleString()) + '</div>' : '') +

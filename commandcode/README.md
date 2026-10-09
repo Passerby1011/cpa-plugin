@@ -225,6 +225,15 @@ a toolbar (`刷新数据` refreshes every credential at once), filter pills with
 Filters, search and sort operate only on the snapshot already fetched — they never issue a
 quota request, so a credential refreshes only when you ask it to.
 
+Each card also states **where its credential comes from**: `来源 配置` (the plugin's own
+`accounts`) or `来源 认证文件` (a CPA auth record, where a key added on this page lands). The
+two stores are independent - deleting an auth record does nothing for a config-declared
+credential, and one materialization pass would even recreate it - so the badge tells the
+operator which place to edit. A credential present in both is reported as `配置`, the store
+that must be changed for the removal to stick. The page deliberately offers **no removal
+control**: the host API has no auth delete, and its `auth.save` discards a `disabled` flag, so
+a button here could only pretend to work.
+
 The page can also **add a key** ("＋ 添加 Key"): credential, optional label, and transport
 mode (`go-cli` for Go-plan keys — the default — or `provider`). The host gives a plugin no
 way to write its own config, so the key is stored as a **CPA auth record** and the plugin

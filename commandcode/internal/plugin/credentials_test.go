@@ -282,3 +282,103 @@ func TestLifecycleFetchesCatalogWhenTheOnlyCredentialIsAnAuthRecord(t *testing.T
 		t.Fatal("no models published although an auth-record credential can fetch them")
 	}
 }
+// TestQuotaListReportsWhereEachCredentialComesFrom is the fix for "I deleted the
+// key in Auth Files but it is still on the quota page".
+//
+// The two credential stores are independent: the plugin's own `accounts` list,
+// and CPA auth records (where a key added on this page lands). Deleting an auth
+// record therefore does nothing for a config-declared key - and materialize
+// rebuilds that record on the next lifecycle, so the deletion even looks
+// ignored. The page cannot merge the two stores, but it must not leave the
+// operator guessing: each card states its source.
+func TestQuotaListReportsWhereEachCredentialComesFrom(t *testing.T) {
+	store := newAuthStore()
+	const fromConfig = "user_from_config"
+	const fromRecord = "user_from_auth_record"
+
+	// The auth-record credential is the one the page would have added.
+	record, _ := json.Marshal(authRecordCredential{Type: ProviderID, APIKey: fromRecord, Mode: "go-cli"})
+	store.save(authFileNameFromHash(authKeyHash(fromRecord)), ProviderID, record)
+
+	m := NewManager(NewHostBridge(store.call))
+	if err := m.refreshAuthCredentials(context.Background(), m.bridge); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	cfg := config.Config{Accounts: []config.Account{
+		{Label: "cfg", Mode: config.TransportGoCLI, Credential: fromConfig},
+	}}
+	m.cfg = cfg
+
+	resp, err := m.HandleManagement(context.Background(), pluginapi.ManagementRequest{
+		Method: http.MethodPost, Path: "/v0/management/plugins/" + pluginName + "/quota-usage", Body: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list quotaList
+	if err := json.Unmarshal(resp.Body, &list); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, card := range list.Cards {
+		got[card.Label] = card.Source
+	}
+	if len(list.Cards) != 2 {
+		t.Fatalf("cards = %+v, want both credentials", list.Cards)
+	}
+	if got["cfg"] != "config" {
+		t.Errorf("config credential source = %q, want config", got["cfg"])
+	}
+	// The auth-record one carries no label in this fixture, so it is keyed by
+	// its fallback label; find it by exclusion instead.
+	sources := map[string]int{}
+	for _, card := range list.Cards {
+		sources[card.Source]++
+	}
+	if sources["config"] != 1 || sources["auth"] != 1 {
+		t.Fatalf("sources = %v, want exactly one config and one auth", sources)
+	}
+	// A credential that is BOTH declared in config and present as a record is
+	// reported as config, because that is the store that keeps recreating it.
+	cfgBoth := config.Config{Accounts: []config.Account{
+		{Label: "both", Mode: config.TransportGoCLI, Credential: fromRecord},
+	}}
+	m.cfg = cfgBoth
+	resp, err = m.HandleManagement(context.Background(), pluginapi.ManagementRequest{
+		Method: http.MethodPost, Path: "/v0/management/plugins/" + pluginName + "/quota-usage", Body: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list = quotaList{}
+	if err := json.Unmarshal(resp.Body, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Cards) != 1 || list.Cards[0].Source != "config" {
+		t.Fatalf("cards = %+v, want one card reported as config", list.Cards)
+	}
+}
+
+// TestQuotaPageLabelsTheCredentialSource pins the badge that tells an operator
+// where a credential lives, and therefore where to remove it.
+func TestQuotaPageLabelsTheCredentialSource(t *testing.T) {
+	page := resources.QuotaPage
+	for _, marker := range []string{
+		`function sourceBadge(card) {`,
+		`来源 配置`,
+		`来源 认证文件`,
+		`sourceBadge(card)`,
+	} {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("quota page missing credential-source marker %q", marker)
+		}
+	}
+	// The page must not pretend it can delete a config credential: there is no
+	// removal control, because the host offers no way to write plugin config and
+	// dropping an auth record cannot remove a config entry.
+	for _, forbidden := range []string{"accounts/remove", "data-remove="} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("quota page carries a removal control it cannot honour: %q", forbidden)
+		}
+	}
+}

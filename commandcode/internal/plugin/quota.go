@@ -109,6 +109,12 @@ type quotaCard struct {
 	Email string      `json:"email,omitempty"`
 	Usage *quotaUsage `json:"usage,omitempty"`
 	Error string      `json:"error,omitempty"`
+	// Source names where this credential comes from: "config" (the plugin's
+	// own `accounts` list) or "auth" (a CPA auth record, which is where a key
+	// added on this page lands). The two are separate stores, so an operator
+	// who deletes an auth record must be told when a credential is declared in
+	// config instead - otherwise the key looks impossible to remove.
+	Source string `json:"source,omitempty"`
 }
 
 type quotaRequest struct {
@@ -271,6 +277,19 @@ func (m *Manager) HandleManagement(ctx context.Context, req pluginapi.Management
 		// refresh) as the signal that a credential has been fetched once,
 		// and only auto-refreshes cards that still lack one.
 		emails := m.accountEmails(ctx)
+		// Which store each credential must be removed FROM. Config wins when a
+		// credential appears in both, because that is the store that keeps it
+		// alive: deleting its auth record alone would leave the credential in
+		// the pool, and the next lifecycle would rebuild the record anyway.
+		// Labeling it 认证文件 there would point the operator at an action that
+		// cannot work.
+		fromConfig := make(map[string]struct{})
+		m.mu.RLock()
+		effective := m.cfg.EffectiveAccounts()
+		m.mu.RUnlock()
+		for _, account := range effective {
+			fromConfig[authKeyHash(strings.TrimSpace(account.Credential))] = struct{}{}
+		}
 		cards := make([]quotaCard, 0, len(keys))
 		for _, key := range keys {
 			id, label := quotaIdentity(key.Credential)
@@ -281,7 +300,11 @@ func (m *Manager) HandleManagement(ctx context.Context, req pluginapi.Management
 			if email != "" {
 				label = email
 			}
-			cards = append(cards, quotaCard{KeyID: id, Label: label, Email: email})
+			source := "auth"
+			if _, ok := fromConfig[authKeyHash(strings.TrimSpace(key.Credential))]; ok {
+				source = "config"
+			}
+			cards = append(cards, quotaCard{KeyID: id, Label: label, Email: email, Source: source})
 		}
 		return quotaJSON(quotaList{Cards: cards})
 	}
