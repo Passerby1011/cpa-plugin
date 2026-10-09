@@ -6,7 +6,7 @@
       "name": "WorkBuddy",
       "description": "Tencent CodeBuddy (WorkBuddy) OAuth provider for CLIProxyAPI: multi-account login, dynamic models, chat executor, CN daily check-in, international (Global) daily-activity reward (30/50 credits per day, claimed via a finished web-agent conversation), credit lifecycle (disable CN / delete Global when exhausted), credits panel with CN/Global filters and client-shaped per-group usage breakdown, optional credits-aware scheduler.",
       "author": "Hex",
-      "version": "0.13.1",
+      "version": "0.13.2",
       "repository": "https://github.com/Passerby1011/cpa-plugin",
       "logo": "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/WorkBuddy.png",
       "homepage": "https://github.com/Passerby1011/cpa-plugin/tree/main/workbuddy",
@@ -24,51 +24,51 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.1/workbuddy_0.13.1_linux_amd64.zip",
-            "sha256": "cb03fb5cf683c5fc1705e3d24f4879fdd1691e5a2ecb62acc4f72f2ca55f38cb",
-            "size": 3439574
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.2/workbuddy_0.13.2_linux_amd64.zip",
+            "sha256": "4af1624a4bf8d38f429e16d28096546f736d1b38df80a3bfde52de1f970b1eba",
+            "size": 3439710
           },
           {
             "goos": "linux",
             "goarch": "arm64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.1/workbuddy_0.13.1_linux_arm64.zip",
-            "sha256": "a36976430b403304b05bb5e2954a697705ca6ca3a9352628b4dce004a07f2fec",
-            "size": 3121508
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.2/workbuddy_0.13.2_linux_arm64.zip",
+            "sha256": "51b3cf2234e69dc6daf1d0bca7af128318417425883397b71acaa315c4e50ae9",
+            "size": 3121523
           },
           {
             "goos": "darwin",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.1/workbuddy_0.13.1_darwin_amd64.zip",
-            "sha256": "95a5789952efb1bba6200c15a48f0761efe355065c441b8ea63fc3dce89db2fd",
-            "size": 3271138
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.2/workbuddy_0.13.2_darwin_amd64.zip",
+            "sha256": "cd552fe34218e3788b4fab9f00be63fdb8b6ade3f375e664776e96267820044f",
+            "size": 3271212
           },
           {
             "goos": "darwin",
             "goarch": "arm64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.1/workbuddy_0.13.1_darwin_arm64.zip",
-            "sha256": "804cf8e2c3f03096784d54861b61bf07bf09906ce55617d9773f29179636b695",
-            "size": 3016844
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.2/workbuddy_0.13.2_darwin_arm64.zip",
+            "sha256": "64857a6fc51c3a69460326d114abe2fb0f1e6ebf60d743e7c2789b3382213812",
+            "size": 3016895
           },
           {
             "goos": "windows",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.1/workbuddy_0.13.1_windows_amd64.zip",
-            "sha256": "ae7d92233a21b773272e7b5c7e88faffee826cee7103d3e613d39b63fc720535",
-            "size": 3358514
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.2/workbuddy_0.13.2_windows_amd64.zip",
+            "sha256": "0d6eeb8b17ff997cc91043b91aff5677d9748d9fca92a96afde5424df7ec0848",
+            "size": 3358572
           },
           {
             "goos": "windows",
             "goarch": "arm64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.1/workbuddy_0.13.1_windows_arm64.zip",
-            "sha256": "d440f8a1fb30bde89b6be0bd85c6bd6633913f25f79b5da4c7271650a5f5f647",
-            "size": 3099914
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.2/workbuddy_0.13.2_windows_arm64.zip",
+            "sha256": "42dc7a2648646b8b1192947290d238445c2bd3318fd661ebe93f6e43920ae33a",
+            "size": 3099913
           },
           {
             "goos": "freebsd",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.1/workbuddy_0.13.1_freebsd_amd64.zip",
-            "sha256": "ded5ccbe100c064d9ce1097575fa84077eca6ab33a8e4af532539d44137a465f",
-            "size": 3356285
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/workbuddy-v0.13.2/workbuddy_0.13.2_freebsd_amd64.zip",
+            "sha256": "f4d1d95c07a647c8a5a68dd91dc7c122e1c6116a348c23c45595940d9d043028",
+            "size": 3356019
           }
         ]
       }
