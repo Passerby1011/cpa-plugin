@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.5.2
+
+**刷新套餐表**，修掉「模型被列出来、选中却报 403 `MODEL_NOT_IN_PLAN`」。
+
+### 现象
+
+请求 `commandcode/claude-haiku-5-5` 报 `403 MODEL_NOT_IN_PLAN`（CPA 把它包成 401
+`invalid_api_key`，看着像鉴权问题，其实是上游说"你这个套餐不含这个模型"）。
+
+### 根因
+
+套餐过滤表是**旧快照**。`claude-haiku-5-5` 在表里**没有条目**，而 `ModelVisibleInPlan`
+对表外模型是 **fail-open**（放行）—— 于是它被列进了可选模型，用户选中后打到上游才被拒。
+
+上游确实新增了这个模型，且**最低套餐是 Pro**（我们的参考实现 `CHANGELOG` 原文：
+「同步官方 command-code@1.78.0 新增的 `claude-haiku-5-5`：最低套餐 Pro」）。
+Go 套餐**本就不该看到它**——过滤表的职责正是提前挡掉。
+
+### 修法
+
+把表刷到参考实现当前版本（0.12.9），**不手编**：
+
+| | 旧表 | 新表 |
+|---|---|---|
+| 条目 | 85 | **87** |
+| 新增 | — | `claude-haiku-5-5`→goat、`mistral/mistral-large-4`→go、`stealth/glyph-cluster:free`→go |
+| 移除 | `stealth/space-bunny-alpha` | — |
+| 层级变更 | 0 | 0 |
+
+Go 套餐可见数随之 **55 → 54**（少掉的正是 `claude-haiku-5-5`）。
+
+黄金向量（`wantVisibleByPlan`）也**按参考表重新生成**，因为旧向量是在旧表上烘焙的：
+旧表没有该模型 → fail-open → 向量错误地把"每个套餐都能看到它"记成了期望值。
+这正是"黄金向量必须能从 oracle 重新生成、不可手写"的意义。
+
+### 各套餐可见数（87 目录）
+
+| 套餐 | 档位 | 可见 |
+|---|---|---|
+| Go / Go-v1 | 0 | 54 |
+| GOAT | 1 | 64 |
+| Pro / Pro-v1 / Teams-Pro | 2 | 78 |
+| Provider | 3 | 86 |
+| Max / Ultra | 4 | 87 |
+
+全量 12 包 0 失败（含 planfilter 6 个测试全部重建后通过）。
+
 ## 0.5.1
 
 配额页**标注每个凭据的来源**，回应「在认证文件里删了 key，配额页还在」。
