@@ -7,7 +7,7 @@ index 07516fe..d2eb5a2 100644
    push:
      branches: [main]
 -    tags: ["workbuddy-global-v*"]
-+    tags: ["workbuddy-global-v*", "commandcode-go-cliproxyapi-v*"]
++    tags: ["workbuddy-global-v*", "commandcode-v*"]
    workflow_dispatch:
      inputs:
        plugin:
@@ -15,7 +15,7 @@ index 07516fe..d2eb5a2 100644
          required: true
          type: choice
 -        options: [workbuddy-global]
-+        options: [workbuddy-global, commandcode-go-cliproxyapi]
++        options: [workbuddy-global, commandcode]
        version:
          description: "Version without v (empty = plugin's VERSION file)"
          required: false
@@ -23,7 +23,7 @@ index 07516fe..d2eb5a2 100644
          include:
            - dir: workbuddy-global
              node: true
-+          - dir: commandcode-go-cliproxyapi
++          - dir: commandcode
 +            node: false
      defaults:
        run:
@@ -32,28 +32,28 @@ index 07516fe..d2eb5a2 100644
              goarch: amd64
              runner: windows-2025
              ext: dll
-+          # CommandCode Go/GOAT/Pro/Max native
-+          - id: commandcode-go-cliproxyapi
++          # CommandCode native
++          - id: commandcode
 +            goos: linux
 +            goarch: amd64
 +            runner: ubuntu-24.04
 +            ext: so
-+          - id: commandcode-go-cliproxyapi
++          - id: commandcode
 +            goos: linux
 +            goarch: arm64
 +            runner: ubuntu-24.04-arm
 +            ext: so
-+          - id: commandcode-go-cliproxyapi
++          - id: commandcode
 +            goos: darwin
 +            goarch: amd64
 +            runner: macos-15-intel
 +            ext: dylib
-+          - id: commandcode-go-cliproxyapi
++          - id: commandcode
 +            goos: darwin
 +            goarch: arm64
 +            runner: macos-15
 +            ext: dylib
-+          - id: commandcode-go-cliproxyapi
++          - id: commandcode
 +            goos: windows
 +            goarch: amd64
 +            runner: windows-2025
@@ -65,10 +65,10 @@ index 07516fe..d2eb5a2 100644
            - id: workbuddy-global
              target: freebsd-amd64
              ext: so
-+          - id: commandcode-go-cliproxyapi
++          - id: commandcode
 +            target: windows-arm64
 +            ext: dll
-+          - id: commandcode-go-cliproxyapi
++          - id: commandcode
 +            target: freebsd-amd64
 +            ext: so
      defaults:
@@ -78,14 +78,14 @@ index 07516fe..d2eb5a2 100644
            fi
            case "$P" in
              workbuddy-global) ;;
-+            commandcode-go-cliproxyapi) ;;
++            commandcode) ;;
              *) echo "unsupported plugin $P"; exit 1 ;;
            esac
            V="${V#v}"
            # Display name for release titles/notes; the plugin id stays lowercase.
            case "$P" in
              workbuddy-global) NAME="WorkBuddy Global" ;;
-+            commandcode-go-cliproxyapi) NAME="CommandCode Go/GOAT/Pro/Max" ;;
++            commandcode) NAME="CommandCode" ;;
            esac
            {
              echo "plugin=$P"

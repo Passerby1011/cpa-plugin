@@ -1,7 +1,7 @@
 # CPA 插件仓库
 
 [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) 插件集合。当前提供
-**WorkBuddy / CodeBuddy**（OAuth Provider）与 **CommandCode Go/GOAT/Pro/Max**
+**WorkBuddy / CodeBuddy**（OAuth Provider）与 **CommandCode**
 （套餐 Provider + 配额页）。
 
 ## 插件
@@ -9,7 +9,7 @@
 | ID | 说明 | 源码 |
 |---|---|---|
 | `workbuddy` | WorkBuddy / CodeBuddy 双通道（CN `copilot.tencent.com` + 国际 `workbuddy.ai`）：OAuth、动态模型、executor、CN 每日签到、**国际版每日活跃 30/50 积分领取**、积分生命周期、积分面板 | [workbuddy/](workbuddy/) |
-| `commandcode-go-cliproxyapi` | CommandCode Go/GOAT/Pro/Max 套餐单一 provider（`commandcode/` 前缀）：OpenAI/Anthropic/Responses 三协议、推理保真、Key 池调度、配额页 | [commandcode-go-cliproxyapi/](commandcode-go-cliproxyapi/) |
+| `commandcode` | CommandCode 套餐单一 provider（`commandcode/` 前缀）：OpenAI/Anthropic/Responses 三协议、推理保真、Key 池调度、配额页 | [commandcode/](commandcode/) |
 
 ## 多架构 Release
 
@@ -65,7 +65,7 @@ CI 自动刷新（`.github/scripts/sync-registry.py`），用户在商店 UI 即
 https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/registry.json
 ```
 
-添加后在商店 UI 安装/更新 **WorkBuddy** 或 **CommandCode Go/GOAT/Pro/Max**。
+添加后在商店 UI 安装/更新 **WorkBuddy** 或 **CommandCode**。
 
 > **首次使用注意**：`registry.json` 里的 `artifacts` 由发版 CI 回填。在
 > `workbuddy-v*` 首个 Release 产出之前，该字段为空数组，而 CPA 对
@@ -74,7 +74,7 @@ https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/registry.json
 > `plugins[0]: direct install requires at least one artifact`。
 > 先跑一次 Release（tag 或 workflow_dispatch）即可解除。
 >
-> 新增插件同理：`commandcode-go-cliproxyapi` 的 `artifacts` 已由本地构建 + Release
+> 新增插件同理：`commandcode` 的 `artifacts` 已由本地构建 + Release
 > 上传后回填（三平台：linux/amd64、linux/arm64、windows/amd64）。该插件尚未纳入
 > 本仓库 CI matrix——接线补丁见 `scripts/ci-wiring-commandcode.patch`。
 
@@ -86,12 +86,12 @@ https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/registry.json
 - **版本注入**：构建用 `-ldflags "-X main.version=<version>"` 注入版本，插件在
   `main.go` 的 `version` 变量 + `init()` 里转发给内部包；`<id>/VERSION` 是版本源。
 - **发版**：`make -C <id> tag`（读 `<id>/VERSION`）→ 推 tag → CI 出多平台产物 +
-  回填 `registry.json`。`workbuddy` 走 CI 矩阵；`commandcode-go-cliproxyapi`
+  回填 `registry.json`。`workbuddy` 走 CI 矩阵；`commandcode`
   本版为本地构建 + Release 上传（见 `scripts/release-commandcode.py`）。
-- **`commandcode-go-cliproxyapi` 的 `api-keys` 为必填**：缺失时宿主报
+- **`commandcode` 的 `api-keys` 为必填**：缺失时宿主报
   `plugin.register failed: api-keys: at least one key is required`，面板显示
   **未注册 / 未生效**——这是配置错误，不是加载或版本错误。
-- **来源与再打包**：`commandcode-go-cliproxyapi` 是上游
-  [`mczhoucn/commandcode-go-cliproxyapi`](https://github.com/mczhoucn/commandcode-go-cliproxyapi)
+- **来源与再打包**：`commandcode` 是上游
+  [`mczhoucn/commandcode`](https://github.com/mczhoucn/commandcode)
   （MIT）的再打包，改动范围见
-  [commandcode-go-cliproxyapi/docs/PROVENANCE.md](commandcode-go-cliproxyapi/docs/PROVENANCE.md)。
+  [commandcode/docs/PROVENANCE.md](commandcode/docs/PROVENANCE.md)。

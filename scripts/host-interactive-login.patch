@@ -1,6 +1,6 @@
 # Host patch: separate "auth parsing" from "interactive OAuth login".
 #
-# Required for commandcode-go-cliproxyapi >= 0.1.3 to be hidden from the
+# Required for commandcode >= 0.1.3 to be hidden from the
 # OAuth login page. Auth parsing (ParseAuths / authProviderRecord) keeps
 # keying off AuthProvider alone, so credentials still resolve and the
 # executor still receives api_key; only the login page stops offering it.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build + package the commandcode-go-cliproxyapi plugin for a release.
+"""Build + package the commandcode plugin for a release.
 
 This repo's CI matrix does not yet cover this plugin (adding it needs a token
 with the `workflow` scope; see scripts/ci-wiring-commandcode.patch). Until then
@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PLUGIN_ID = "commandcode-go-cliproxyapi"
+PLUGIN_ID = "commandcode"
 IMAGE = "golang:1.26-bookworm"
 ALL = ("linux/amd64", "linux/arm64", "windows/amd64")
 
