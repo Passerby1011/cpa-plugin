@@ -78,7 +78,7 @@
       "name": "CommandCode",
       "description": "CommandCode plan as a single CLIProxyAPI provider (commandcode/ prefix): OpenAI, Anthropic and Responses clients off one API-key pool, reasoning/thinking preservation, chat-completions-only catalog routing, host-scheduled key pool and a CommandCode quota page. Repackaged from mczhoucn/commandcode (MIT).",
       "author": "mczhoucn",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "repository": "https://github.com/Passerby1011/cpa-plugin",
       "homepage": "https://github.com/Passerby1011/cpa-plugin/tree/main/commandcode",
       "license": "MIT",
@@ -95,23 +95,23 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.5.0/commandcode_0.5.0_linux_amd64.zip",
-            "sha256": "e4d1f8c066d97095d7caf685b763cf6c5779e6eb058e36764a12a1960d5f7135",
-            "size": 2412687
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.5.1/commandcode_0.5.1_linux_amd64.zip",
+            "sha256": "c18cbeacd28cfcb93577ca18f945fec22a60fa8b2bb845e499ddf199a0ea70c7",
+            "size": 2413485
           },
           {
             "goos": "linux",
             "goarch": "arm64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.5.0/commandcode_0.5.0_linux_arm64.zip",
-            "sha256": "2314b9f7550bf4678856d32d41987528aa350160d15424033875ee5338fc26ec",
-            "size": 2186457
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.5.1/commandcode_0.5.1_linux_arm64.zip",
+            "sha256": "4aeed3b16fffdca2800f59ba16ded27969dcfe48ccf71b15a02be72ec4e08f62",
+            "size": 2188334
           },
           {
             "goos": "windows",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.5.0/commandcode_0.5.0_windows_amd64.zip",
-            "sha256": "0f5ee7dbdd4ac1620da8fe0a1ad151ba5bc10dd3974ef08e41a9bf218a00d6cb",
-            "size": 2374820
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.5.1/commandcode_0.5.1_windows_amd64.zip",
+            "sha256": "15ecad33681bea0569010bed7e49423d01676493cf520e78d9badda1ddbfed5b",
+            "size": 2375642
           }
         ]
       }
