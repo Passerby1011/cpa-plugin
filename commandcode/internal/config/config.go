@@ -68,10 +68,18 @@ type RouteOverride struct {
 
 // ModelFilter restricts which discovered models are published and routable.
 //
-// Semantics (deliberately simple, exact-match only):
+// Semantics:
 //   - Allow empty  -> every discovered model is eligible.
 //   - Allow set    -> only listed models are eligible.
 //   - Deny         -> always wins: a denied model is excluded even if allowed.
+//
+// An entry may contain '*', which matches any run of characters including
+// none, so `deny: ["claude-*"]` drops a whole family without listing every
+// model. A pattern containing '*' is matched case-insensitively; an entry
+// without one stays an exact, case-sensitive comparison, so entries written
+// before wildcards existed keep matching exactly what they matched then.
+// (The one entry whose meaning does change is one that carried a literal '*':
+// it used to be a dead exact string and is now a pattern.)
 //
 // Entries match either the upstream id ("deepseek/deepseek-v4.1-flash") or
 // the client-facing id with the prefix applied
@@ -105,14 +113,73 @@ func (f ModelFilter) Excludes(upstreamID, publicID string) bool {
 
 func (f ModelFilter) matches(list []string, upstreamID, publicID string) bool {
 	for _, want := range list {
+		want = strings.TrimSpace(want)
 		if want == "" {
 			continue
 		}
-		if want == upstreamID || want == publicID {
+		// Either id form may match: the operator copies whichever one they
+		// see, and the wildcard must work against both.
+		if globMatch(want, upstreamID) || globMatch(want, publicID) {
 			return true
 		}
 	}
 	return false
+}
+
+// globMatch reports whether pattern matches name. '*' matches any run of
+// characters, including none; an empty pattern matches only an empty name.
+//
+// A pattern without '*' is compared exactly and IS case-sensitive: an entry
+// that worked before wildcards existed must keep matching exactly what it
+// matched then. Once a pattern carries a wildcard it is matched
+// case-insensitively, because a hand-written family pattern is written from
+// memory and model ids differ in case across providers.
+//
+// Iterative with backtracking (no regexp): this runs once per discovered model
+// while the catalog snapshot is built, so it must not allocate.
+func globMatch(pattern, name string) bool {
+	if !strings.Contains(pattern, "*") {
+		return pattern == name
+	}
+	p, n := 0, 0
+	star, mark := -1, 0
+	for n < len(name) {
+		switch {
+		case p < len(pattern) && pattern[p] == '*':
+			// Remember where to resume if the rest fails to line up.
+			star, mark = p, n
+			p++
+		case p < len(pattern) && asciiEqualFold(pattern[p], name[n]):
+			p++
+			n++
+		case star >= 0:
+			// Let the last '*' swallow one more character.
+			mark++
+			p, n = star+1, mark
+		default:
+			return false
+		}
+	}
+	for p < len(pattern) && pattern[p] == '*' {
+		p++
+	}
+	return p == len(pattern)
+}
+
+// asciiEqualFold compares two bytes for equality, folding ASCII case. Model
+// ids are ASCII, so the ASCII range is the whole story and unicode folding
+// would only cost time.
+func asciiEqualFold(a, b byte) bool {
+	if a == b {
+		return true
+	}
+	if 'A' <= a && a <= 'Z' {
+		a += 'a' - 'A'
+	}
+	if 'A' <= b && b <= 'Z' {
+		b += 'a' - 'A'
+	}
+	return a == b
 }
 
 type Config struct {

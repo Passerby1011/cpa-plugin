@@ -29,7 +29,7 @@ const ProviderID = "commandcode"
 // -ldflags "-X .../internal/plugin.pluginVersion=<version>".
 const pluginName = "commandcode"
 
-var pluginVersion = "0.5.3"
+var pluginVersion = "0.5.4"
 
 // SetVersion overrides the reported plugin version; the build injects it via
 // main.version (-ldflags). An empty value keeps the vendored default.
@@ -256,7 +256,8 @@ func configFields() []pluginapi.ConfigField {
 			Name: "models",
 			Type: pluginapi.ConfigFieldTypeObject,
 			Description: `Restrict which discovered models are published, e.g. ` +
-				`{"allow":["deepseek/deepseek-v4.1-flash"],"deny":["Qwen/qwen3-max"]}. ` +
+				`{"allow":["deepseek/deepseek-v4.1-flash"],"deny":["claude-*"]}. ` +
+				"A '*' matches any run of characters, including none. " +
 				"Empty allow publishes every discovered model; deny always wins. " +
 				"Ids match either the upstream id or the prefixed public id.",
 		},

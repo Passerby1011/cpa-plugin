@@ -498,3 +498,59 @@ func TestLoadWebUIStyleReconfigurePayload(t *testing.T) {
 		t.Error("a configured key must not be Pending")
 	}
 }
+
+// TestModelFilterWildcard covers the family-pattern behaviour the operator
+// asked for: 'claude-*' must drop a whole family without listing each model,
+// and the pattern must work against either id form.
+func TestModelFilterWildcard(t *testing.T) {
+	cases := []struct {
+		name     string
+		filter   ModelFilter
+		up, pub  string
+		excluded bool
+	}{
+		{"deny family by upstream", ModelFilter{Deny: []string{"claude-*"}},
+			"claude-haiku-5-5", "commandcode/claude-haiku-5-5", true},
+		{"deny family by nested id", ModelFilter{Deny: []string{"deepseek/deepseek-v4*"}},
+			"deepseek/deepseek-v4.1-flash", "commandcode/deepseek/deepseek-v4.1-flash", true},
+		{"family pattern leaves others", ModelFilter{Deny: []string{"claude-*"}},
+			"deepseek/deepseek-v4.1-flash", "commandcode/deepseek/deepseek-v4.1-flash", false},
+		{"pattern matches public id too", ModelFilter{Deny: []string{"commandcode/claude-*"}},
+			"claude-haiku-5-5", "commandcode/claude-haiku-5-5", true},
+		{"bare star denies all", ModelFilter{Deny: []string{"*"}},
+			"anything", "commandcode/anything", true},
+		{"wildcard is case-insensitive", ModelFilter{Deny: []string{"Claude-*"}},
+			"claude-haiku-5-5", "commandcode/claude-haiku-5-5", true},
+		{"middle wildcard", ModelFilter{Deny: []string{"deepseek/*-flash"}},
+			"deepseek/deepseek-v4-flash", "commandcode/deepseek/deepseek-v4-flash", true},
+		{"star matches empty run", ModelFilter{Deny: []string{"claude-*5"}},
+			"claude-5", "commandcode/claude-5", true},
+		{"exact entry stays case-sensitive", ModelFilter{Deny: []string{"Claude-x"}},
+			"claude-x", "commandcode/claude-x", false},
+		{"allow with wildcard", ModelFilter{Allow: []string{"deepseek/*"}},
+			"claude-haiku-5-5", "commandcode/claude-haiku-5-5", true},
+		{"allow wildcard keeps match", ModelFilter{Allow: []string{"deepseek/*"}},
+			"deepseek/deepseek-v4.1-flash", "commandcode/deepseek/deepseek-v4.1-flash", false},
+	}
+	for _, tc := range cases {
+		if got := tc.filter.Excludes(tc.up, tc.pub); got != tc.excluded {
+			t.Errorf("%s: Excludes(%q,%q) = %v, want %v", tc.name, tc.up, tc.pub, got, tc.excluded)
+		}
+	}
+}
+
+// TestModelFilterWildcardRegressionAgainstExactEntries pins that adding
+// wildcards did not change how an existing (no-'*') config behaves: a denial
+// must still be exact, not a loose prefix or substring match.
+func TestModelFilterWildcardRegressionAgainstExactEntries(t *testing.T) {
+	f := ModelFilter{Deny: []string{"claude-haiku-5-5"}}
+	if f.Excludes("claude-haiku-5-5", "commandcode/claude-haiku-5-5") == false {
+		t.Error("the exact id must still be denied")
+	}
+	if f.Excludes("claude-haiku-5-55", "commandcode/claude-haiku-5-55") {
+		t.Error("an exact entry must not start matching prefixes after wildcards were added")
+	}
+	if f.Excludes("CLAUDE-HAIKU-5-5", "commandcode/CLAUDE-HAIKU-5-5") {
+		t.Error("an exact entry must stay case-sensitive")
+	}
+}
