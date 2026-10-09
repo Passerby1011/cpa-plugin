@@ -78,7 +78,7 @@
       "name": "CommandCode Go/GOAT/Pro/Max",
       "description": "CommandCode Go/GOAT/Pro/Max plan as a single CLIProxyAPI provider (commandcode/ prefix): OpenAI, Anthropic and Responses clients off one API-key pool, reasoning/thinking preservation, chat-completions-only catalog routing, host-scheduled key pool and a CommandCode quota page. Repackaged from mczhoucn/commandcode-go-cliproxyapi (MIT).",
       "author": "mczhoucn",
-      "version": "0.4.6",
+      "version": "0.4.7",
       "repository": "https://github.com/Passerby1011/cpa-plugin",
       "homepage": "https://github.com/Passerby1011/cpa-plugin/tree/main/commandcode-go-cliproxyapi",
       "license": "MIT",
@@ -95,23 +95,23 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-go-cliproxyapi-v0.4.6/commandcode-go-cliproxyapi_0.4.6_linux_amd64.zip",
-            "sha256": "c58fe7ca08b962278512b4466774f7176c69e075dccf00f163e9ff771853e6cc",
-            "size": 2409193
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-go-cliproxyapi-v0.4.7/commandcode-go-cliproxyapi_0.4.7_linux_amd64.zip",
+            "sha256": "505dd72b4eb3a3daa4878dc8217806f1f2373daae72898e7d4572912f56d7cd5",
+            "size": 2412434
           },
           {
             "goos": "linux",
             "goarch": "arm64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-go-cliproxyapi-v0.4.6/commandcode-go-cliproxyapi_0.4.6_linux_arm64.zip",
-            "sha256": "8d95cfd040d3e5cc1bb3cb9c2c4ad4762aa5f68431f14b3c0eadab60f7a1e8be",
-            "size": 2182316
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-go-cliproxyapi-v0.4.7/commandcode-go-cliproxyapi_0.4.7_linux_arm64.zip",
+            "sha256": "933654970bf57903a544317978edfb469060396e198ff00ba58de05e61f23d78",
+            "size": 2186355
           },
           {
             "goos": "windows",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-go-cliproxyapi-v0.4.6/commandcode-go-cliproxyapi_0.4.6_windows_amd64.zip",
-            "sha256": "603838a1a74be5fd3a6f52255a920f067c0ee5df947ac5c87a690154386b6151",
-            "size": 2369822
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-go-cliproxyapi-v0.4.7/commandcode-go-cliproxyapi_0.4.7_windows_amd64.zip",
+            "sha256": "cf99983b77ea5dbcec0cfda53e385fb6b27d8a0d310bd139d74440459de0e5a0",
+            "size": 2373611
           }
         ]
       }
