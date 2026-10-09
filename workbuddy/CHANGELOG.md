@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.13.3
+
+### 修复（合并上游 0.12.2）
+
+- **未配置 usage 上报时不再探测 CPAMP 的 `/v0/management/usage/import`**：usage 上报 URL 为空
+  （或只有 key 没有 URL）时插件仍会发起探测请求；宿主对空管理密钥按失败计数，连点几次就把这个 IP
+  封 30 分钟，表现为「面板/网关突然全部 401」。现在 URL 或 key 缺一即**直接不做任何请求**，
+  上报保持关闭。删除 `probeUsageReportURL` / `probeURL` 与两个候选常量，`usage_config.go` 不再
+  import `net/http` / `time`。
+- **去掉硬编码的本机端口**：README 示例里的主机名与端口改成占位符；历史 CHANGELOG 里的探测
+  端口按上游口径更正为官方默认 `8317`。公开代码不再带本机私有端口值。
+- 测试随上游同步：删除 `TestUsageProbeObeysInheritedExplicitAndBlockedRouting`、
+  `TestUsageProbeRejectsRedirects`（二者只测已删除的 `probeURL`），新增
+  `TestUsageReportStaysOffWithoutConfiguredURL`（URL 或 key 缺失时不得凭空造 URL）。
+
+### 其它
+
+- 版本号 0.13.2 → 0.13.3。
+- 合并来源：上游 hex-ci/cpa-plugin `workbuddy-v0.12.2`（相对 `v0.12.1` 的全部改动）。
 ## 0.13.2
 
 ### 修复
@@ -695,7 +714,7 @@
 ## 0.6.23
 
 ### Fixed
-- usage import URL 自动探测：先试 127.0.0.1:18317（裸机/Docker host），再试 Docker 服务名 cpa-manager-plus:18317
+- usage import URL 自动探测：先试 127.0.0.1:8317（裸机/Docker host），再试 Docker 服务名 cpa-manager-plus:8317
   不再写死 Docker 服务名，裸机安装也能自动找到 CPAMP
 
 ## 0.6.22
