@@ -214,6 +214,17 @@ Each card's header states the **plan type** (`套餐 Go`, `套餐 GOAT`, …) wi
 monthly allowance, and shows `套餐未知` rather than nothing when the subscription could
 not be read. The plan comes from the same `planId` the table above already fetches.
 
+The page follows the **same design system as the WorkBuddy panel** (identical theme tokens
+from the CPA management panel's `key-policy / themes.scss`, the same component classes, and
+the same `data-theme` bridge that mirrors the parent shell). It is laid out like that panel:
+a toolbar (`刷新数据` refreshes every credential at once), filter pills with live counts
+(`全部 / 正常 / 已超限 / 套餐未知`), a search box, a remaining-credit sort, a summary card
+(剩余/已用/额度池/消耗占比 plus a consumption meter), and one card per credential whose
+5-hour, weekly and monthly allowances are all metered, colour-graded at 50/75/90%.
+
+Filters, search and sort operate only on the snapshot already fetched — they never issue a
+quota request, so a credential refreshes only when you ask it to.
+
 The page can also **add a key** ("＋ 添加 Key"): credential, optional label, and transport
 mode (`go-cli` for Go-plan keys — the default — or `provider`). The host gives a plugin no
 way to write its own config, so the key is stored as a **CPA auth record** and the plugin

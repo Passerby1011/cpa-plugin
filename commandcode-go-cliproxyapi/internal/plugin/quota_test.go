@@ -539,93 +539,119 @@ func TestQuotaPageUsesManualSessionCache(t *testing.T) {
 	}
 }
 
-func TestQuotaPageUsesNativeQuotaStylesAndThemeBridge(t *testing.T) {
+// TestQuotaPageUsesTheSharedPanelDesignSystem pins the page to the SAME design
+// system the WorkBuddy panel uses: the same theme tokens, the same component
+// classes and the same data-theme bridge. Visual parity with that panel is a
+// requirement, so a redesign that quietly forks the token names or the layout
+// vocabulary must fail here rather than look subtly different in production.
+func TestQuotaPageUsesTheSharedPanelDesignSystem(t *testing.T) {
+	page := resources.QuotaPage
 	for _, marker := range []string{
-		"quota-page",
-		"quota-grid",
-		"quota-card",
-		"quota-track",
-		"quota-fill",
-		".quota-fill.is-exceeded { background: var(--error-color); }",
-		// Colour grading now runs through gradeClass so >=50/75/90% warn before
-		// the vendor blocks the account.
-		`function gradeClass(usage) {`,
-		`fill.className = grade ? "quota-fill " + grade : "quota-fill"`,
-		`meta.className = grade === "is-exceeded" ? "quota-meta is-exceeded" : "quota-meta"`,
-		// The monthly allowance must stay metered like the two rate-limit
-		// windows instead of degrading back to a bare text row.
-		`label.textContent = "月度额度"`,
-		`if (month) { renderUsage(row, month, ["剩余 " + left.toFixed(2) + " 额度"], true); }`,
-		`[["five_hour", "5 小时窗口"], ["weekly", "每周窗口"]]`,
-		// M4: three split balances, warning badges, and the period aggregate
-		// behind a Details toggle.
-		`function balanceBlock(value, label) {`,
-		`balances.appendChild(balanceBlock(left, "剩余套餐额度"))`,
-		`balances.appendChild(balanceBlock(cached.purchased_credits, "充值额度"))`,
-		`balances.appendChild(balanceBlock(cached.free_credits, "赠送额度"))`,
-		`function badgesFor(usage) {`,
-		`badge("已被拦截：" + windowText(usage.exceeded_window), "is-danger")`,
-		`badge("余额偏低", "is-warn")`,
-		`badge("本期末取消", "is-warn")`,
-		`function detailSection(usage) {`,
-		`detailItem(box, String(Number(u.total_count || 0)), "请求数")`,
-		`detailItem(box, Number(u.total_tokens_in || 0).toLocaleString(), "输入 Token")`,
-		`"统计口径：" + u.period_basis`,
-		`toggle.textContent = open ? "收起详情" : "详情"`,
-		`.quota-badge.is-danger { color: var(--error-color); border-color: currentColor; }`,
-		`.quota-fill.is-watch { background: var(--warning-color); }`,
-		`if (usage) renderUsage(row, usage, null, name === "weekly");`,
-		`text(meta, "剩余 " + left.toFixed(2) + " 额度（套餐未知）")`,
-		`function renderUsage(row, usage, extraParts, withDaysLeft) {`,
-		`(extraParts || []).forEach(part => parts.push(part));`,
-		`const days = Math.max(0, Math.ceil((reset.getTime() - Date.now()) / 864e5));`,
-		`parts.push("剩余 " + days + " 天");`,
-		"repeat(auto-fill, minmax(380px, 1fr))",
-		"@media (max-width: 768px)",
-		`[data-theme="white"]`,
-		`[data-theme="dark"]`,
-		`window.parent.document`,
-		`data-theme`,
-		`--bg-secondary`,
-		`frameElement.style.backgroundColor`,
-		`frameElement.parentElement.style.backgroundColor`,
-		".quota-refresh",
-		"--bg-secondary: #faf9f5",
-		"--bg-primary: #f0eee8",
-		"--bg-tertiary: #e9e6df",
-		"--text-primary: #2d2a26",
-		"--text-secondary: #6d6760",
-		"--text-tertiary: #a29c95",
-		"--border-color: #e3e1db",
-		"--primary-color: #8b8680",
-		"--primary-hover: #7f7a74",
-		"border-radius: 8px; padding: 8px 10px",
-		`MutationObserver`,
-		`catch (_) {}`,
+		// Shared token set (key-policy / themes.scss). Renaming any of these
+		// breaks parity with the other plugin pages.
+		"--bg:#faf9f5", "--card:#ffffff", "--border:#e3e1db", "--fg:#2d2a26", "--mut:#6d6760",
+		"--acc:#4c8dff", "--ok:#10b981", "--warn:#e0aa14", "--err:#c65746",
+		"--surface:#f0eee8", "--surface-muted:#e9e6df", "--btn-sec:#eef1f6",
+		"--acc-ring:rgba(76,141,255,.18)", "color-scheme:light",
+		`:root[data-theme="white"]`, `:root[data-theme="dark"]`,
+		// The same class vocabulary the panel renders with.
+		`class="wrap"`, `class="bar"`, `class="ftag`, `id="summaryBox"`, `class="grid" id="app"`,
+		`class="badge`, `class="pb-track`, `class="pb-bar`, `class="cgroup"`,
+		`class="detail-grid"`, `class="field-input"`, `class="grid-hint"`, `class="footer"`,
+		".summary-item .v.ok{color:var(--ok)}",
+		".pb-bar.warn{background:var(--warn)}",
+		".pb-bar.err{background:var(--err)}",
+		"repeat(auto-fill,minmax(320px,1fr))",
+		"@media (max-width:768px)",
+		// Theme bridge: mirror the parent shell and paint the hosting frame so
+		// the embedded page cannot flash a default-white strip.
+		"window.parent.document", "data-theme",
+		`attributeFilter: ["data-theme"]`,
+		"frameElement.style.backgroundColor",
+		"frameElement.parentElement.style.backgroundColor",
+		"MutationObserver",
+		"catch (_) {}",
+		// Standalone light must fall back to the DEFAULT paper tokens (no
+		// explicit theme attribute), exactly like the WorkBuddy panel - only
+		// dark is an explicit theme.
+		`// Standalone light must land on the DEFAULT paper token set`,
 	} {
-		if !strings.Contains(resources.QuotaPage, marker) {
-			t.Fatalf("quota page missing styling marker %q", marker)
+		if !strings.Contains(page, marker) {
+			t.Fatalf("quota page missing shared-design marker %q", marker)
 		}
 	}
-	page := resources.QuotaPage
-	five := strings.Index(page, `["five_hour", "5 小时窗口"]`)
-	weekly := strings.Index(page, `["weekly", "每周窗口"]`)
-	month := strings.Index(page, `label.textContent = "月度额度"`)
-	if five < 0 || weekly < five || month < weekly {
-		t.Fatalf("quota rows out of order: five=%d weekly=%d month=%d", five, weekly, month)
+
+	// Colour grading still warns at 50/75/90% before the vendor blocks the
+	// account, and it now drives the panel's bar classes.
+	for _, marker := range []string{
+		`function gradeClass(usage) {`,
+		`if (gradePercent >= 90) return "is-exceeded";`,
+		`if (gradePercent >= 75) return "is-critical";`,
+		`if (gradePercent >= 50) return "is-watch";`,
+		`function barClass(usage) {`,
+		`if (grade === "is-exceeded") return "pb-bar err";`,
+	} {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("quota page missing colour-grading marker %q", marker)
+		}
 	}
-	// The page may have exactly one REFRESH path. Other buttons are allowed
-	// (M4 adds a Details toggle), so the guard is scoped to refresh controls
-	// rather than to createElement("button") as a whole.
-	// 反向守卫：不得出现第二套刷新按钮类名或第二处刷新文案。
-	if strings.Contains(resources.QuotaPage, `textContent = "Refresh"`) ||
-		strings.Contains(resources.QuotaPage, "quota-button") ||
-		strings.Contains(resources.QuotaPage, "quota-refresh-small") ||
-		strings.Count(resources.QuotaPage, `quota-refresh"`) != 1 {
-		t.Fatal("quota page does not have exactly one secondary refresh button path")
+
+	// Every allowance is metered. The monthly plan credit must stay a real
+	// meter rather than degrading back to a bare text row, and an unknown plan
+	// must not invent a denominator.
+	for _, marker := range []string{
+		`function windowGroup(name, usage, withDaysLeft) {`,
+		`windowGroup("5 小时窗口", usage.five_hour || {}, false)`,
+		`windowGroup("每周窗口", usage.weekly || {}, true)`,
+		`function monthBlock(usage) {`,
+		`body = monthBlock(usage) +`,
+		`额度（套餐未知，仅上报余额）`,
+	} {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("quota page missing metered-window marker %q", marker)
+		}
 	}
-	for _, marker := range []string{"querySelectorAll('head link[rel=\"stylesheet\"], head style')", "cloneNode(true)", "dataset.cpaStyle"} {
-		if strings.Contains(resources.QuotaPage, marker) {
+
+	// Three split balances, the vendor warning badges, and the period aggregate
+	// behind the Details toggle.
+	for _, marker := range []string{
+		`套餐 ' + fmt(usage.credits_left)`,
+		`· 充值 ' + fmt(usage.purchased_credits)`,
+		`· 赠送 ' + fmt(usage.free_credits)`,
+		`function badgesFor(usage) {`,
+		`"已被拦截：" + windowText(usage.exceeded_window)`,
+		`"余额偏低"`,
+		`"本期末取消"`,
+		`function detailSection(usage) {`,
+		`"请求数"`,
+		`"输入 Token"`,
+		`统计口径：`,
+		`"收起详情" : "详情"`,
+	} {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("quota page missing card-content marker %q", marker)
+		}
+	}
+
+	// The two rate-limit windows must render in vendor priority order.
+	five := strings.Index(page, `windowGroup("5 小时窗口"`)
+	weekly := strings.Index(page, `windowGroup("每周窗口"`)
+	if five < 0 || weekly < five {
+		t.Fatalf("quota windows out of order: five=%d weekly=%d", five, weekly)
+	}
+
+	// Exactly one REFRESH path. Other buttons are allowed (filters, the Details
+	// toggle, the add-key form), so the guard is scoped to the refresh control
+	// rather than to buttons as a whole.
+	if strings.Contains(page, `textContent = "Refresh"`) ||
+		strings.Contains(page, "quota-refresh") ||
+		strings.Count(page, `data-refresh="`) != 1 {
+		t.Fatal("quota page does not have exactly one refresh button path")
+	}
+
+	// The page must style itself, never clone the parent's stylesheets.
+	for _, marker := range []string{`querySelectorAll('head link[rel="stylesheet"], head style')`, "cloneNode(true)", "dataset.cpaStyle"} {
+		if strings.Contains(page, marker) {
 			t.Fatalf("quota page still clones parent styles: %q", marker)
 		}
 	}

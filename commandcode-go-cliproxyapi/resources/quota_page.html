@@ -1,160 +1,225 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CommandCode 配额</title>
 <style>
-:root {
-  --bg-primary: #f0eee8;
-  --bg-secondary: #faf9f5;
-  --bg-tertiary: #e9e6df;
-  --text-primary: #2d2a26;
-  --text-secondary: #6d6760;
-  --text-tertiary: #a29c95;
-  --border-color: #e3e1db;
-  --primary-color: #8b8680;
-  --primary-hover: #7f7a74;
-  --success-color: #188038;
-  --warning-color: #b06000;
-  --error-color: #b3261e;
-  --radius-md: 8px;
-  --shadow: 0 1px 3px rgba(45, 42, 38, .12);
+/* Theme tokens are the SAME set the WorkBuddy panel and the CPA management
+   panel use (key-policy / themes.scss): default :root = light (paper);
+   data-theme=white | dark; an embedded iframe mirrors the parent. Sharing the
+   token names is what keeps the two plugin pages visually identical instead of
+   merely similar - do not rename them. */
+:root{
+  --bg:#faf9f5;--card:#ffffff;--border:#e3e1db;--fg:#2d2a26;--mut:#6d6760;
+  --acc:#4c8dff;--on-acc:#ffffff;--ok:#10b981;--warn:#e0aa14;--err:#c65746;
+  --surface:#f0eee8;--surface-muted:#e9e6df;--btn-sec:#eef1f6;--btn-sec-hover:#e4e8ef;
+  --input-bg:#ffffff;--code-bg:#f3f4f6;--code-fg:#374151;--placeholder:rgba(109,103,96,.55);
+  --ok-soft:rgba(16,185,129,.10);--ok-border:rgba(16,185,129,.30);
+  --warn-soft:rgba(224,170,20,.12);--warn-border:rgba(224,170,20,.32);
+  --err-soft:rgba(198,87,70,.10);--err-border:rgba(198,87,70,.30);
+  --mut-soft:rgba(109,103,96,.12);--mut-border:rgba(109,103,96,.28);
+  --acc-ring:rgba(76,141,255,.18);--radius-md:12px;--radius-lg:16px;
+  color-scheme:light
 }
-[data-theme="white"] {
-  --bg-primary: #f0eee8;
-  --bg-secondary: #faf9f5;
-  --bg-tertiary: #e9e6df;
-  --text-primary: #2d2a26;
-  --text-secondary: #6d6760;
-  --text-tertiary: #a29c95;
-  --border-color: #e3e1db;
+:root[data-theme="white"]{
+  --bg:#f5f5f5;--card:#ffffff;--border:#e6e6e6;--fg:#1f1f1f;--mut:#707070;
+  --surface:#fafafa;--surface-muted:#efefef;--btn-sec:#f0f0f0;--btn-sec-hover:#e8e8e8;
+  --input-bg:#ffffff;--code-bg:#f3f4f6;--code-fg:#374151;--placeholder:rgba(112,112,112,.55);
+  color-scheme:light
 }
-[data-theme="dark"] {
-  --bg-primary: #1d1b18;
-  --bg-secondary: #151412;
-  --bg-tertiary: #262320;
-  --text-primary: #f0eee8;
-  --text-secondary: #b8b1a8;
-  --text-tertiary: #8d867e;
-  --border-color: #3c3833;
-  --primary-color: #8f8981;
-  --primary-hover: #a29b92;
-  --shadow: 0 1px 3px rgba(0, 0, 0, .35);
+:root[data-theme="dark"]{
+  --bg:#1e1d1b;--card:#26241f;--border:#3a3833;--fg:#ede9e3;--mut:#9a948c;
+  --acc:#4c8dff;--on-acc:#ffffff;--ok:#34d399;--warn:#f0c050;--err:#e07a6a;
+  --surface:#2f2d28;--surface-muted:#35332e;--btn-sec:#35332e;--btn-sec-hover:#3f3c36;
+  --input-bg:#1e1d1b;--code-bg:#35332e;--code-fg:#d6d1c9;--placeholder:rgba(154,148,140,.55);
+  --ok-soft:rgba(52,211,153,.12);--ok-border:rgba(52,211,153,.38);
+  --warn-soft:rgba(240,192,80,.14);--warn-border:rgba(240,192,80,.38);
+  --err-soft:rgba(224,122,106,.12);--err-border:rgba(224,122,106,.38);
+  --mut-soft:rgba(154,148,140,.16);--mut-border:rgba(154,148,140,.32);
+  --acc-ring:rgba(76,141,255,.28);
+  color-scheme:dark
 }
-* { box-sizing: border-box; }
-html, body { min-height: 100%; }
-body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--bg-secondary); font: 14px/1.45 system-ui, sans-serif; }
-.quota-page { max-width: 1160px; margin: 0 auto; }
-.quota-header { margin-bottom: 24px; }
-.quota-title { margin: 0; font-size: 28px; font-weight: 700; line-height: 1.2; }
-.quota-description { margin: 8px 0 0; color: var(--text-secondary); }
-.quota-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; }
-.quota-card { padding: 20px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-primary); box-shadow: var(--shadow); }
-.quota-card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
-.credential-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 8px; border-radius: 999px; color: #fff; background: var(--primary-color); font-size: 12px; font-weight: 700; }
-.credential-name { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 16px; font-weight: 600; }
-/* Plan type, spelled out. The round badge above already carries the plan, but
-   it is a bare acronym that operators read as the account label; this chip
-   states it in words, and shows 套餐未知 instead of hiding an unknown plan. */
-.credential-plan { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; font-weight: 600; white-space: nowrap; }
-.credential-plan.is-unknown { color: var(--text-tertiary); font-weight: 500; }
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:24px 16px}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--mut);font-size:13px;margin-bottom:20px}
+.bar{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+button{background:var(--acc);color:var(--on-acc);border:0;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px;font-family:inherit}
+button.sec{background:var(--btn-sec);color:var(--fg)}
+button.sec:hover{background:var(--btn-sec-hover)}
+button:disabled{opacity:.5;cursor:default}
+.toggle{display:flex;gap:8px;align-items:center;color:var(--mut);font-size:13px}
 /* Add-key form: collapsed by default so this stays a quota view first. */
-.quota-add { margin: 0 0 16px; }
-.quota-add-toggle { padding: 7px 14px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--bg-primary); color: var(--text-secondary); font-size: 13px; font-weight: 600; cursor: pointer; }
-.quota-add-toggle:hover { border-color: var(--primary-color); color: var(--primary-color); }
-.quota-add-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--bg-secondary); }
-.quota-add-input { padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); font-size: 13px; font-family: inherit; }
-#addKey { flex: 1 1 260px; min-width: 200px; }
-#addLabel { flex: 0 1 160px; }
-.quota-add-submit { padding: 7px 16px; border: 1px solid var(--primary-color); border-radius: 6px; background: var(--primary-color); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; }
-.quota-add-submit:disabled { opacity: .55; cursor: default; }
-.quota-add-status { font-size: 12px; color: var(--text-secondary); }
-.quota-add-status.is-error { color: var(--error-color); }
-.quota-add-status.is-ok { color: var(--success-color); }
-.quota-row { padding: 14px 0; border-top: 1px solid var(--border-color); }
-.quota-row-header, .quota-meta { display: flex; justify-content: space-between; gap: 12px; }
-.quota-label { font-weight: 600; }
-.quota-percent { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.quota-track { height: 8px; margin: 8px 0 6px; overflow: hidden; border-radius: 999px; background: var(--bg-tertiary); }
-.quota-fill { height: 100%; border-radius: inherit; background: var(--success-color); transition: width .2s ease; }
-/* Colour grading: the bar warns before the vendor blocks the account. */
-.quota-fill.is-watch { background: var(--warning-color); }
-.quota-fill.is-critical { background: #d97706; }
-.quota-fill.is-exceeded { background: var(--error-color); }
-.quota-meta.is-exceeded { color: var(--error-color); }
-.quota-meta { color: var(--text-secondary); font-size: 12px; }
-.quota-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.quota-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--border-color); color: var(--text-secondary); background: var(--bg-tertiary); }
-.quota-badge.is-warn { color: var(--warning-color); border-color: currentColor; }
-.quota-badge.is-danger { color: var(--error-color); border-color: currentColor; }
-.quota-balances { display: flex; flex-wrap: wrap; gap: 16px; padding: 14px 0; border-top: 1px solid var(--border-color); }
-.quota-balance { display: flex; flex-direction: column; gap: 2px; }
-.quota-balance-value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.quota-balance-label { color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
-.quota-detail-toggle { margin-top: 12px; border: 1px solid var(--border-color); border-radius: 8px; padding: 6px 10px; color: var(--text-primary); background: var(--bg-tertiary); font: inherit; font-size: 12px; cursor: pointer; }
-.quota-detail-toggle:hover { border-color: var(--primary-color); background: var(--bg-primary); }
-.quota-detail { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 16px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); }
-.quota-detail-item { display: flex; flex-direction: column; gap: 2px; }
-.quota-detail-value { font-variant-numeric: tabular-nums; font-weight: 600; }
-.quota-detail-label { color: var(--text-secondary); font-size: 11px; }
-.quota-detail-note { grid-column: 1 / -1; color: var(--text-tertiary); font-size: 11px; }
-.quota-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
-.quota-refresh { border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 10px; color: var(--text-primary); background: var(--bg-tertiary); font: inherit; font-size: 12px; cursor: pointer; }
-.quota-refresh:hover { border-color: var(--primary-color); background: var(--bg-primary); }
-.quota-refresh:disabled { cursor: not-allowed; opacity: .6; }
-.quota-error { color: var(--error-color); }
-.quota-warning { color: var(--warning-color); }
-.quota-muted { color: var(--text-secondary); }
-@media (max-width: 768px) {
-  body { padding: 20px 16px; }
-  .quota-grid { grid-template-columns: 1fr; }
+.add-panel{margin-bottom:14px}
+.add-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.field-input{flex:1;min-width:180px;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--fg);font-family:inherit;font-size:13px;outline:none}
+.field-input:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-ring)}
+.field-input::placeholder{color:var(--placeholder)}
+select.field-input{flex:0 0 auto;min-width:150px}
+#addKey{flex:1 1 260px}
+.add-status{font-size:12px;color:var(--mut);flex:1 1 100%}
+.add-status.is-ok{color:var(--ok)}
+.add-status.is-error{color:var(--err)}
+.filter-bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.ftag{background:var(--surface);border:1px solid var(--border);color:var(--mut);border-radius:99px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:600;font-family:inherit}
+.ftag.active{background:var(--acc);color:var(--on-acc);border-color:var(--acc)}
+.ftag .cnt{font-size:10px;opacity:.75;margin-left:4px}
+/* Summary and account cards share --card so the two never drift apart. */
+.summary,.card{background:var(--card);border:1px solid var(--border);border-radius:12px}
+.summary{padding:16px;margin-bottom:14px}
+.summary-hd{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.summary-title{font-weight:700;font-size:14px}
+.summary-meta{color:var(--mut);font-size:12px}
+.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:10px}
+.summary-item{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.summary-item .k{color:var(--mut);font-size:11px;margin-bottom:4px}
+.summary-item .v{font-size:18px;font-weight:700}
+.summary-item .v.ok{color:var(--ok)}
+.summary-item .v.warn{color:var(--warn)}
+.summary-item .v.err{color:var(--err)}
+.summary .pb{margin-top:4px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.card{padding:16px}
+.card h2{font-size:15px;margin:0 0 2px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.card-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card-badges{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.uid{color:var(--mut);font-size:11px;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:12px}
+.badge{font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--mut-soft);color:var(--mut);border:1px solid var(--mut-border)}
+.badge.plan{background:var(--acc-ring);color:var(--acc);border-color:var(--acc)}
+.badge.unknown{background:var(--mut-soft);color:var(--mut);border-color:var(--mut-border)}
+.badge.exceeded{background:var(--err-soft);color:var(--err);border-color:var(--err-border)}
+.badge.warn{background:var(--warn-soft);color:var(--warn);border-color:var(--warn-border)}
+.pb{margin-top:10px}
+.pb-label{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--mut);margin-bottom:6px}
+.pb-track{height:8px;background:var(--surface-muted);border-radius:99px;overflow:hidden}
+.pb-bar{height:100%;background:var(--ok);border-radius:99px;transition:width .6s ease}
+.pb-bar.warn{background:var(--warn)}
+.pb-bar.err{background:var(--err)}
+.pb-meta{font-size:11px;color:var(--mut);margin-top:6px}
+.cgroups{margin-top:10px;border-top:1px dashed var(--border);padding-top:8px}
+.cgroup{margin-bottom:8px}
+.cgroup:last-child{margin-bottom:0}
+.cg-head{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);margin-bottom:4px}
+.cg-name{font-weight:600;color:var(--fg)}
+.cg-nums{margin-left:auto;font-variant-numeric:tabular-nums}
+.cg-track{height:5px}
+.cg-time{font-size:11px;color:var(--mut);margin-top:3px}
+.ctag{font-size:10px;font-weight:600;border:1px solid var(--border);border-radius:99px;padding:1px 8px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-top:1px dashed var(--border)}
+.row:first-of-type{border-top:0}
+.k{color:var(--mut)}
+.v{font-weight:600}
+.v.ok{color:var(--ok)}.v.warn{color:var(--warn)}.v.err{color:var(--err)}
+.detail{margin-top:10px;border-top:1px dashed var(--border);padding-top:8px}
+.detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px}
+.detail-item{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 10px}
+.detail-value{display:block;font-weight:700;font-size:13px;font-variant-numeric:tabular-nums}
+.detail-label{display:block;color:var(--mut);font-size:11px;margin-top:2px}
+.detail-note{color:var(--mut);font-size:11px;margin-top:8px}
+.actions{margin-top:12px;display:flex;gap:8px;align-items:center}
+.card-err{color:var(--err);font-size:12px}
+/* Grid placeholder copy (empty / loading / failed). The class is deliberately
+   not called "loading" so no bare .loading rule can inflate it. */
+.grid-hint{color:var(--mut);text-align:center;padding:40px}
+.footer{margin-top:18px;text-align:center;color:var(--mut);font-size:12px}
+.footer strong{color:var(--fg);font-weight:600}
+@media (max-width:768px){
+  .wrap{padding:16px 12px}
+  .grid{grid-template-columns:1fr}
 }
 </style>
 </head>
 <body>
-<div class="quota-page">
-  <header class="quota-header"><h1 class="quota-title">CommandCode 配额</h1><p class="quota-description">每个已配置凭据的用量。新账号会自动刷新。</p></header>
-  <section class="quota-add">
-    <button type="button" class="quota-add-toggle" id="addToggle" aria-expanded="false" aria-controls="addForm">＋ 添加 Key</button>
-    <form class="quota-add-form" id="addForm" hidden>
-      <input class="quota-add-input" id="addKey" type="password" autocomplete="off" spellcheck="false" placeholder="CommandCode key（user_…）" aria-label="CommandCode key">
-      <input class="quota-add-input" id="addLabel" type="text" autocomplete="off" spellcheck="false" placeholder="备注（可选）" aria-label="备注">
-      <select class="quota-add-input" id="addMode" aria-label="传输模式">
+<div class="wrap">
+  <h1>CommandCode 配额</h1>
+  <div class="sub">套餐额度 · 5 小时 / 每周 / 每月窗口 · 每个凭据独立刷新</div>
+  <div class="bar">
+    <button id="refreshAll">刷新数据</button>
+    <button class="sec" id="addToggle" aria-expanded="false" aria-controls="addForm">＋ 添加 Key</button>
+    <span class="toggle" id="svtime"></span>
+  </div>
+  <div class="add-panel">
+    <form class="card add-form" id="addForm" hidden>
+      <input class="field-input" id="addKey" type="password" autocomplete="off" spellcheck="false" placeholder="CommandCode key（user_…）" aria-label="CommandCode key">
+      <input class="field-input" id="addLabel" type="text" autocomplete="off" spellcheck="false" placeholder="备注（可选）" aria-label="备注">
+      <select class="field-input" id="addMode" aria-label="传输模式">
         <option value="go-cli">go-cli（Go 套餐）</option>
         <option value="provider">provider（Provider 套餐）</option>
       </select>
-      <button type="submit" class="quota-add-submit" id="addSubmit">添加</button>
-      <span class="quota-add-status" id="addStatus" role="status"></span>
+      <button type="submit" id="addSubmit">添加</button>
+      <span class="add-status" id="addStatus" role="status"></span>
     </form>
-  </section>
-  <main id="app"><p class="quota-muted">正在加载凭据…</p></main>
+  </div>
+  <div class="filter-bar">
+    <button type="button" class="ftag active" data-filter="all">全部 <span class="cnt" id="cntAll">0</span></button>
+    <button type="button" class="ftag" data-filter="ok">正常 <span class="cnt" id="cntOk">0</span></button>
+    <button type="button" class="ftag" data-filter="exceeded">已超限 <span class="cnt" id="cntExceeded">0</span></button>
+    <button type="button" class="ftag" data-filter="unknown">套餐未知 <span class="cnt" id="cntUnknown">0</span></button>
+    <input class="field-input" id="accountSearch" type="search" placeholder="搜索备注、邮箱、文件名或 key id" aria-label="搜索凭据">
+    <button type="button" class="ftag" id="remainSort">剩余额度：原始顺序</button>
+  </div>
+  <div class="summary card" id="summaryBox" hidden></div>
+  <div class="grid" id="app"><div class="grid-hint">加载中…</div></div>
+  <footer class="footer">额度池 = 已用 + 剩余；<strong>先看 5 小时窗口，再看每周窗口</strong>，月度额度按订阅周期重置。</footer>
 </div>
 <script>
+/* Early theme sync (before body paint): mirror the CPA parent's data-theme when
+   embedded, otherwise follow prefers-color-scheme. Same semantics as the
+   WorkBuddy panel and cpa-plugin-key-policy - the DOM data-theme attribute is
+   the source of truth, so the two plugin pages cannot drift apart. */
 (() => {
   try {
     const parentDocument = window.parent && window.parent !== window ? window.parent.document : null;
     const parentRoot = parentDocument && parentDocument.documentElement;
-    const syncTheme = () => {
-      if (!parentRoot) return;
-      const theme = parentRoot.getAttribute("data-theme");
-      if (theme === "white" || theme === "dark") document.documentElement.setAttribute("data-theme", theme);
+    const systemTheme = () => {
+      try { return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; } catch (_) { return "light"; }
+    };
+    // Standalone light must land on the DEFAULT paper token set (no attribute),
+    // exactly like the WorkBuddy panel - only dark is an explicit theme.
+    const applySystem = () => {
+      if (systemTheme() === "dark") document.documentElement.setAttribute("data-theme", "dark");
       else document.documentElement.removeAttribute("data-theme");
-      const secondary = getComputedStyle(parentRoot).getPropertyValue("--bg-secondary").trim();
-      if (secondary) document.documentElement.style.setProperty("--bg-secondary", secondary);
-      document.body.style.backgroundColor = secondary || "var(--bg-secondary)";
+    };
+    // Paint the hosting frame with the page background so a resize cannot flash
+    // a default-white strip around the embedded page.
+    const paintFrame = () => {
+      let background = "";
+      try { background = getComputedStyle(document.body).backgroundColor || ""; } catch (_) {}
+      if (!background) return;
       if (window.frameElement) {
-        window.frameElement.style.backgroundColor = secondary || "transparent";
-        if (window.frameElement.parentElement) window.frameElement.parentElement.style.backgroundColor = secondary || "transparent";
+        window.frameElement.style.backgroundColor = background;
+        if (window.frameElement.parentElement) window.frameElement.parentElement.style.backgroundColor = background;
       }
     };
+    const syncTheme = () => {
+      const theme = parentRoot ? parentRoot.getAttribute("data-theme") : null;
+      if (theme === "white" || theme === "dark") document.documentElement.setAttribute("data-theme", theme);
+      else document.documentElement.removeAttribute("data-theme");
+      if (!theme) applySystem();
+    };
     syncTheme();
-    if (parentRoot) new MutationObserver(syncTheme).observe(parentRoot, {attributes: true, attributeFilter: ["data-theme"]});
+    paintFrame();
+    if (parentRoot) {
+      new MutationObserver(() => { syncTheme(); paintFrame(); }).observe(parentRoot, {attributes: true, attributeFilter: ["data-theme"]});
+    } else {
+      try {
+        const media = window.matchMedia("(prefers-color-scheme: dark)");
+        const on = () => syncTheme();
+        if (media.addEventListener) media.addEventListener("change", on);
+        else if (media.addListener) media.addListener(on);
+      } catch (_) {}
+    }
   } catch (_) {}
 })();
 </script>
 <script>
 (() => {
+  // All markup below is built as template strings. Every interpolated value is
+  // either a locally computed number or a string passed through esc(), and the
+  // only credential-adjacent text that reaches the DOM is a key id / label /
+  // email already returned by the plugin - so nothing can inject markup.
   const app = document.getElementById("app");
   const endpoint = "/v0/management/plugins/commandcode-go-cliproxyapi/quota-usage";
   const accountsEndpoint = "/v0/management/plugins/commandcode-go-cliproxyapi/accounts";
@@ -187,29 +252,6 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     cache[keyID] = {usage, fetched_at: timestamp, label: labels.get(keyID) || ""};
     saveCache();
   }
-  function refreshCard(card, cards, alreadyQueued) {
-    if (!alreadyQueued) {
-      if (inFlight.has(card.key_id)) return Promise.resolve();
-      inFlight.add(card.key_id);
-      errors.delete(card.key_id);
-      render(cards);
-    }
-    return request({key_id: card.key_id}).then(result => {
-      inFlight.delete(card.key_id);
-      if (result.error) {
-        errors.set(card.key_id, result.error);
-        render(cards);
-        return;
-      }
-      if (result.email) card.email = result.email;
-      applyUsage(card.key_id, result.usage, result.label);
-      render(cards);
-    }).catch(err => {
-      inFlight.delete(card.key_id);
-      errors.set(card.key_id, err.message || "刷新失败");
-      render(cards);
-    });
-  }
   function auth() {
     const raw = localStorage.getItem("cli-proxy-auth");
     if (!raw) return "";
@@ -237,8 +279,13 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     });
   }
   function request(body) { return send(endpoint, body); }
-  function text(parent, value) { const node = document.createElement("span"); node.textContent = value == null || value === "" ? "-" : value; parent.appendChild(node); }
-  // 状态词与窗口名转中文。未知值原样透出，避免把新状态吞成空白。
+  function esc(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, ch => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[ch]));
+  }
+  function num(value) { return Number(value) || 0; }
+  function fmt(value) { return num(value).toFixed(2); }
+  // Status words and window names go to Chinese. An unknown value passes
+  // through unchanged rather than being swallowed into a blank.
   function statusText(status) {
     const map = {ok: "正常", exceeded: "已超限", unlimited: "不限量"};
     return map[status] || status || "正常";
@@ -247,159 +294,312 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     const map = {fiveHour: "5 小时窗口", five_hour: "5 小时窗口", weekly: "每周窗口"};
     return map[name] || name;
   }
+  // Colour grading warns at 50/75/90% so an operator sees the wall coming
+  // before the vendor blocks the account.
   function gradeClass(usage) {
     if (usage.status === "exceeded") return "is-exceeded";
-    const gradePercent = Number(usage.percent) || 0;
+    const gradePercent = num(usage.percent);
     if (gradePercent >= 90) return "is-exceeded";
     if (gradePercent >= 75) return "is-critical";
     if (gradePercent >= 50) return "is-watch";
     return "";
   }
-  function renderUsage(row, usage, extraParts, withDaysLeft) {
-    const value = document.createElement("div"); value.className = "quota-percent";
-    const track = document.createElement("div"); track.className = "quota-track";
+  function barClass(usage) {
     const grade = gradeClass(usage);
-    const fill = document.createElement("div"); fill.className = grade ? "quota-fill " + grade : "quota-fill";
-    const percent = Math.max(0, Math.min(100, Number(usage.percent) || 0));
-    fill.style.width = percent + "%";
-    track.setAttribute("role", "progressbar"); track.setAttribute("aria-valuemin", "0"); track.setAttribute("aria-valuemax", "100"); track.setAttribute("aria-valuenow", String(percent)); track.setAttribute("aria-label", "已用配额"); track.appendChild(fill);
-    value.textContent = percent + "%";
-    const meta = document.createElement("div"); meta.className = grade === "is-exceeded" ? "quota-meta is-exceeded" : "quota-meta";
-    const parts = [statusText(usage.status)];
-    if (Number(usage.cap) > 0) parts.push((Number(usage.used) || 0).toFixed(2) + " / " + Number(usage.cap).toFixed(2) + " 额度");
-    (extraParts || []).forEach(part => parts.push(part));
-    if (usage.resets_at) {
-      const reset = new Date(usage.resets_at);
-      parts.push("重置 " + reset.toLocaleString());
-      if (withDaysLeft && !Number.isNaN(reset.getTime())) {
-        const days = Math.max(0, Math.ceil((reset.getTime() - Date.now()) / 864e5));
-        parts.push("剩余 " + days + " 天");
-      }
+    if (grade === "is-exceeded") return "pb-bar err";
+    if (grade === "is-critical" || grade === "is-watch") return "pb-bar warn";
+    return "pb-bar";
+  }
+  function percentOf(usage) { return Math.max(0, Math.min(100, num(usage.percent))); }
+  function resetText(resetsAt, withDaysLeft) {
+    if (!resetsAt) return "";
+    const reset = new Date(resetsAt);
+    if (Number.isNaN(reset.getTime())) return "";
+    const parts = ["重置 " + reset.toLocaleString()];
+    if (withDaysLeft) parts.push("剩余 " + Math.max(0, Math.ceil((reset.getTime() - Date.now()) / 864e5)) + " 天");
+    return parts.join(" · ");
+  }
+  // One rate-limit / allowance window as a .cgroup row: name, metered bar and
+  // the reset instant - the same shape the panel uses for every window.
+  function windowGroup(name, usage, withDaysLeft) {
+    const pct = percentOf(usage);
+    const counted = num(usage.cap) > 0 ? "已用 " + fmt(usage.used) + " / " + fmt(usage.cap) : "已用 " + fmt(usage.used);
+    const at = resetText(usage.resets_at, withDaysLeft);
+    return '<div class="cgroup">' +
+      '<div class="cg-head"><span class="cg-name">' + esc(name) + '</span>' +
+      '<span class="ctag">' + esc(statusText(usage.status)) + '</span>' +
+      '<span class="cg-nums">' + esc(counted) + ' · ' + pct + '%</span></div>' +
+      '<div class="pb-track cg-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="' + esc(name) + '已用配额">' +
+      '<div class="' + barClass(usage) + '" style="width:' + pct + '%"></div></div>' +
+      (at ? '<div class="cg-time">' + esc(at) + '</div>' : '') +
+      '</div>';
+  }
+  // The monthly plan allowance is the card's headline meter. When the plan is
+  // unknown the vendor reports only a remaining balance, so the meter becomes a
+  // plain balance line instead of a bar with an invented denominator.
+  function monthBlock(usage) {
+    const month = usage.month;
+    const left = num(usage.credits_left);
+    if (!month) {
+      return '<div class="pb"><div class="pb-label"><span>月度额度</span><span>套餐未知</span></div>' +
+        '<div class="pb-track"><div class="pb-bar" style="width:0%"></div></div>' +
+        '<div class="pb-meta">剩余 ' + fmt(left) + ' 额度（套餐未知，仅上报余额）</div></div>';
     }
-    text(meta, parts.join(" · "));
-    row.append(value, track, meta);
+    const pct = percentOf(month);
+    const at = resetText(month.resets_at, true);
+    return '<div class="pb"><div class="pb-label"><span>月度额度 · 可用 ' + fmt(left) + '</span>' +
+      '<span>已用 ' + fmt(month.used) + ' / ' + fmt(month.cap) + ' · ' + pct + '%</span></div>' +
+      '<div class="pb-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="月度额度已用">' +
+      '<div class="' + barClass(month) + '" style="width:' + pct + '%"></div></div>' +
+      '<div class="pb-meta">剩余 ' + fmt(left) + ' · 已用 ' + fmt(month.used) + ' · 额度池 ' + fmt(month.cap) +
+      (at ? ' · ' + esc(at) : '') + '</div></div>';
   }
-  const detailOpen = new Set();
-  function balanceBlock(value, label) {
-    const box = document.createElement("div"); box.className = "quota-balance";
-    const v = document.createElement("span"); v.className = "quota-balance-value"; v.textContent = Number(value || 0).toFixed(2);
-    const l = document.createElement("span"); l.className = "quota-balance-label"; l.textContent = label;
-    box.append(v, l); return box;
-  }
-  function badge(text, kind) {
-    const node = document.createElement("span");
-    node.className = kind ? "quota-badge " + kind : "quota-badge";
-    node.textContent = text; return node;
+  function planBadge(usage) {
+    if (!usage || !usage.plan) return '<span class="badge unknown">套餐未知</span>';
+    // Only the vendor-supplied plan name is escaped; the static parts stay
+    // literals so the badge reads exactly "套餐 Go · 月额度 10".
+    return '<span class="badge plan">套餐 ' + esc(usage.plan) +
+      (num(usage.plan_credits) > 0 ? ' · 月额度 ' + num(usage.plan_credits).toFixed(0) : '') + '</span>';
   }
   function badgesFor(usage) {
     const out = [];
-    if (usage.exceeded_window) out.push(badge("已被拦截：" + windowText(usage.exceeded_window), "is-danger"));
-    if (usage.below_threshold) out.push(badge("余额偏低", "is-warn"));
-    if (usage.cancel_at_period_end) out.push(badge("本期末取消", "is-warn"));
-    if (usage.pending_phase) out.push(badge("套餐变更：" + usage.pending_phase, "is-warn"));
-    if (usage.limited && !usage.exceeded_window) out.push(badge("套餐受限流约束"));
-    return out;
+    if (usage.exceeded_window) out.push(['exceeded', "已被拦截：" + windowText(usage.exceeded_window)]);
+    if (usage.below_threshold) out.push(['warn', "余额偏低"]);
+    if (usage.cancel_at_period_end) out.push(['warn', "本期末取消"]);
+    if (usage.pending_phase) out.push(['warn', "套餐变更：" + usage.pending_phase]);
+    if (usage.limited && !usage.exceeded_window) out.push(['', "套餐受流控约束"]);
+    return out.map(entry => '<span class="badge ' + entry[0] + '">' + esc(entry[1]) + '</span>').join("");
   }
-  function detailItem(parent, value, label) {
-    const item = document.createElement("div"); item.className = "quota-detail-item";
-    const v = document.createElement("span"); v.className = "quota-detail-value"; v.textContent = value;
-    const l = document.createElement("span"); l.className = "quota-detail-label"; l.textContent = label;
-    item.append(v, l); parent.appendChild(item);
+  function detailItem(value, label) {
+    return '<div class="detail-item"><span class="detail-value">' + esc(value) + '</span><span class="detail-label">' + esc(label) + '</span></div>';
   }
   function detailSection(usage) {
     const u = usage.usage;
-    if (!u) return null;
-    const box = document.createElement("div"); box.className = "quota-detail";
-    const pct = value => Number(value || 0) * (Number(value || 0) <= 1 ? 100 : 1);
-    detailItem(box, String(Number(u.total_count || 0)), "请求数");
-    detailItem(box, pct(u.success_rate).toFixed(1) + "%", "成功率");
-    detailItem(box, String(Number(u.completed_count || 0)), "成功");
-    detailItem(box, String(Number(u.failed_count || 0)), "失败");
-    detailItem(box, Number(u.total_tokens_in || 0).toLocaleString(), "输入 Token");
-    detailItem(box, Number(u.total_tokens_out || 0).toLocaleString(), "输出 Token");
-    detailItem(box, Number(u.total_cost || 0).toFixed(2), "已消耗额度");
-    if (Number(u.average_cost || 0) > 0) detailItem(box, Number(u.average_cost).toFixed(4), "单次均值");
-    if (u.period_basis) {
-      const note = document.createElement("div"); note.className = "quota-detail-note";
-      note.textContent = "统计口径：" + u.period_basis;
-      box.appendChild(note);
-    }
-    return box;
+    if (!u) return "";
+    const pct = value => num(value) * (num(value) <= 1 ? 100 : 1);
+    const items = [
+      detailItem(String(num(u.total_count)), "请求数"),
+      detailItem(pct(u.success_rate).toFixed(1) + "%", "成功率"),
+      detailItem(String(num(u.completed_count)), "成功"),
+      detailItem(String(num(u.failed_count)), "失败"),
+      detailItem(num(u.total_tokens_in).toLocaleString(), "输入 Token"),
+      detailItem(num(u.total_tokens_out).toLocaleString(), "输出 Token"),
+      detailItem(num(u.total_cost).toFixed(2), "已消耗额度")
+    ];
+    if (num(u.average_cost) > 0) items.push(detailItem(num(u.average_cost).toFixed(4), "单次均值"));
+    return '<div class="detail"><div class="detail-grid">' + items.join("") + '</div>' +
+      (u.period_basis ? '<div class="detail-note">统计口径：' + esc(u.period_basis) + '</div>' : '') + '</div>';
   }
+  // Filter / search / sort act on the already-fetched snapshot: they must never
+  // trigger a quota request, so a card only ever refreshes when asked.
+  let currentFilter = "all";
+  let searchText = "";
+  let sortMode = "original";
+  let lastCards = [];
+  const detailOpen = new Set();
   let cardsCount = 0;
+  function isExceeded(usage) {
+    return !!usage && (!!usage.exceeded_window || usage.status === "exceeded" || gradeClass(usage.month || usage) === "is-exceeded");
+  }
+  function isUnknown(usage) { return !usage || !usage.plan; }
+  function matchesFilter(card) {
+    const usage = values.get(card.key_id);
+    if (currentFilter === "ok") return !!usage && !isExceeded(usage);
+    if (currentFilter === "exceeded") return isExceeded(usage);
+    if (currentFilter === "unknown") return isUnknown(usage);
+    return true;
+  }
+  function matchesSearch(card) {
+    if (!searchText) return true;
+    const usage = values.get(card.key_id) || {};
+    const haystack = [labels.get(card.key_id), card.label, card.email, card.key_id, usage.plan].filter(Boolean).join(" ").toLowerCase();
+    return haystack.indexOf(searchText) >= 0;
+  }
+  function remainOf(card) {
+    const usage = values.get(card.key_id);
+    return usage ? num(usage.credits_left) : -1;
+  }
+  function visibleCards() {
+    const out = lastCards.filter(card => matchesFilter(card) && matchesSearch(card));
+    if (sortMode === "asc") out.sort((a, b) => remainOf(a) - remainOf(b));
+    if (sortMode === "desc") out.sort((a, b) => remainOf(b) - remainOf(a));
+    return out;
+  }
+  function counts() {
+    let ok = 0, exceeded = 0, unknown = 0;
+    lastCards.forEach(card => {
+      const usage = values.get(card.key_id);
+      if (isExceeded(usage)) exceeded++;
+      else if (usage) ok++;
+      if (isUnknown(usage)) unknown++;
+    });
+    return {all: lastCards.length, ok, exceeded, unknown};
+  }
+  function cardHTML(card) {
+    const usage = values.get(card.key_id);
+    const displayName = card.email || labels.get(card.key_id) || card.label || card.key_id;
+    const stuck = inFlight.has(card.key_id);
+    const error = errors.get(card.key_id);
+    let body;
+    if (!usage) {
+      body = '<div class="pb"><div class="pb-label"><span>用量</span><span>' + (error ? '-' : '加载中…') + '</span></div>' +
+        '<div class="pb-track"><div class="pb-bar" style="width:0%"></div></div>' +
+        '<div class="pb-meta' + (error ? ' card-err' : '') + '">' + esc(error || "尚未刷新") + '</div></div>';
+    } else {
+      const groups = windowGroup("5 小时窗口", usage.five_hour || {}, false) + windowGroup("每周窗口", usage.weekly || {}, true);
+      const balances = '<div class="row"><span class="k">余额构成</span><span class="v">套餐 ' + fmt(usage.credits_left) +
+        (num(usage.purchased_credits) > 0 ? ' · 充值 ' + fmt(usage.purchased_credits) : '') +
+        (num(usage.free_credits) > 0 ? ' · 赠送 ' + fmt(usage.free_credits) : '') + '</span></div>';
+      const open = detailOpen.has(card.key_id);
+      const detail = usage.usage ? detailSection(usage) : "";
+      body = monthBlock(usage) +
+        '<div class="cgroups">' + groups + '</div>' +
+        balances +
+        (open ? detail : "") +
+        (detail ? '<div class="actions"><button type="button" class="sec" data-detail="' + esc(card.key_id) + '" aria-expanded="' + (open ? "true" : "false") + '">' + (open ? "收起详情" : "详情") + '</button></div>' : "");
+    }
+    const updated = fetchedAt.get(card.key_id);
+    return '<div class="card">' +
+      '<h2><span class="card-name" title="' + esc(displayName) + '">' + esc(displayName) + '</span>' +
+      '<span class="card-badges">' + planBadge(usage) + (usage ? badgesFor(usage) : "") + '</span></h2>' +
+      '<div class="uid">' + esc(card.key_id) + (card.label ? ' · ' + esc(card.label) : '') + '</div>' +
+      body +
+      (updated ? '<div class="pb-meta">更新时间 ' + esc(new Date(updated).toLocaleString()) + '</div>' : '') +
+      (error && usage ? '<div class="pb-meta card-err">' + esc(error) + '</div>' : '') +
+      '<div class="actions"><button type="button" class="sec" data-refresh="' + esc(card.key_id) + '" aria-label="刷新 ' + esc(card.label) + '"' + (stuck ? " disabled" : "") + '>' + (stuck ? "刷新中…" : "刷新") + '</button></div>' +
+      '</div>';
+  }
+  function accountCredit(usage) {
+    if (!usage) return null;
+    const used = usage.month ? num(usage.month.used) : Math.max(0, num(usage.plan_credits) - num(usage.credits_left));
+    const remain = num(usage.credits_left) + num(usage.purchased_credits) + num(usage.free_credits);
+    return {used, remain, pool: used + remain, extra: num(usage.purchased_credits) + num(usage.free_credits), exceeded: isExceeded(usage)};
+  }
+  function renderSummary() {
+    const box = document.getElementById("summaryBox");
+    if (!box) return;
+    const visible = visibleCards();
+    const tally = counts();
+    let remain = 0, used = 0, extra = 0, known = 0;
+    visible.forEach(card => {
+      const credit = accountCredit(values.get(card.key_id));
+      if (!credit) return;
+      known++;
+      used += credit.used;
+      extra += credit.extra;
+      // An account the vendor is already blocking is not spendable capacity.
+      if (!credit.exceeded) remain += credit.remain;
+    });
+    const pool = remain + used;
+    const pct = pool > 0 ? Math.round(used / pool * 100) : 0;
+    const bar = pct > 85 ? "pb-bar err" : (pct > 60 ? "pb-bar warn" : "pb-bar");
+    const scope = currentFilter === "all" ? "全部凭据" : (currentFilter === "ok" ? "正常凭据" : (currentFilter === "exceeded" ? "已超限凭据" : "套餐未知凭据"));
+    box.hidden = false;
+    box.innerHTML =
+      '<div class="summary-hd"><div class="summary-title">用量汇总 · ' + esc(scope) + '</div>' +
+      '<div class="summary-meta">' + visible.length + ' 个凭据 · 有数据 ' + known + ' · 已超限 ' + tally.exceeded + ' · 套餐未知 ' + tally.unknown + '</div></div>' +
+      '<div class="summary-grid">' +
+      '<div class="summary-item"><div class="k">剩余(可用)</div><div class="v ok">' + fmt(remain) + '</div></div>' +
+      '<div class="summary-item"><div class="k">已用(消耗)</div><div class="v ' + (pct > 85 ? "err" : (pct > 60 ? "warn" : "")) + '">' + fmt(used) + '</div></div>' +
+      '<div class="summary-item"><div class="k">额度池</div><div class="v">' + (pool > 0 ? fmt(pool) : "-") + '</div></div>' +
+      '<div class="summary-item"><div class="k">消耗占比</div><div class="v ' + (pct > 85 ? "err" : (pct > 60 ? "warn" : "ok")) + '">' + (pool > 0 ? pct + "%" : "-") + '</div></div>' +
+      '</div>' +
+      '<div class="pb"><div class="pb-label"><span>消耗进度（已用/额度池）</span><span>' + (pool > 0 ? pct + "%" : "-") + '</span></div>' +
+      '<div class="pb-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="消耗进度"><div class="' + bar + '" style="width:' + pct + '%"></div></div>' +
+      '<div class="pb-meta">可用 ' + fmt(remain) + ' · 已用 ' + fmt(used) + ' · 池 ' + (pool > 0 ? fmt(pool) : "-") +
+      (extra > 0 ? ' · 充值+赠送 ' + fmt(extra) : '') + '（池 = 已用 + 剩余）</div></div>';
+  }
   function render(cards) {
     cardsCount = cards.length;
-    app.textContent = "";
-    if (!cards.length) { const p = document.createElement("p"); p.className = "quota-muted"; p.setAttribute("role", "status"); p.textContent = "尚未配置任何凭据。"; app.appendChild(p); return; }
-    const grid = document.createElement("div"); grid.className = "quota-grid";
-    cards.forEach(card => {
-      const section = document.createElement("section"); section.className = "quota-card";
-      const header = document.createElement("div"); header.className = "quota-card-header";
-      const cached = values.get(card.key_id);
-      const plan = cached && cached.plan;
-      const badge = document.createElement("span"); badge.className = "credential-badge"; badge.textContent = plan || "CC"; badge.setAttribute("aria-hidden", "true");
-      const title = document.createElement("h2"); title.className = "credential-name"; title.textContent = labels.get(card.key_id) || card.label;
-      // Spell the plan out next to the account label: the round badge is an
-      // acronym an operator reads as the label, and an unknown plan must read
-      // 套餐未知 rather than silently showing nothing.
-      const planChip = document.createElement("span"); planChip.className = "credential-plan" + (plan ? "" : " is-unknown");
-      const allowance = cached && Number(cached.plan_credits) > 0 ? " · 月额度 " + Number(cached.plan_credits).toFixed(0) : "";
-      planChip.textContent = plan ? "套餐 " + plan + allowance : "套餐未知";
-      header.append(badge, title, planChip); section.appendChild(header);
-      [["five_hour", "5 小时窗口"], ["weekly", "每周窗口"]].forEach(entry => {
-        const name = entry[0];
-        const row = document.createElement("div"); row.className = "quota-row";
-        const rowHeader = document.createElement("div"); rowHeader.className = "quota-row-header"; const label = document.createElement("span"); label.className = "quota-label"; label.textContent = entry[1]; rowHeader.appendChild(label); row.appendChild(rowHeader);
-        const usage = values.get(card.key_id) && values.get(card.key_id)[name];
-        if (usage) renderUsage(row, usage, null, name === "weekly"); else { const pending = document.createElement("div"); pending.className = "quota-meta"; pending.textContent = "尚未刷新"; row.appendChild(pending); }
-        section.appendChild(row);
-      });
-      if (cached) {
-        const balances = document.createElement("div"); balances.className = "quota-balances";
-        const left = Number(cached.credits_left) || 0;
-        balances.appendChild(balanceBlock(left, "剩余套餐额度"));
-        if (cached.purchased_credits) balances.appendChild(balanceBlock(cached.purchased_credits, "充值额度"));
-        balances.appendChild(balanceBlock(cached.free_credits, "赠送额度"));
-        section.appendChild(balances);
-
-        const row = document.createElement("div"); row.className = "quota-row";
-        const rowHeader = document.createElement("div"); rowHeader.className = "quota-row-header"; const label = document.createElement("span"); label.className = "quota-label"; label.textContent = "月度额度"; rowHeader.appendChild(label); row.appendChild(rowHeader);
-        const month = cached.month;
-        if (month) { renderUsage(row, month, ["剩余 " + left.toFixed(2) + " 额度"], true); } else { const meta = document.createElement("div"); meta.className = "quota-meta"; text(meta, "剩余 " + left.toFixed(2) + " 额度（套餐未知）"); row.appendChild(meta); }
-        section.appendChild(row);
-
-        const badgeNodes = badgesFor(cached);
-        if (badgeNodes.length) {
-          const wrap = document.createElement("div"); wrap.className = "quota-badges";
-          badgeNodes.forEach(node => wrap.appendChild(node));
-          section.appendChild(wrap);
-        }
-
-        const detail = detailSection(cached);
-        if (detail) {
-          const toggle = document.createElement("button"); toggle.className = "quota-detail-toggle";
-          const open = detailOpen.has(card.key_id);
-          toggle.textContent = open ? "收起详情" : "详情";
-          toggle.setAttribute("aria-expanded", open ? "true" : "false");
-          toggle.onclick = () => {
-            if (detailOpen.has(card.key_id)) detailOpen.delete(card.key_id); else detailOpen.add(card.key_id);
-            render(cards);
-          };
-          section.appendChild(toggle);
-          if (open) section.appendChild(detail);
-        }
-      }
-      const updated = fetchedAt.get(card.key_id);
-      if (updated) { const timestamp = document.createElement("div"); timestamp.className = "quota-meta"; timestamp.textContent = "更新时间 " + new Date(updated).toLocaleString(); section.appendChild(timestamp); }
-      const actions = document.createElement("div"); actions.className = "quota-actions";
-      const button = document.createElement("button"); button.className = "quota-refresh"; button.textContent = inFlight.has(card.key_id) ? "刷新中…" : "刷新"; button.disabled = inFlight.has(card.key_id); button.setAttribute("aria-label", "刷新 " + card.label);
-      const error = document.createElement("span"); error.className = "quota-error"; error.setAttribute("role", "status"); error.textContent = errors.get(card.key_id) || "";
-      button.onclick = () => { refreshCard(card, cards); };
-      actions.append(button, error); section.appendChild(actions); grid.appendChild(section);
+    lastCards = cards;
+    const tally = counts();
+    const counters = {all: tally.all, ok: tally.ok, exceeded: tally.exceeded, unknown: tally.unknown};
+    Object.keys(counters).forEach(name => {
+      const node = document.getElementById("cnt" + name.charAt(0).toUpperCase() + name.slice(1));
+      if (node) node.textContent = String(counters[name]);
     });
-    app.appendChild(grid);
+    if (!cards.length) {
+      document.getElementById("summaryBox").hidden = true;
+      app.innerHTML = '<div class="grid-hint">尚未配置任何凭据。使用上方「＋ 添加 Key」或在插件配置里填写 accounts。</div>';
+      return;
+    }
+    const visible = visibleCards();
+    renderSummary();
+    app.innerHTML = visible.length ? visible.map(cardHTML).join("") : '<div class="grid-hint">没有符合当前筛选的凭据。</div>';
   }
-  if (!auth()) { app.textContent = ""; const p = document.createElement("p"); p.className = "quota-error"; p.setAttribute("role", "status"); p.textContent = "请在管理面板中开启「记住密码」后使用本页。"; app.appendChild(p); return; }
+  function refreshCard(card, cards, alreadyQueued) {
+    if (!alreadyQueued) {
+      if (inFlight.has(card.key_id)) return Promise.resolve();
+      inFlight.add(card.key_id);
+      errors.delete(card.key_id);
+      render(cards);
+    }
+    return request({key_id: card.key_id}).then(result => {
+      inFlight.delete(card.key_id);
+      if (result.error) {
+        errors.set(card.key_id, result.error);
+        render(cards);
+        return;
+      }
+      if (result.email) card.email = result.email;
+      applyUsage(card.key_id, result.usage, result.label);
+      render(cards);
+    }).catch(err => {
+      inFlight.delete(card.key_id);
+      errors.set(card.key_id, err.message || "刷新失败");
+      render(cards);
+    });
+  }
+  function cardByID(keyID) { return lastCards.filter(card => card.key_id === keyID)[0]; }
+  // One delegated listener: cards are re-rendered wholesale, so per-node
+  // handlers would have to be rebound on every pass.
+  app.addEventListener("click", event => {
+    const refresh = event.target.closest("[data-refresh]");
+    if (refresh) {
+      const card = cardByID(refresh.getAttribute("data-refresh"));
+      if (card) refreshCard(card, lastCards);
+      return;
+    }
+    const detail = event.target.closest("[data-detail]");
+    if (detail) {
+      const keyID = detail.getAttribute("data-detail");
+      if (detailOpen.has(keyID)) detailOpen.delete(keyID); else detailOpen.add(keyID);
+      render(lastCards);
+    }
+  });
+  document.querySelectorAll(".ftag[data-filter]").forEach(node => {
+    node.addEventListener("click", () => {
+      currentFilter = node.getAttribute("data-filter");
+      document.querySelectorAll(".ftag[data-filter]").forEach(other => other.classList.toggle("active", other === node));
+      render(lastCards);
+    });
+  });
+  const searchInput = document.getElementById("accountSearch");
+  if (searchInput) searchInput.addEventListener("input", () => {
+    searchText = searchInput.value.trim().toLowerCase();
+    render(lastCards);
+  });
+  const remainSort = document.getElementById("remainSort");
+  if (remainSort) remainSort.addEventListener("click", () => {
+    sortMode = sortMode === "original" ? "asc" : (sortMode === "asc" ? "desc" : "original");
+    remainSort.textContent = "剩余额度：" + (sortMode === "original" ? "原始顺序" : (sortMode === "asc" ? "少 → 多" : "多 → 少"));
+    render(lastCards);
+  });
+  const refreshAll = document.getElementById("refreshAll");
+  if (refreshAll) refreshAll.addEventListener("click", () => {
+    const cards = lastCards;
+    if (!cards.length) return;
+    refreshAll.disabled = true;
+    cards.forEach(card => inFlight.add(card.key_id));
+    render(cards);
+    Promise.all(cards.map(card => refreshCard(card, cards, true))).then(() => { refreshAll.disabled = false; });
+  });
+  const svtime = document.getElementById("svtime");
+  if (svtime) svtime.textContent = "本机时间 " + new Date().toLocaleString();
+  if (!auth()) {
+    app.innerHTML = '<div class="grid-hint card-err" role="status">请在管理面板中开启「记住密码」后使用本页。</div>';
+    return;
+  }
   function loadCards() {
     return request({}).then(result => {
     const cards = result.cards || [];
@@ -415,7 +615,7 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     missing.forEach(card => inFlight.add(card.key_id));
     render(cards);
     missing.forEach(card => refreshCard(card, cards, true));
-  }).catch(err => { app.textContent = ""; const p = document.createElement("p"); p.className = "quota-error"; p.setAttribute("role", "status"); p.textContent = err.message || "无法加载凭据。"; app.appendChild(p); });
+  }).catch(err => { app.innerHTML = '<div class="grid-hint card-err" role="status">' + esc(err.message || "无法加载凭据。") + '</div>'; });
   }
   // Add-key form. The host gives a plugin no way to write its own config, so
   // the key is stored as a CPA auth record: the host persists and schedules it,
@@ -430,7 +630,7 @@ body { margin: 0; padding: 32px; color: var(--text-primary); background: var(--b
     const submit = document.getElementById("addSubmit");
     const status = document.getElementById("addStatus");
     if (!toggle || !form || !keyInput || !submit || !status) return;
-    const setStatus = (message, kind) => { status.textContent = message || ""; status.className = "quota-add-status" + (kind ? " is-" + kind : ""); };
+    const setStatus = (message, kind) => { status.textContent = message || ""; status.className = "add-status" + (kind ? " is-" + kind : ""); };
     toggle.addEventListener("click", () => {
       const opening = form.hidden;
       form.hidden = !opening;

@@ -7,21 +7,20 @@ import (
 	"github.com/hex-ci/cpa-plugin/commandcode-go-cliproxyapi/resources"
 )
 
-// TestQuotaPageSpellsOutThePlanType pins the plan chip.
+// TestQuotaPageSpellsOutThePlanType pins the card's plan badge.
 //
-// The card already carried the plan in a 28px round badge, but that badge is a
-// bare acronym an operator reads as the account's own label (the panel lets a
-// credential be labelled "go"), so the plan was effectively invisible. The chip
-// states it in words, and an unknown plan must say so rather than render
-// nothing.
+// The plan must be stated IN WORDS next to the account name, not only carried by
+// a bare acronym: the panel lets a credential be labelled "go", which an
+// operator reads as the plan. An unknown plan must say 套餐未知 rather than
+// render nothing, and a known plan carries its monthly allowance so the number
+// can be sanity-checked against the meter below it.
 func TestQuotaPageSpellsOutThePlanType(t *testing.T) {
 	page := resources.QuotaPage
 	for _, marker := range []string{
-		"credential-plan",
-		`"套餐 " + plan`,
-		`" · 月额度 "`,
-		`"套餐未知"`,
-		`planChip.className = "credential-plan"`,
+		`function planBadge(usage) {`,
+		`'<span class="badge plan">套餐 ' + esc(usage.plan)`,
+		`' · 月额度 ' + num(usage.plan_credits).toFixed(0)`,
+		`'<span class="badge unknown">套餐未知</span>'`,
 		"plan_credits",
 	} {
 		if !strings.Contains(page, marker) {
@@ -31,8 +30,8 @@ func TestQuotaPageSpellsOutThePlanType(t *testing.T) {
 }
 
 // TestQuotaPagePlanChipStaysWithinManualRefreshRules re-asserts the page's
-// contract after the plan chip was added: no polling, no timers, no expiry
-// logic may creep in with the new markup.
+// contract around the plan badge: no polling, no timers, no expiry logic may
+// creep in with the markup.
 func TestQuotaPagePlanChipStaysWithinManualRefreshRules(t *testing.T) {
 	page := resources.QuotaPage
 	for _, marker := range []string{"setInterval", "setTimeout", "visibilitychange", "TTL", "expiry"} {
