@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.13.2
+
+### 修复
+
+- **打卡状态查错资源，会把已完成的会话误判为失败**：轮询用的是 `sessionId`，但状态是
+  **会话（conversation）** 的属性。当上游返回的 `sessionId` 与会话 id 不同（实测形态如此）时，
+  `GET /console/as/conversations/{sessionId}` 查的是一条不存在的会话，状态永远读不到
+  `completed`，于是超时 120s 后报失败——**而会话其实已跑完、积分已经拿到**。现改为始终用
+  会话 id 轮询（`acpTurn` 显式接收 `conversationID`）。
+  对照参考实现 workbuddy2api-hub `wb_accounts.py`：`session_id` 只用于 ACP 的 `sessionId`
+  参数，`poll_status` 传的是 `conversation`。
+
+- 回归测试加固：假 console 现在对**非会话 id** 的轮询路径返回 404 并断言报错，
+  再也不能像之前那样"任何路径都回状态"从而放过这个 bug。已验证该测试能复现旧行为
+  （报 `status polled at "/conversations/sess-9"; must poll the conversation id`）。
+
+### 其它
+
+- 版本号 0.13.1 → 0.13.2。
 ## 0.13.1
 
 ### 修复

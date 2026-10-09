@@ -287,7 +287,11 @@ func firstStringField(m map[string]any, keys ...string) string {
 //
 // Only the minimum of the protocol is implemented: no tool calls, no terminal,
 // no filesystem callbacks — the daily reward only needs the agent to answer.
-func acpTurn(sa *storedAuth, link, token, sessionID, cwd, prompt string) (chunks, events int, err error) {
+// conversationID is the console conversation id; sessionID is the ACP session
+// id inside it. They can differ: status is a property of the CONVERSATION, so
+// polling must use conversationID (polling the session id would read the wrong
+// resource and never observe "completed").
+func acpTurn(sa *storedAuth, conversationID, link, token, sessionID, cwd, prompt string) (chunks, events int, err error) {
 	parsed, perr := url.Parse(link)
 	if perr != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return 0, 0, fmt.Errorf("sandbox link unusable: %q", link)
@@ -410,7 +414,7 @@ func acpTurn(sa *storedAuth, link, token, sessionID, cwd, prompt string) (chunks
 	deadline := time.Now().Add(acpTurnTimeout)
 	var lastStatus string
 	for time.Now().Before(deadline) {
-		lastStatus = webConversationStatus(sa, sessionID)
+		lastStatus = webConversationStatus(sa, conversationID)
 		switch lastStatus {
 		case "completed":
 			return chunks, events, nil
@@ -440,7 +444,7 @@ func runDailyActivityForAccount(sa *storedAuth) map[string]any {
 	if err != nil {
 		return map[string]any{"ok": false, "conversation": conversationID, "error": "session: " + err.Error()}
 	}
-	chunks, events, err := acpTurn(sa, link, token, sessionID, cwd, dailyActivityPrompt)
+	chunks, events, err := acpTurn(sa, conversationID, link, token, sessionID, cwd, dailyActivityPrompt)
 	result := map[string]any{
 		"ok":           err == nil,
 		"conversation": conversationID,

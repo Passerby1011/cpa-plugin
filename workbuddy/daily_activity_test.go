@@ -217,9 +217,18 @@ func TestACPTurnDrivesConversationToCompletion(t *testing.T) {
 
 	// Console server: status flips to completed once the sandbox received
 	// session/prompt.
+	// The sessionId deliberately DIFFERS from the conversation id: status is a
+	// property of the conversation, so polling the session id must be treated as
+	// a wrong resource. Returning a status for any path would hide that bug.
 	console := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/session") {
 			_, _ = w.Write([]byte(`{"code":0,"data":{"link":"` + sandbox.URL + `","token":"sb-token","sessionId":"sess-9","cwd":"/w"}}`))
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/conv-1") {
+			t.Errorf("status polled at %q; must poll the conversation id (/conv-1), not the session id", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"code":404,"msg":"not found"}`))
 			return
 		}
 		promptedMu.Lock()
@@ -244,7 +253,7 @@ func TestACPTurnDrivesConversationToCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}
-	chunks, events, err := acpTurn(sa, link, token, sessionID, cwd, "Hi")
+	chunks, events, err := acpTurn(sa, "conv-1", link, token, sessionID, cwd, "Hi")
 	if err != nil {
 		t.Fatalf("acpTurn: %v", err)
 	}
@@ -269,13 +278,13 @@ func TestACPTurnRejectsMissingConnectionID(t *testing.T) {
 	}))
 	defer sandbox.Close()
 
-	if _, _, err := acpTurn(globalAuth(), sandbox.URL, "tok", "s", "/w", "Hi"); err == nil {
+	if _, _, err := acpTurn(globalAuth(), "conv-1", sandbox.URL, "tok", "s", "/w", "Hi"); err == nil {
 		t.Fatal("expected an error when the SSE channel returns no Acp-Connection-Id")
 	}
 }
 
 func TestACPTurnRejectsUnusableLink(t *testing.T) {
-	if _, _, err := acpTurn(globalAuth(), "not-a-url", "tok", "s", "/w", "Hi"); err == nil {
+	if _, _, err := acpTurn(globalAuth(), "conv-1", "not-a-url", "tok", "s", "/w", "Hi"); err == nil {
 		t.Fatal("expected an error for an unusable sandbox link")
 	}
 }
