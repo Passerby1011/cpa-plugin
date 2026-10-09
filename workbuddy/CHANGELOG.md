@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.4
+
+### 变更（合并上游 post-0.12.2 清理）
+
+上游在 0.12.2 之后又做了一次「清理本机痕迹与抓包残留」（未单独发版），本条跟进：
+
+- **删除 `keepme_probe_test.go`**：一次性调试探针，会把内容写到 `/tmp/keepme_probe.txt`，
+  属本机残留，不再是有效测试。
+- **`toolcall_aggregate_test.go` 去临时路径**：`/tmp/x` → `sample.txt`（3 处）。
+
+### 其它
+
+- 版本号 0.13.3 → 0.13.4。
+- 合并来源：上游 hex-ci/cpa-plugin `main`（`workbuddy-v0.12.2` 之后的两次提交）。
 ## 0.13.3
 
 ### 修复（合并上游 0.12.2）
