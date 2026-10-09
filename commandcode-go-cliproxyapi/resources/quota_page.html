@@ -82,11 +82,20 @@ select.field-input{flex:0 0 auto;min-width:150px}
 .summary .pb{margin-top:4px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
 .card{padding:16px}
-.card h2{font-size:15px;margin:0 0 2px;display:flex;justify-content:space-between;align-items:center;gap:10px}
-.card-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.card-badges{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+/* The badge group never shrinks: the account name yields first (and ellipsizes),
+   so a pill is never squeezed into wrapping its own text - that reads as a
+   broken two-line badge. If a card ever carries enough badges to not fit, the
+   whole group drops to its own row rather than one pill splitting. */
+/* The name yields FIRST (flex-basis 0) so the badges keep their row: with a
+   content-sized basis the long email wins the line and pushes the whole badge
+   group down, which reads as a broken two-layer header. The group itself is
+   capped at the card width and wraps INTERNALLY when a card carries many
+   warning pills - pills stay intact either way, never splitting mid-text. */
+.card h2{font-size:15px;margin:0 0 2px;display:flex;justify-content:space-between;align-items:center;gap:6px 10px;flex-wrap:wrap}
+.card-name{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card-badges{display:flex;gap:6px;align-items:center;flex:0 0 auto;max-width:100%;flex-wrap:wrap;justify-content:flex-end;margin-left:auto}
 .uid{color:var(--mut);font-size:11px;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:12px}
-.badge{font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--mut-soft);color:var(--mut);border:1px solid var(--mut-border)}
+.badge{font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;white-space:nowrap;background:var(--mut-soft);color:var(--mut);border:1px solid var(--mut-border)}
 .badge.plan{background:var(--acc-ring);color:var(--acc);border-color:var(--acc)}
 .badge.unknown{background:var(--mut-soft);color:var(--mut);border-color:var(--mut-border)}
 .badge.exceeded{background:var(--err-soft);color:var(--err);border-color:var(--err-border)}
@@ -356,10 +365,11 @@ select.field-input{flex:0 0 auto;min-width:150px}
   }
   function planBadge(usage) {
     if (!usage || !usage.plan) return '<span class="badge unknown">套餐未知</span>';
-    // Only the vendor-supplied plan name is escaped; the static parts stay
-    // literals so the badge reads exactly "套餐 Go · 月额度 10".
-    return '<span class="badge plan">套餐 ' + esc(usage.plan) +
-      (num(usage.plan_credits) > 0 ? ' · 月额度 ' + num(usage.plan_credits).toFixed(0) : '') + '</span>';
+    // Just the plan type. The monthly allowance is deliberately NOT repeated
+    // here: the meter directly below already states the pool, and a longer pill
+    // squeezes the account name into an ellipsis and wraps once a second badge
+    // appears beside it.
+    return '<span class="badge plan">套餐 ' + esc(usage.plan) + '</span>';
   }
   function badgesFor(usage) {
     const out = [];
