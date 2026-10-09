@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.5.3
+
+**修致命遗漏**：套餐过滤对「从配额页添加的 key」完全失效 —— 于是模型列表直接
+露出上游全量目录，选了套餐跑不了的模型才在上游 403。
+
+### 现象
+
+面板「可用模型」里列着 11 个 Claude 模型（全部来自上游全量目录），Go 套餐选了
+`commandcode/claude-haiku-5-5` 报 `403 MODEL_NOT_IN_PLAN`。
+
+### 根因
+
+`buildPlanGate` **只遍历配置里的 `accounts:`**：
+
+```go
+for _, a := range cfg.Accounts {   // ← 只看配置
+```
+
+而**从配额页添加的 key 落在 CPA 认证记录里**，不在配置里。于是：
+
+1. 门禁读到空池 → `accesses` 为空 → **直接 `return nil`（不装门禁）**；
+2. 不装门禁 = **发布全部模型**（上游 87 个全发，其中 11 个 Claude）；
+3. 用户选了套餐跑不了的 → 上游 403。
+
+请求路径早就用的是**并集**（`poolAccounts` = 配置 ∪ 认证记录），**只有门禁这一处漏了**。
+
+### 为什么上一版没发现
+
+0.5.2 的本地验证用的是 `cfg-ok.yaml`——**key 放在配置里**，正好绕开了这条路径，
+所以本地看到 55→54 的过滤生效，而线上（key 在认证记录）根本没过滤。
+**教训：验证必须覆盖"凭据来自哪"，不能只覆盖"过滤逻辑对不对"。**
+
+### 修法
+
+门禁改用与请求路径同一个来源：
+
+```go
+pool := m.poolAccounts(cfg)   // 配置 ∪ 认证记录，按凭据去重
+```
+
+空池日志判定同步改用 `pool`。
+
+### 回归测试与变异验证
+
+新增 `TestPlanGateCoversKeysAddedFromTheQuotaPage`：只放认证记录、配置为空 → 门禁
+必须装上，且 `claude-haiku-5-5` 必须被挡掉。
+
+**变异验证**：把 `poolAccounts(cfg)` 改回 `cfg.Accounts` 后，该测试**精确失败**，
+报错文案正是线上症状（"no gate installed … GOAT-only picks 403 upstream"）——
+证明它真的在防这个 bug，不是摆设。
+
+另加 `TestPlanGateStillCoversConfigAccounts`（配置路径不许回归）与
+`TestPlanGateIsSkippedWhenNoPlanIsReadable`（读不到套餐时仍然诚实地全量放行）。
+
+### 门禁何时装上、为什么仍需重启一次
+
+门禁由 `refreshOnce` 在构建目录快照前安装。**首次从空配置起步**时无凭据会提前返回、
+门禁未装；用页面加上第一个 key 会触发一次 refresh，**插件侧的快照随即按套餐过滤好**
+（日志 `unsupported models excluded from routable catalog` 就是被过滤掉的那批）。
+
+但**宿主**的模型注册表只在**启动 / 插件重载 / 配置重载**时向插件索取
+（宿主 `service_lifecycle.go` / `service_plugins.go` 调 `RegisterModels`），宿主没有
+暴露任何"插件主动触发重注册"的接口。所以：
+
+- 加 key 之后，插件内部已是 54 个，**但宿主对外仍报旧列表**，直到重启/重载；
+- **已经在跑的实例更新到本版后，必须重启一次**：生命周期重跑时门禁就会从认证记录里
+  读到套餐，宿主也才会拿到过滤后的列表。
+
+这不是本插件的缺陷，是宿主接口的边界。
+
+### 真机验证（复刻线上形态）
+
+配置里**不放任何 key**，只用页面端点加 key（走认证记录）→ 模型列表 **87 → 54**，
+`claude-haiku-5-5` 消失。
+
+全量 12 包 0 失败，gofmt/build/vet 干净。
+
 ## 0.5.2
 
 **刷新套餐表**，修掉「模型被列出来、选中却报 403 `MODEL_NOT_IN_PLAN`」。

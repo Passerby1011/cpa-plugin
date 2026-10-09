@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/hex-ci/cpa-plugin/commandcode/internal/config"
@@ -16,6 +17,21 @@ import (
 // They are best-effort: a failure yields an unknown tier, which the filter
 // treats as "show everything" rather than guessing a tier and hiding models.
 const planGateRefreshTimeout = 15 * time.Second
+
+// planGateTotalTimeout bounds reading EVERY account's plan in one gate build.
+//
+// The per-read timeout bounds one read; this bounds all of them. Without it a
+// pool of N accounts could spend N*15s inside a refresh that the caller has
+// budgeted for registerRefreshTimeout (10s) - which is exactly what happened:
+// a quota-page key add builds the gate inside a bounded refresh, the unbounded
+// parent let the reads overrun it, and the catalog fetch was cut off
+// ("context deadline exceeded") leaving the deployment with NO models at all.
+//
+// Five seconds rather than the full budget because a failed plan read is
+// harmless by design: AccessFor(nil, ...) fails open, so an account that could
+// not be read in time keeps candidate access and is never hidden. Being late is
+// far worse than being imprecise here.
+const planGateTotalTimeout = 5 * time.Second
 
 // buildPlanGate derives the model filter from the pool's billing state.
 //
@@ -38,28 +54,69 @@ func (m *Manager) buildPlanGate(parent context.Context, cfg config.Config, bridg
 	if bridge == nil {
 		return nil
 	}
-	var accesses []*planfilter.BillingAccess
-	anyKnown := false
-
+	// Gate on the same pool the request path uses - poolAccounts, NOT
+	// cfg.Accounts. A key added from the quota page lives in a CPA auth record,
+	// and a gate that reads only the config silently ends up with no access to
+	// judge, publishing every model exactly as if no gate existed. That is how
+	// a Go key added from the page was still offered GOAT-only models and
+	// failed with 403 MODEL_NOT_IN_PLAN upstream.
+	//
 	// Only go-cli accounts carry a plan worth reading: an api-keys entry is a
 	// bare provider credential with no account identity behind it, so a pool
 	// built from those has nothing to gate on and publishing everything is the
 	// correct outcome, not a degraded one.
-	for _, a := range cfg.Accounts {
-		if a.Credential == "" || a.Mode != config.TransportGoCLI {
-			continue
+	var readable []config.Account
+	for _, a := range m.poolAccounts(cfg) {
+		if a.Credential != "" && a.Mode == config.TransportGoCLI {
+			readable = append(readable, a)
 		}
-		tier, onDemand, errRead := readBillingAccess(parent, bridge, cfg.BaseURL, a.Credential)
-		if errRead != nil {
-			// Unknown account: keep it in the pool as a fail-open entry so its
-			// possible access is still honoured, and note why.
-			accesses = append(accesses, &planfilter.BillingAccess{})
-			continue
-		}
-		if tier != nil {
+	}
+	if len(readable) == 0 {
+		return nil
+	}
+
+	// Read every account CONCURRENTLY and under one total budget. Sequentially
+	// they add up: N accounts * planGateRefreshTimeout can exceed the caller's
+	// whole refresh budget, and a plan read has no business eating it.
+	gctx, cancelGate := context.WithTimeout(parent, planGateTotalTimeout)
+	defer cancelGate()
+
+	type readResult struct {
+		tier     *planfilter.SubscriptionPlan
+		onDemand float64
+	}
+	results := make([]readResult, len(readable))
+	var wg sync.WaitGroup
+	for i, a := range readable {
+		wg.Add(1)
+		go func(i int, credential string) {
+			defer wg.Done()
+			tier, onDemand, _ := readBillingAccess(gctx, bridge, cfg.BaseURL, credential)
+			results[i] = readResult{tier: tier, onDemand: onDemand}
+		}(i, a.Credential)
+	}
+	// Bound the WAIT too, not just the reads: a bridge that ignores the context
+	// would otherwise stall the gate for as long as the slowest read, and this
+	// runs inside the refresh that builds the model list.
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-gctx.Done():
+	}
+
+	accesses := make([]*planfilter.BillingAccess, 0, len(results))
+	anyKnown := false
+	for _, r := range results {
+		if r.tier != nil {
 			anyKnown = true
 		}
-		accesses = append(accesses, planfilter.AccessFor(tier, onDemand))
+		// A nil tier yields AccessFor's fail-open entry, so an unreadable
+		// account is never the reason a model disappears.
+		accesses = append(accesses, planfilter.AccessFor(r.tier, r.onDemand))
 	}
 
 	if len(accesses) == 0 {
@@ -70,7 +127,7 @@ func (m *Manager) buildPlanGate(parent context.Context, cfg config.Config, bridg
 		// would still publish everything, so skip installing one. This is only
 		// worth a log when there WAS an account to read - a pool that simply
 		// has no accounts is the ordinary "publish everything" case.
-		if len(cfg.Accounts) > 0 && bridge != nil {
+		if len(readable) > 0 && bridge != nil {
 			_ = bridge.Log("warn", "plan filter skipped: no account plan could be read; publishing every model", nil)
 		}
 		return nil

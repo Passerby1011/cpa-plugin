@@ -29,7 +29,7 @@ const ProviderID = "commandcode"
 // -ldflags "-X .../internal/plugin.pluginVersion=<version>".
 const pluginName = "commandcode"
 
-var pluginVersion = "0.5.2"
+var pluginVersion = "0.5.3"
 
 // SetVersion overrides the reported plugin version; the build injects it via
 // main.version (-ldflags). An empty value keeps the vendored default.
@@ -711,7 +711,12 @@ func (m *Manager) refreshOnce(parent context.Context, mgr *catalog.Manager, brid
 	defer cancel()
 	// Install the plan filter before the refresh so the snapshot is built with
 	// it: a pool should not advertise models its accounts cannot call.
-	mgr.SetPlanGate(m.buildPlanGate(parent, cfg, bridge))
+	//
+	// Bounded ctx, not parent: the gate reads each account's plan over the host
+	// HTTP bridge, and handing it an unbounded context lets those reads outlive
+	// the refresh budget this call was given - starving the catalog fetch it is
+	// supposed to filter, which leaves the deployment with no models at all.
+	mgr.SetPlanGate(m.buildPlanGate(ctx, cfg, bridge))
 	err := mgr.Refresh(ctx, credential)
 	if err != nil {
 		// Fallback order matters: a usable snapshot already being served wins
