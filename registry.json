@@ -121,7 +121,7 @@
       "name": "QoderWork",
       "description": "QoderWork CN (qoder.com.cn) provider for CLIProxyAPI: dual login (OAuth device authorization with auto pro-pack claim + PAT import), COSY-signed chat executor, dynamic model list, daily check-in with credit snapshot, token keepalive (deviceToken/jobToken prefix-routed, PAT fallback), accounts panel.",
       "author": "Hex",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "repository": "https://github.com/Passerby1011/cpa-plugin",
       "logo": "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/QoderWork.png",
       "homepage": "https://github.com/Passerby1011/cpa-plugin/tree/main/qoderwork",
@@ -139,51 +139,51 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.0/qoderwork_0.5.0_linux_amd64.zip",
-            "sha256": "53722edd217a029ec41200b8b376a1181b0686a51ca8deac2ce8bb3f86cb23bb",
-            "size": 3119003
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.1/qoderwork_0.5.1_linux_amd64.zip",
+            "sha256": "137a2bc8c6f38d685115b7158902866915ac81e8548a2859f737bd545256266b",
+            "size": 3120290
           },
           {
             "goos": "linux",
             "goarch": "arm64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.0/qoderwork_0.5.0_linux_arm64.zip",
-            "sha256": "2ff2a0782f82ac6561a3a6e6876bea95f3ac40fa0cd0a802a6d4956ecba280f3",
-            "size": 2836824
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.1/qoderwork_0.5.1_linux_arm64.zip",
+            "sha256": "0ad0f6cb2777710773d2974895fa02027bcf8d3175437131e168311b67b753ed",
+            "size": 2837358
           },
           {
             "goos": "darwin",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.0/qoderwork_0.5.0_darwin_amd64.zip",
-            "sha256": "91459f4bc97d61d042465c6b743389e57199fbfc46adba0799bb6eb347ab631a",
-            "size": 2970707
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.1/qoderwork_0.5.1_darwin_amd64.zip",
+            "sha256": "e78a46161861ca0910c4c5d83ec48c45bec7755f602dbf5cf74596d2d720810d",
+            "size": 2971640
           },
           {
             "goos": "darwin",
             "goarch": "arm64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.0/qoderwork_0.5.0_darwin_arm64.zip",
-            "sha256": "67612f27b487fe32bc2bbf7415ee2d205bb71075aa4f199c46e5e5cb455b421d",
-            "size": 2745779
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.1/qoderwork_0.5.1_darwin_arm64.zip",
+            "sha256": "954228f519f00cb8ac03cc983eec96a3b2bbf65316facd8798ebba17be71d76d",
+            "size": 2746801
           },
           {
             "goos": "windows",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.0/qoderwork_0.5.0_windows_amd64.zip",
-            "sha256": "02d548baf98fb8d20c1deab5104b79d5fc4de31fe8c578abc672726fcc5fcc57",
-            "size": 3052455
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.1/qoderwork_0.5.1_windows_amd64.zip",
+            "sha256": "e0ff088533caccf1df581a57e81386f640f3df7f15828b9c4c3612495b629072",
+            "size": 3053294
           },
           {
             "goos": "windows",
             "goarch": "arm64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.0/qoderwork_0.5.0_windows_arm64.zip",
-            "sha256": "a2b9e4b125040aa05132c8860bdff4e8aa565aa1d37b7344b36aaceec15ca5d8",
-            "size": 2831931
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.1/qoderwork_0.5.1_windows_arm64.zip",
+            "sha256": "40f44ec46544a11af88103b62f04ad2be6505903a9077997fba3c31329d457d6",
+            "size": 2832774
           },
           {
             "goos": "freebsd",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.0/qoderwork_0.5.0_freebsd_amd64.zip",
-            "sha256": "637d71dd5824e0db3171a22ca4561fc4cfdbb9309ec6cd01af8cf017ac5bbac2",
-            "size": 3040389
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.5.1/qoderwork_0.5.1_freebsd_amd64.zip",
+            "sha256": "7193e3f189e87a2da518fb184601d88252b7ced28535635691e08986bb056467",
+            "size": 3041588
           }
         ]
       }
