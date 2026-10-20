@@ -10,7 +10,7 @@
 | **登录自动领包** | OAuth 登录成功后自动判断并领取一次性 Pro 升级包（eligibility → claim） |
 | **COSY 推理** | RSA 包 AES 会话密钥 + MD5 请求签名，对接 gateway.qoder.com.cn SSE 流式 |
 | **动态模型** | COSY 拉取 `/algo/api/v2/model/list`（chat scene），10 静态模型兜底 |
-| **每日签到** | 面板手动签到（单账号/批量）+ 09:00/21:00 定时自动签到，签到后返回最新积分快照 |
+| **每日签到** | 面板手动签到（单账号/批量）+ 10:05/21:00 定时自动签到（对齐官方每天 10:00 开放、次日 10:00 前可领、错过不补的窗口），签到后返回最新积分快照 |
 | **积分面板** | 账号卡片：昵称/积分/计划/签到状态/操作（签到/刷新/选用） |
 | **token 保活** | 22:00 定时刷新；按 token 前缀路由（drt- → deviceToken/refresh，jrt- → jobToken/refresh），PAT 永不劫持 OAuth 刷新 |
 | **auth 隔离** | 文件名前缀 `qoderwork-` 过滤，与 WorkBuddy 等其他插件互不干扰 |
@@ -71,7 +71,7 @@ oauth-model-alias:
 `/v0/resource/plugins/qoderwork/panel`（需 management key）
 
 - 账号卡片：积分余额 / 计划 / 签到按钮（签到后返回最新积分）
-- 「全部签到」批量签到；自动签到开关（09:00/21:00）
+- 「全部签到」批量签到；自动签到开关（10:05/21:00）
 
 ## 凭证家族与刷新
 

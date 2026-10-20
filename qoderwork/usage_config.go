@@ -11,8 +11,16 @@ import (
 	"sync"
 )
 
-// check-in schedule: 09:00 and 21:00 local time.
-var checkinHours = []int{9, 21}
+// check-in schedule: 10:05 and 21:00 local time.
+//
+// Qoder CN opens one claim window per day at 10:00 (UTC+8) that stays open
+// until 10:00 the next day, and the window cannot be back-filled. The first
+// slot therefore sits just after the window opens instead of at 09:00, which
+// ran before the new round existed and always came back "already checked in"
+// for the previous day. 21:00 is the second chance for accounts that were not
+// signed in at 10:05. Keep these two in sync with panel.go / panel.html /
+// README.md — they surface the schedule to the user.
+var checkinHours = []int{10, 21}
 
 // plugin-level config decoded from plugin.register/reconfigure config_yaml.
 var (

@@ -1,6 +1,6 @@
 // management.go implements the QoderWork management API and web panel:
 // account dashboard (nickname, credits, plan, check-in streak), manual/auto
-// check-in (daily at 09:00 and 21:00 local time), and quota refresh.
+// check-in (daily at 10:05 and 21:00 local time), and quota refresh.
 package main
 
 import (
@@ -61,7 +61,7 @@ type checkinSummary struct {
 }
 
 // -----------------------------------------------------------------------------
-// Auto check-in scheduler (09:00 / 21:00 local)
+// Auto check-in scheduler (10:05 / 21:00 local)
 // -----------------------------------------------------------------------------
 
 // Management API routes + handler

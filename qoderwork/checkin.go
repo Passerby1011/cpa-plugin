@@ -1,5 +1,5 @@
 // checkin.go implements daily check-in for CN accounts: the manual
-// handleManualCheckin endpoint, the 09:00 / 21:00 auto scheduler, and the
+// handleManualCheckin endpoint, the 10:05 / 21:00 auto scheduler, and the
 // per-account mutex that prevents duplicate check-ins from racing browser
 // tabs. CN accounts are excluded — they use one-shot trial claims instead.
 package main
@@ -35,15 +35,31 @@ func ensureScheduler() {
 // during its own runtime teardown, where touching Go sync primitives from the
 // plugin's c-shared runtime caused SIGSEGV on every restart.
 
+// checkinOffsetMin delays the check-in tick that follows a claim-window open.
+// Qoder CN opens the daily 100-Credit window at 10:00 (UTC+8) sharp; firing at
+// exactly 10:00 races the upstream rotation and can land in the previous
+// window ("already claimed"). Every other slot fires on the hour.
+var checkinOffsetMin = map[int]int{10: 5}
+
+// checkinSlotAt returns the time of day for one check-in slot, applying the
+// slot's offset so a schedule of "10" means 10:05.
+func checkinSlotAt(now time.Time, hour int) time.Time {
+	return time.Date(now.Year(), now.Month(), now.Day(), hour, checkinOffsetMin[hour], 0, 0, now.Location())
+}
+
+// nextCheckinTime returns the next time either a check-in slot or the token
+// keepalive fires, whichever comes first (e.g. 21:00 check-in vs 22:00
+// keepalive → 21:00 wins, then the keepalive fires on the next tick).
 func nextCheckinTime(now time.Time) time.Time {
 	var earliest time.Time
-	// Consider both checkin and keepalive schedules so the timer wakes up for
-	// whichever fires first (e.g. 21:00 checkin vs 22:00 keepalive → 21:00 wins,
-	// then 22:00 keepalive fires on the next tick).
-	hours := append([]int{}, checkinHours...)
-	hours = append(hours, keepaliveHours...)
-	for _, h := range hours {
-		t := time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, now.Location())
+	candidates := make([]time.Time, 0, len(checkinHours)+len(keepaliveHours))
+	for _, h := range checkinHours {
+		candidates = append(candidates, checkinSlotAt(now, h))
+	}
+	for _, h := range keepaliveHours {
+		candidates = append(candidates, time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, now.Location()))
+	}
+	for _, t := range candidates {
 		if !t.After(now) {
 			t = t.Add(24 * time.Hour) // slot already passed today → tomorrow
 		}
@@ -74,7 +90,7 @@ func schedulerLoop(stop chan struct{}) {
 	}
 }
 
-// runAutoCheckin is the scheduled lifecycle tick (09:00 / 21:00).
+// runAutoCheckin is the scheduled lifecycle tick (10:05 / 21:00).
 // CN: optional daily check-in, then reconcile (disable exhausted / reenable after credits).
 // CN: no auto trial (one-shot claim is manual only); reconcile may delete exhausted auths.
 //
