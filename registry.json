@@ -135,7 +135,57 @@
       ],
       "install": {
         "type": "direct",
-        "artifacts": []
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.4.9/qoderwork_0.4.9_linux_amd64.zip",
+            "sha256": "c6a2cbe8e2eb19f05953562e261b8417e87f97b762fa5a32395e2b4147a1fbcd",
+            "size": 3119858
+          },
+          {
+            "goos": "linux",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.4.9/qoderwork_0.4.9_linux_arm64.zip",
+            "sha256": "5ed8197457f284f8fe8c8128684e30282ea93909fda7078326332e9428d8a11b",
+            "size": 2836499
+          },
+          {
+            "goos": "darwin",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.4.9/qoderwork_0.4.9_darwin_amd64.zip",
+            "sha256": "d40fe21eb80ab2119b762bf8f9a8a267a27ff2fad94bea42f84408f4ab95fd75",
+            "size": 2970575
+          },
+          {
+            "goos": "darwin",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.4.9/qoderwork_0.4.9_darwin_arm64.zip",
+            "sha256": "1c15343d68f745338a500206278e93a3c08c5ff89e9ce15c911fdb83e8bae8f4",
+            "size": 2745344
+          },
+          {
+            "goos": "windows",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.4.9/qoderwork_0.4.9_windows_amd64.zip",
+            "sha256": "f26ecb63d8e6cdf9a115b9672c4211ba44375850a06affdd3c17ada8154f3b05",
+            "size": 3052536
+          },
+          {
+            "goos": "windows",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.4.9/qoderwork_0.4.9_windows_arm64.zip",
+            "sha256": "3f63dee5d466f427fc46c1f542bacc662476a85d3b41de4c0048b11fb34bda82",
+            "size": 2831785
+          },
+          {
+            "goos": "freebsd",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/qoderwork-v0.4.9/qoderwork_0.4.9_freebsd_amd64.zip",
+            "sha256": "53a5c5f43e750f80d2d9ebe3c87d22b9c1035847f1d15b76ec69135de67b939d",
+            "size": 3040786
+          }
+        ]
       }
     }
   ]
