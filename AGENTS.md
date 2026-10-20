@@ -4,7 +4,9 @@
 
 | 目录 | 插件 ID | 说明 |
 |---|---|---|
-| `workbuddy-global/` | `workbuddy-global` | Tencent WorkBuddy 国际版（`workbuddy.ai`）OAuth provider |
+| `workbuddy/` | `workbuddy` | Tencent WorkBuddy / CodeBuddy 双通道（CN + Global）OAuth provider |
+| `qoderwork/` | `qoderwork` | QoderWork CN（`qoder.com.cn`）OAuth/PAT provider，上游原样快照 |
+| `commandcode/` | `commandcode` | CommandCode 套餐 provider（Key 池 + 配额页），再打包自 mczhoucn/commandcode |
 
 ## 开发命令
 
@@ -29,8 +31,8 @@ make release  # 交叉编 linux/amd64+arm64；无 osxcross 只有 linux 成功
 git push origin main
 
 # 2. 打 tag 并推送（触发 release）
-make -C workbuddy-global tag     # 读 workbuddy-global/VERSION → workbuddy-global-v0.11.0
-# 等价手动写法：git tag -a workbuddy-global-v0.11.0 -m "WorkBuddy Global v0.11.0" && git push origin workbuddy-global-v0.11.0
+make -C workbuddy tag           # 读 workbuddy/VERSION → workbuddy-vX.Y.Z（qoderwork 同理）
+# 等价手动写法：git tag -a qoderwork-v0.4.9 -m "QoderWork v0.4.9" && git push origin qoderwork-v0.4.9
 
 # 3. 观察：gh run watch（或 gh run list --repo <owner>/cpa-plugin）
 ```
@@ -39,7 +41,8 @@ make -C workbuddy-global tag     # 读 workbuddy-global/VERSION → workbuddy-gl
 - 只想重发已有版本（不建新 tag）：用 workflow_dispatch，填 `plugin` + `version`；version 留空则取该插件的 `VERSION` 文件。
 - 每插件独立版本，版本号存于 `<id>/VERSION`（tag 名由它派生，`make tag` 已自动读取）。
 - `registry.json`（插件商店源）用 `python3 scripts/validate-registry.py registry.json` 校验。
-- CI 的 test/build matrix 覆盖 **WorkBuddy Global** 插件（额外跑 `node --test panel.test.js`）。
+- CI 的 test/build matrix 覆盖 **WorkBuddy** 与 **QoderWork**（WorkBuddy 额外跑 `node --test panel.test.js`）。
+- 上游 `qwenwork/`、`traework/` 未纳入本仓库与 CI：需要时 `git checkout upstream/main -- <id>` 临时检出，产物只能手工构建上传。
 - 本仓库走 `direct`（schema_version 2）注册：插件商店无法用 `github-release` 类型——宿主按 `/releases/latest`（全仓库语义）解析，且 tag 必须能归一为纯版本号，`<id>-vX.Y.Z` 解析失败。因此 artifacts 由 release job 的 `.github/scripts/sync-registry.py` 自动生成并 commit 回 main。
 
 ## 约定
@@ -52,6 +55,14 @@ make -C workbuddy-global tag     # 读 workbuddy-global/VERSION → workbuddy-gl
 - 所有上游 HTTP 走宿主桥（`host_auth.go`/`host_bridge.go`），插件内不直接用 net/http。
 - commit 风格：Conventional Commits + 插件 scope，如 `feat(workbuddy-global): ...`、`fix(workbuddy-global): ...`，信息可用中文。
 - 探测/临时脚本、token/key 不进仓库；打印 token 需脱敏。
+
+## 上游同步（hex-ci/cpa-plugin）
+
+- `upstream` remote 指向 `hex-ci/cpa-plugin`；基线提交 `e48f622`（其后上游对 qoderwork/qwenwork/traework/workbuddy 的改动均为上游自有）。
+- **上游插件目录以「上游原样快照」维护**：更新一律 `git checkout <upstream-ref> -- <id>` 覆盖，不改插件内部代码；本仓库增量只落在根级文件（`registry.json`、`.github/workflows/build.yml`、`README.md`、本文件）。这样下次同步仍是干净覆盖。
+- 同步后必须重跑 `go vet ./... && go test -race -count=1 ./...`；本机无 Go 时用 `golang:1.26` 容器（挂载 `-v D:/hermes-data/hermes/cache/gomod:/go/pkg/mod` 复用模块缓存）。**不要为了过测试去改插件源码**。
+- `registry.json` 里插件条目的 `repository`/`homepage` 必须指向本仓库，否则商店按上游 URL 下载产物。
+- 新插件的 artifacts 由发版 CI 回填；在此之前写空数组 `[]`，推 tag 发一次 Release 才有安装链。
 
 ## 坑
 

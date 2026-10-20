@@ -1,4 +1,4 @@
-# Multi-arch CPA plugin build & release (WorkBuddy / CodeBuddy).
+# Multi-arch CPA plugin build & release (WorkBuddy + QoderWork).
 # Each plugin versions INDEPENDENTLY:
 #   - tag '<id>-v*'       → release that plugin at that version
 #   - workflow_dispatch   → pick plugin + version manually
@@ -18,14 +18,14 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: ["workbuddy-v*"]
+    tags: ["workbuddy-v*", "qoderwork-v*"]
   workflow_dispatch:
     inputs:
       plugin:
         description: "Plugin to release"
         required: true
         type: choice
-        options: [workbuddy]
+        options: [workbuddy, qoderwork]
       version:
         description: "Version without v (empty = plugin's VERSION file)"
         required: false
@@ -44,6 +44,8 @@ jobs:
         include:
           - dir: workbuddy
             node: true
+          - dir: qoderwork
+            node: false
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
@@ -98,6 +100,32 @@ jobs:
             runner: macos-15
             ext: dylib
           - id: workbuddy
+            goos: windows
+            goarch: amd64
+            runner: windows-2025
+            ext: dll
+          # QoderWork native
+          - id: qoderwork
+            goos: linux
+            goarch: amd64
+            runner: ubuntu-24.04
+            ext: so
+          - id: qoderwork
+            goos: linux
+            goarch: arm64
+            runner: ubuntu-24.04-arm
+            ext: so
+          - id: qoderwork
+            goos: darwin
+            goarch: amd64
+            runner: macos-15-intel
+            ext: dylib
+          - id: qoderwork
+            goos: darwin
+            goarch: arm64
+            runner: macos-15
+            ext: dylib
+          - id: qoderwork
             goos: windows
             goarch: amd64
             runner: windows-2025
@@ -190,6 +218,12 @@ jobs:
             target: windows-arm64
             ext: dll
           - id: workbuddy
+            target: freebsd-amd64
+            ext: so
+          - id: qoderwork
+            target: windows-arm64
+            ext: dll
+          - id: qoderwork
             target: freebsd-amd64
             ext: so
     defaults:
@@ -310,8 +344,9 @@ jobs:
     name: Release
     # Only for a tag of a specific plugin, or dispatch with a version.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      startsWith(github.ref, 'refs/tags/workbuddy-v')
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '') ||
+      startsWith(github.ref, 'refs/tags/workbuddy-v') ||
+      startsWith(github.ref, 'refs/tags/qoderwork-v')
     needs:
       - build
       - build-cross
@@ -330,17 +365,20 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             P="${{ github.event.inputs.plugin }}"
             V="${{ github.event.inputs.version }}"
-          else
+          elif [[ "${GITHUB_REF_NAME}" == workbuddy-v* ]]; then
             P="workbuddy"; V="${GITHUB_REF_NAME#workbuddy-v}"
+          else
+            P="qoderwork"; V="${GITHUB_REF_NAME#qoderwork-v}"
           fi
           case "$P" in
-            workbuddy) ;;
+            workbuddy|qoderwork) ;;
             *) echo "unsupported plugin $P"; exit 1 ;;
           esac
           V="${V#v}"
           # Display name for release titles/notes; the plugin id stays lowercase.
           case "$P" in
             workbuddy) NAME="WorkBuddy" ;;
+            qoderwork) NAME="QoderWork" ;;
           esac
           {
             echo "plugin=$P"
