@@ -19,28 +19,51 @@ import (
 var basepromptJSON []byte
 
 // cpaToUpstreamKey maps CPA-facing model names to upstream keys.
-// Unknown names pass through unchanged (server silently routes to auto).
+//
+// The first spelling of each case is the display name clients copy from the
+// Qoder model picker; the rest are wire keys and legacy names that still arrive
+// from pinned configs. Anything unmapped passes through unchanged — the gateway
+// silently routes an unknown key to `auto`, which answers with a different model
+// than the caller asked for, so every name we advertise must be listed here.
 func cpaToUpstreamKey(cpaModel string) string {
 	switch cpaModel {
-	case "qoder-auto", "auto":
-		return "auto"
-	case "qwen3.8-max-preview", "qwen3.8-max", "qmodel_preview":
-		return "qmodel_preview"
-	case "qwen3.7-max", "qmodel_latest":
+	// Tier ids are their own upstream keys.
+	case "qoder-auto", "auto", "ultimate", "performance", "efficient", "lite":
+		return strings.TrimPrefix(cpaModel, "qoder-")
+	// Qwen
+	case "qwen3.8-max", "qwen-3.8-max", "qmodel_38max":
+		return "qmodel_38max"
+	case "qwen3.8-max-preview", "qmodel_preview":
+		return "qmodel_38max"
+	case "qwen3.8-flash", "qwen-3.8-flash", "qfmodel":
+		return "qfmodel"
+	case "qwen3.7-max", "qwen-3.7-max", "qmodel_latest":
 		return "qmodel_latest"
-	case "qwen3.7-plus", "qmodel":
+	case "qwen3.7-plus", "qwen-3.7-plus", "qwen3.6-plus", "qmodel":
 		return "qmodel"
+	case "qwen3.7-flash", "qwen-3.7-flash", "q37fmodel":
+		return "q37fmodel"
 	case "qwen3.6-flash", "q36fmodel":
-		return "q36fmodel"
+		return "q37fmodel"
+	// DeepSeek
 	case "deepseek-v4-pro", "dmodel":
 		return "dmodel"
-	case "deepseek-v4-flash", "dfmodel":
+	case "deepseek-v4.1-flash", "deepseek-v4-1-flash", "deepseek-v4-flash", "deepseek-flash", "dfmodel":
 		return "dfmodel"
-	case "glm-5.2", "gm51model":
+	// GLM
+	case "glm-5.3", "gm53model", "gmodel":
+		return "gmodel"
+	case "glm-5.3-flash", "gfmodel":
+		return "gfmodel"
+	case "glm-5.2", "glm-5.1", "gm51model":
 		return "gm51model"
-	case "kimi-k2.7-code", "kmodel":
+	// Kimi
+	case "kimi-k3", "kmodel_latest":
+		return "kmodel_latest"
+	case "kimi-k2.8-preview", "kimi-k2.8", "kimi-k2.7-code", "kimi-k2.6", "kmodel":
 		return "kmodel"
-	case "minimax-m2.7", "mmodel":
+	// MiniMax
+	case "minimax-m3", "minimax-m2.7", "mmodel":
 		return "mmodel"
 	}
 	return cpaModel

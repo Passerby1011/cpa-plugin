@@ -15,22 +15,60 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
+// qoderCNStaticCatalog20261019 is the Qoder CN chat-scene catalog as observed
+// on 2026-10-19, kept as the offline fallback for /algo/api/v2/model/list.
+//
+// Two independently maintained snapshots agree on every entry below:
+//   - techysy/10router providers/qoder-cn.json (refreshed 2026-10-19)
+//   - shuishuipingan/qoder2api-hub qoder_catalog_cn.json (client catalog export
+//     2026-09-29)
+//
+// docs.qoder.com/zh/qoder/model-selector and /zh/cli/model list the same
+// display names. Keys are stable; display names drift with every model bump,
+// which is exactly why the live catalog overrides this list at runtime.
+//
+// Dropped on purpose: the marketing-era tier keys (ultimate / performance /
+// efficient / lite) — the CN catalog stopped publishing them in September 2026,
+// though the gateway still accepts them — and the superseded model keys
+// (qmodel_preview, q36fmodel, gm53model), which cpaToUpstreamKey still resolves
+// so callers pinning an old id keep working.
+var qoderCNStaticCatalog20261019 = []struct {
+	id      string
+	name    string
+	context int64
+}{
+	{"auto", "Auto", 200000},
+	{"qmodel_38max", "Qwen3.8-Max", 180000},
+	{"qfmodel", "Qwen3.8-Flash", 180000},
+	{"qmodel_latest", "Qwen3.7-Max", 180000},
+	{"qmodel", "Qwen3.7-Plus", 180000},
+	{"q37fmodel", "Qwen3.7-Flash", 180000},
+	{"dmodel", "DeepSeek-V4-Pro", 96000},
+	{"dfmodel", "DeepSeek-V4.1-Flash", 180000},
+	{"gmodel", "GLM-5.3", 180000},
+	{"gfmodel", "GLM-5.3-Flash", 1000000},
+	{"gm51model", "GLM-5.2", 180000},
+	{"kmodel_latest", "Kimi-K3", 180000},
+	{"kmodel", "Kimi-K2.8-Preview", 180000},
+	{"mmodel", "MiniMax-M2.7", 180000},
+}
+
 // wbModels is the static fallback model list for QoderWork CN. Aliases use the
 // qoder/ prefix in AuthAttributes; bare IDs work too. Dynamic refresh via
 // /algo/api/v2/model/list replaces this at runtime when an account is present.
 func wbModels() []pluginapi.ModelInfo {
-	return []pluginapi.ModelInfo{
-		{ID: "auto", Name: "Auto", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "qmodel_preview", Name: "Qwen3.8-Max-Preview", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "qmodel_latest", Name: "Qwen3.7-Max", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "qmodel", Name: "Qwen3.7-Plus", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "q36fmodel", Name: "Qwen3.6-Flash", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "dmodel", Name: "DeepSeek-V4-Pro", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "dfmodel", Name: "DeepSeek-V4-Flash", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "gm51model", Name: "GLM-5.2", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "kmodel", Name: "Kimi-K2.7-Code", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
-		{ID: "mmodel", Name: "MiniMax-M2.7", ContextLength: 180000, MaxCompletionTokens: 8192, OwnedBy: providerName, SupportedGenerationMethods: []string{"chat"}},
+	models := make([]pluginapi.ModelInfo, 0, len(qoderCNStaticCatalog20261019))
+	for _, entry := range qoderCNStaticCatalog20261019 {
+		models = append(models, pluginapi.ModelInfo{
+			ID:                         entry.id,
+			Name:                       entry.name,
+			ContextLength:              entry.context,
+			MaxCompletionTokens:        8192,
+			OwnedBy:                    providerName,
+			SupportedGenerationMethods: []string{"chat"},
+		})
 	}
+	return models
 }
 
 func cachedDynamicModels() ([]pluginapi.ModelInfo, bool) {

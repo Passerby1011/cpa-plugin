@@ -64,6 +64,24 @@ make -C workbuddy tag           # 读 workbuddy/VERSION → workbuddy-vX.Y.Z（q
 - `registry.json` 里插件条目的 `repository`/`homepage` 必须指向本仓库，否则商店按上游 URL 下载产物。
 - 新插件的 artifacts 由发版 CI 回填；在此之前写空数组 `[]`，推 tag 发一次 Release 才有安装链。
 
+### 本地补丁（同步后必须重放）
+
+`git checkout upstream/main -- qoderwork` 会一并覆盖下面这些本仓库的改动，同步后要重放：
+
+| 文件 | 补丁 |
+|---|---|
+| `qoderwork/models.go` | `qoderCNStaticCatalog20261019` 静态兜底目录（14 条，CN chat 场景） |
+| `qoderwork/body.go` | `cpaToUpstreamKey` 别名/显示名 → 上游 key 映射 |
+| `qoderwork/models_test.go` | 期望表与别名断言（本仓库新增文件，同步不会删它） |
+| `qoderwork/VERSION` + `main.go` 的 `var version` | 本仓库自己的版本号（当前 0.5.0） |
+
+重放：`git show <本地补丁提交> -- qoderwork/models.go qoderwork/body.go` 取出改动重贴。
+模型换代时更新这三处的**唯一权威来源**是线上目录 `/algo/api/v2/model/list`（需登录），
+脱机时以两个独立维护的 CN 快照交叉校验：`techysy/10router` 的
+`providers/qoder-cn.json`、`shuishuipingan/qoder2api-hub` 的 `qoder_catalog_cn.json`；
+显示名再对 `docs.qoder.com/zh/qoder/model-selector` 与 `/zh/cli/model`。
+**key 稳定、显示名会漂**——显示名冲突时以「key 能跑通」为准，别凭文档猜 key。
+
 ## 坑
 
 - **验证改动别直接替换正在服务的网关插件。** 插件跑在宿主进程内，改 `.so` 后由宿主重载。先在隔离的 CPA 实例上验证新 `.so` 再上正式网关，避免打断运行中的流量。

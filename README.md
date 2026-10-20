@@ -90,7 +90,12 @@ https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/registry.json
 - **发版**：`make -C <id> tag`（读 `<id>/VERSION`）→ 推 tag → CI 出多平台产物 +
   回填 `registry.json`。`workbuddy` 走 CI 矩阵；`commandcode`
   本版为本地构建 + Release 上传（见 `scripts/release-commandcode.py`）。
-- **上游插件目录（`workbuddy/`、`qoderwork/`）保持上游原样**：更新用
+- **`qoderwork/` 的模型目录是本地补丁**：静态兜底表
+  （`models.go` 的 `qoderCNStaticCatalog20261019`）与别名映射（`body.go` 的
+  `cpaToUpstreamKey`）按 Qoder CN 线上目录手工维护，模型换代时要改这两处 +
+  `models_test.go` 的期望表，然后 bump 版本发一版。上游同步会覆盖它们，重放方式见
+  `AGENTS.md` 的「上游同步」。
+- **上游插件目录（`workbuddy/`、`qoderwork/`）其余内容保持上游原样**：更新用
   `git checkout upstream/main -- <id>` 覆盖，本仓库增量只落在根级文件（`registry.json`、
   `.github/workflows/build.yml`、`README.md`、`AGENTS.md`）；同步后重跑
   `go vet ./... && go test -race -count=1 ./...`（本机无 Go 用 `golang:1.26` 容器）。
