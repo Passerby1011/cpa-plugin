@@ -93,7 +93,7 @@ function loadPanel(overrides = {}) {
   };
   context.window = context;
   context.self = context;
-  context.top = context;
+  context.top = overrides.top === undefined ? context : overrides.top;
   vm.createContext(context);
   vm.runInContext(source, context, { filename: "panel.html" });
   return { context, document, elements, storage };
@@ -107,6 +107,124 @@ function fakeResponse(status, contentType, body) {
     async text() { return body; },
   };
 }
+
+const SECRET_SALT = "cli-proxy-api-webui::secure-storage";
+// Mirrors how the management center writes localStorage["cli-proxy-auth"]:
+// XOR + base64 under enc::v2:: (salt|host) or the legacy enc::v1:: (salt|host|UA).
+function panelStoreBlob(state, { host, userAgent, version }) {
+  const material = version === 1 ? `${SECRET_SALT}|${host}|${userAgent}` : `${SECRET_SALT}|${host}`;
+  const key = Buffer.from(material, "utf8");
+  const data = Buffer.from(state, "utf8");
+  const out = Buffer.alloc(data.length);
+  for (let i = 0; i < data.length; i += 1) out[i] = data[i] ^ key[i % key.length];
+  return `enc::v${version}::` + out.toString("base64");
+}
+
+function panelStore(localStorageValue) {
+  return {
+    localStorage: {
+      getItem(key) { return key === "cli-proxy-auth" ? localStorageValue : null; },
+      setItem() {},
+    },
+  };
+}
+
+test("management key comes from the management center store (enc::v2::)", () => {
+  const raw = panelStoreBlob(
+    JSON.stringify({ state: { managementKey: "center-key" }, version: 0 }),
+    { host: "localhost", userAgent: "node-test", version: 2 },
+  );
+  const { context } = loadPanel(panelStore(raw));
+  assert.equal(context.getKey(), "center-key");
+});
+
+test("legacy enc::v1:: store entries still decode", () => {
+  const raw = panelStoreBlob(
+    JSON.stringify({ state: { managementKey: "legacy-key" }, version: 0 }),
+    { host: "localhost", userAgent: "node-test", version: 1 },
+  );
+  const { context } = loadPanel(panelStore(raw));
+  assert.equal(context.getKey(), "legacy-key");
+});
+
+// The panel used to bail out with `if (!isEmbedded()) return null`, so opening it
+// as a plain tab next to the management center asked for the key on every visit
+// even though the store was right there in the same origin's localStorage.
+test("a same-origin top-level tab reads the store without a window.top gate", () => {
+  const raw = panelStoreBlob(
+    JSON.stringify({ state: { managementKey: "tab-key" }, version: 0 }),
+    { host: "localhost", userAgent: "node-test", version: 2 },
+  );
+  const { context } = loadPanel(panelStore(raw));
+  assert.equal(context.self, context.top, "the harness must model a top-level tab");
+  assert.equal(context.getKey(), "tab-key");
+  assert.equal(context.readPanelKey(), "tab-key", "readPanelKey must not require an iframe");
+});
+
+test("an embedded frame still reads the store", () => {
+  const raw = panelStoreBlob(
+    JSON.stringify({ state: { managementKey: "frame-key" }, version: 0 }),
+    { host: "localhost", userAgent: "node-test", version: 2 },
+  );
+  const { context } = loadPanel({ ...panelStore(raw), top: { document: {} } });
+  assert.notEqual(context.self, context.top, "the harness must model an iframe");
+  assert.equal(context.getKey(), "frame-key");
+});
+
+// A corrupt or foreign store entry must degrade to "no key" (prompt), never throw
+// and never leak the raw storage payload into the UI.
+test("malformed store entries yield no key instead of throwing", () => {
+  const payload = JSON.stringify({ state: { managementKey: "raw-key" }, version: 0 });
+  const tampered = panelStoreBlob(payload, { host: "localhost", userAgent: "node-test", version: 2 });
+  const cases = {
+    "garbage base64": "enc::v2::!!!!not base64!!!!",
+    "truncated body": "enc::v2::YWJj",
+    "empty string": "",
+    "json array": "[]",
+    "managementKey not a string": panelStoreBlob(JSON.stringify({ state: { managementKey: 42 } }), {
+      host: "localhost", userAgent: "node-test", version: 2,
+    }),
+    "store entry that is a number": 7,
+    "prefix only": "enc::v2::",
+    "v1 payload read as v2": tampered.replace("enc::v2::", "enc::v1::"),
+  };
+  for (const [name, value] of Object.entries(cases)) {
+    const { context } = loadPanel(panelStore(value));
+    assert.equal(context.getKey(), null, `${name}: must not resolve a key`);
+  }
+});
+
+// An unprefixed store value is parsed as-is (the management center used to write
+// plain JSON before obfuscation landed); that tolerance must not extend to
+// unparseable input, which the cases above cover.
+test("an unprefixed JSON store value is still read", () => {
+  const payload = JSON.stringify({ state: { managementKey: "raw-key" }, version: 0 });
+  const { context } = loadPanel(panelStore(payload));
+  assert.equal(context.getKey(), "raw-key");
+});
+
+test("a throwing localStorage getter yields no key", () => {
+  const { context } = loadPanel({
+    localStorage: { getItem() { throw new Error("SecurityError"); }, setItem() {} },
+  });
+  assert.equal(context.getKey(), null);
+});
+
+test("a store entry without a remembered key never fires a request", async () => {
+  const raw = panelStoreBlob(
+    JSON.stringify({ state: { managementKey: "", rememberPassword: false }, version: 0 }),
+    { host: "localhost", userAgent: "node-test", version: 2 },
+  );
+  let calls = 0;
+  const { context, elements } = loadPanel({
+    ...panelStore(raw),
+    fetch: async () => { calls += 1; throw new Error("unexpected fetch"); },
+  });
+  assert.equal(context.getKey(), null);
+  assert.equal(await context.load(false), false);
+  assert.equal(calls, 0);
+  assert.equal(elements.get("authBox").style.display, "block");
+});
 
 test("query key replaces session key once and is removed from URL", () => {
   let replaced = "";
@@ -510,7 +628,8 @@ test("progressHTML distinguishes unloaded disabled accounts from pending loads",
   const disabled = context.progressHTML(null, true);
   assert.doesNotMatch(disabled, /加载中/);
   assert.doesNotMatch(disabled, /class="spin"/);
-  assert.match(disabled, /<span>-<\/span>/);
+  assert.match(disabled, /已禁用/);
+  assert.doesNotMatch(disabled, /可用积分/);
 });
 
 // The catalogue state rides the DOM as a class on #modelStatus (.model-status
@@ -578,4 +697,109 @@ test("dailyActivityAll reports claimed, skipped and failed counts", async () => 
   assert.match(toast.message, /跳过 1/);
   assert.match(toast.message, /失败 2/);
   assert.equal(toast.kind, "warn", "a run with failures must use the warn style");
+});
+
+// Upstream f40e447: a disabled credential cannot authenticate, so its card must
+// not offer select/refresh/check-in, and the stored auth-file note replaces the
+// upstream error the billing call used to produce.
+test("disabled account card offers no actions and shows its disable reason", () => {
+  const { context } = loadPanel();
+  const html = context.card({
+    auth_index: "idx-1",
+    name: "workbuddy-dead.json",
+    uid: "u-1",
+    region: "cn",
+    plan: "free",
+    disabled: true,
+    note: "Session revoked (401): re-login required",
+    error: "请求失败",
+  });
+  assert.match(html, /已禁用/);
+  assert.match(html, /不参与调度/);
+  assert.match(html, /Session revoked \(401\): re-login required/);
+  assert.doesNotMatch(html, /请求失败/);
+  assert.doesNotMatch(html, /data-action="refresh"/);
+  assert.doesNotMatch(html, /data-action="checkin"/);
+  assert.doesNotMatch(html, /data-action="select"/);
+});
+
+// The disable reason must be escaped like every other account-owned string.
+test("disabled account card escapes the disable reason", () => {
+  const { context } = loadPanel();
+  const html = context.card({
+    auth_index: "idx-2",
+    name: "dead.json",
+    region: "cn",
+    plan: "free",
+    disabled: true,
+    note: '<img src=x onerror="alert(1)">',
+  });
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
+});
+
+// The disabled rules must not leak onto healthy cards: a live CN account keeps
+// the check-in button, a live Global one keeps its no-check-in rule.
+test("a live CN account still offers select, refresh and check-in", () => {
+  const { context } = loadPanel();
+  const html = context.card({
+    auth_index: "idx-live",
+    name: "live.json",
+    region: "cn",
+    plan: "free",
+    disabled: false,
+  });
+  assert.match(html, /data-action="select"/);
+  assert.match(html, /data-action="refresh"/);
+  assert.match(html, /data-action="checkin"/);
+  assert.doesNotMatch(html, /不参与调度/);
+});
+
+test("a live Global account keeps its no-check-in rule and still refreshes", () => {
+  const { context } = loadPanel();
+  const html = context.card({
+    auth_index: "idx-g",
+    name: "global.json",
+    region: "global",
+    plan: "free",
+    disabled: false,
+  });
+  assert.match(html, /data-action="select"/);
+  assert.match(html, /data-action="refresh"/);
+  assert.doesNotMatch(html, /data-action="checkin"/);
+});
+
+test("lazyLoadCredits never queries a disabled account", async () => {
+  const requests = [];
+  const { context } = loadPanel({
+    sessionEntries: [["workbuddy-mgmt-key", "k"]],
+    fetch: async (url) => {
+      requests.push(String(url));
+      return fakeResponse(200, "application/json", JSON.stringify({ accounts: [] }));
+    },
+  });
+  context.lastAccounts = [];
+  context.lazyLoadCredits([
+    { auth_index: "dead", disabled: true },
+    { auth_index: "live", disabled: false },
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(requests.some((u) => u.includes("auth_index=live")), "live account should be queried");
+  assert.ok(!requests.some((u) => u.includes("auth_index=dead")), "disabled account must not be queried");
+});
+
+// checkinAll surfaces the backend's skipped_disabled counter without losing the
+// Global / enterprise buckets this fork already reported.
+test("checkinAll reports the disabled bucket alongside Global and enterprise", async () => {
+  const { context } = loadPanel();
+  const toasts = [];
+  context.api = async () => ({
+    summary: { success: 1, already: 2, fail: 0, skipped_global: 3, skipped_enterprise: 4, skipped_disabled: 5 },
+  });
+  context.toast = (title, kind, detail) => toasts.push({ title, kind, detail });
+  await context.checkinAll({ disabled: false, dataset: {}, innerHTML: "全部签到" });
+  const detail = toasts.at(-1).detail;
+  assert.match(detail, /跳过 Global 3/);
+  assert.match(detail, /跳过企业版 4/);
+  assert.match(detail, /跳过已禁用 5/);
 });

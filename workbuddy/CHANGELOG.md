@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.13.5
+
+合并上游 `cad83b4`..`8a3d087`（上游 0.12.5 → 0.12.8，含 0.12.8 的版本提交）。逐条处置如下。
+
+### 修复
+
+- **面板重新能从管理端自动读取管理密钥**（上游 `9842628`，当前线上症状）：CPA 管理端 8.x 把
+  `cli-proxy-auth` 改成 `enc::v2::`（XOR 密钥为 `salt|host`，旧格式 `enc::v1::` 还混入 userAgent），
+  我方原先只认 v1，解码失败后取不到密钥，**每次都要手填**。现在 v2/v1 都能解；同时去掉
+  `window.top` 门控，新标签页直接打开面板也能读到同源 localStorage。
+- **面板「模型目录尚未初始化」不再被禁用账号拖累**（上游 `f40e447` + `ee5b8d3`）：宿主不会为已禁用
+  的凭证调用 `model.for_auth`，其快照只能停在 `not_started`；聚合与逐账号明细现跳过禁用账号，
+  只有全部账号都禁用时才回落到「尚未初始化」。同时禁用账号不再请求积分接口（必然 401），
+  卡片改为展示持久化的禁用原因（`note`），签到与刷新按钮一并隐藏。
+- **错误分类对齐 5.8.3 客户端**（上游 `cad83b4`）：
+  - 新增 `upstreamErrQuotaExhausted`（业务码 14001/14002/14012–14014/14018/14019），映射
+    `recheck_credits`。该判断**排在 429 分支之前**——上游会把 14018 包在 429 里，否则余额耗尽的
+    账号会被误判成可自愈限流而反复重试。
+  - 新增 `upstreamErrTokenRejected`（裸 401，常见为 openresty HTML；以及
+    `session doesn't have required client` / `refresh token is invalid` / `invalid_grant`），
+    映射 `disable_until_relogin`。
+  - 新增 `accountBannedCodeRe` = `1114[12]`（**11140 故意排除**：上游在模型级限流体里复用它，
+    仍按 wording “request illegal” 判断）、`contentBlockedCodeRe` = `11128`（内容审计码，
+    wording 与 11140 相同，只能靠码区分）、`transientThrottleCodeRe`（14003 与 6000–6008 的
+    tps/tpm/rps/rpm 家族，自愈类）、`jwtExpiry`。
+  - refresh token 被拒但 access token 仍有效时**不再停用账号**（`accessTokenUsable`）：上游在
+    refresh 失效后很久仍认 access token，是否失效只由真实请求的 401 决定。
+- **出站请求对齐 5.8.3 客户端**（上游 `cad83b4`）：`clientUA` → `WorkBuddy/5.8.3 WorkBuddy/5.8.3
+  CLI/2.161.0`，新增 `clientVersion` / `catalogCLIUA`（catalog 的 CLI 形态改用
+  `CLI/2.161.0`，不再空 UA）；`X-IDE-Type`/`X-IDE-Name` 改 `WorkBuddy`，新增
+  `X-Agent-Purpose: conversation` 与 `X-Private-Data: true`；企业号才发 `X-Userinfo`
+  （base64 的 `{"uin","owner_uin"}`，`identityUserinfo`）。**保留**我方 Global realm 的
+  `originRefererFor(sa)`、`Accept-Language`、`X-CodeBuddy-Request`（上游同位置也有这几行，
+  合并结果一致：删通用 Origin/Referer，保留按 realm 的取值）。
+- **流式请求的失败状态不再被吞成 500**（上游 `cad83b4`）：`handleExecStream` 改为同步 open
+  （`hostHTTPDoStreamWithCallback`），上游非 2xx 直接以真实状态码回包，宿主可换凭证重试；
+  新抽 `recordFailedStream` / `pumpOpenStream`，原 `pumpUpstreamStream` 保留给测试与旧调用点。
+- **禁用原因不再被积分文案覆盖**（上游 `f40e447`）：`disableAuth` 的 note 直接用故障原因；
+  `buildAuthFileJSON` 重建文件时保留已持久化的 fault note；已禁用账号跳过签到（新增
+  `skipped_disabled` 计数）与积分查询。
+
+### 其它
+
+- 版本号 0.13.4 → 0.13.5。
+- 上游 `a2f5b1e` / `00e3be6` 的清理项（删 `keepme_probe_test.go`、去 `/tmp/x`、usage 上报不探测、
+  去本机端口）我方 0.13.3/0.13.4 已自行跟进，本次不重复处理。
+- `daily_activity.go` / `daily_activity_test.go` / `docs/DAILY_ACTIVITY.md`（我方国际版每日活跃）
+  与上游无交集，全部保留。
+
 ## 0.13.4
 
 ### 变更（合并上游 post-0.12.2 清理）
@@ -14,6 +63,7 @@
 
 - 版本号 0.13.3 → 0.13.4。
 - 合并来源：上游 hex-ci/cpa-plugin `main`（`workbuddy-v0.12.2` 之后的两次提交）。
+
 ## 0.13.3
 
 ### 修复（合并上游 0.12.2）
@@ -33,6 +83,7 @@
 
 - 版本号 0.13.2 → 0.13.3。
 - 合并来源：上游 hex-ci/cpa-plugin `workbuddy-v0.12.2`（相对 `v0.12.1` 的全部改动）。
+
 ## 0.13.2
 
 ### 修复
