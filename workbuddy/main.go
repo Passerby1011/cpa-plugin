@@ -819,10 +819,11 @@ func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool, carrier m
 	id := providerName
 	fileName := authFileName
 	if sa != nil {
-		if uid := sanitizeUIDForFileName(sa.Account.UID); uid != "" {
-			id = uid
-			// authFileNameFor adds the enterprise suffix, so one person's
-			// personal and team accounts never share a file.
+		if credentialID := credentialIDFor(sa); credentialID != "" {
+			// One person's personal and team accounts share the uid; the
+			// credential id (and the file name built from it) adds the
+			// enterpriseId so the two can never collide.
+			id = credentialID
 			fileName = authFileNameFor(sa)
 		}
 	}

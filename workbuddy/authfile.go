@@ -73,17 +73,36 @@ func enterpriseIDSuffix(id string) string {
 	return id[len(id)-6:]
 }
 
+// credentialIDFor is the plugin-side identity of one credential: the sanitized
+// uid, plus "-<sanitized enterpriseId>" for an enterprise account. It is the
+// same string authFileNameFor builds its name from, so the ID the plugin
+// reports and the file the host stores always agree on who a credential is.
+//
+// The host derives its record key from the file path whenever the plugin
+// leaves AuthData.ID empty (pluginAuthDataToCoreAuth -> authIDForPath), which
+// is what the login/parse/refresh paths do. Keeping the ID consistent too
+// means no future caller that does send it can key one person's personal and
+// team accounts alike.
+func credentialIDFor(sa *storedAuth) string {
+	if sa == nil {
+		return ""
+	}
+	uid := sanitizeUIDForFileName(sa.Account.UID)
+	if uid == "" {
+		return ""
+	}
+	if entID := sanitizeUIDForFileName(sa.Account.EnterpriseID); entID != "" {
+		return uid + "-" + entID
+	}
+	return uid
+}
+
 // authFileNameFor returns the canonical file name for one credential. An
 // enterprise account adds "-<sanitized enterpriseId>" so it can never collide
 // with the same person's personal account.
 func authFileNameFor(sa *storedAuth) string {
-	if sa != nil {
-		if uid := sanitizeUIDForFileName(sa.Account.UID); uid != "" {
-			if entID := sanitizeUIDForFileName(sa.Account.EnterpriseID); entID != "" {
-				return "workbuddy-" + uid + "-" + entID + ".json"
-			}
-			return "workbuddy-" + uid + ".json"
-		}
+	if id := credentialIDFor(sa); id != "" {
+		return "workbuddy-" + id + ".json"
 	}
 	return authFileName
 }

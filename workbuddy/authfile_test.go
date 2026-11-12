@@ -199,3 +199,45 @@ func TestParseStoredReadsEnterpriseFieldsInBothShapes(t *testing.T) {
 		}
 	}
 }
+
+// The plugin-side credential identity must carry the enterprise dimension, not
+// just the file name: AuthData.ID and AuthData.FileName both feed the host's
+// record key, and a uid-only ID would let one person's team login replace
+// their personal account.
+func TestCredentialIdentityCarriesEnterprise(t *testing.T) {
+	const uid = "u-1"
+	personal := &storedAuth{Account: storedAccount{UID: uid}}
+	team := &storedAuth{Account: storedAccount{UID: uid, EnterpriseID: "ent-a"}}
+
+	if got := credentialIDFor(personal); got != uid {
+		t.Fatalf("personal credential id = %q, want the bare uid", got)
+	}
+	if got := credentialIDFor(team); got != uid+"-ent-a" {
+		t.Fatalf("enterprise credential id = %q, want uid + enterpriseId", got)
+	}
+	if credentialIDFor(personal) == credentialIDFor(team) {
+		t.Fatal("personal and enterprise credentials share an id")
+	}
+	// AuthData must agree with the file name it reports.
+	for _, sa := range []*storedAuth{personal, team} {
+		ad := toAuthData(sa)
+		want := authFileNameFor(sa)
+		if ad.FileName != want {
+			t.Fatalf("AuthData.FileName = %q, want %q", ad.FileName, want)
+		}
+		if ad.ID != credentialIDFor(sa) {
+			t.Fatalf("AuthData.ID = %q, want %q", ad.ID, credentialIDFor(sa))
+		}
+		if strings.TrimSuffix(ad.FileName, ".json") != "workbuddy-"+ad.ID {
+			t.Fatalf("id %q and file name %q disagree", ad.ID, ad.FileName)
+		}
+	}
+	// A credential without a uid keeps the bare legacy name and provider id.
+	bare := toAuthData(&storedAuth{Account: storedAccount{}})
+	if bare.FileName != authFileName || bare.ID != providerName {
+		t.Fatalf("uid-less AuthData = %+v", bare)
+	}
+	if got := credentialIDFor(nil); got != "" {
+		t.Fatalf("credentialIDFor(nil) = %q", got)
+	}
+}

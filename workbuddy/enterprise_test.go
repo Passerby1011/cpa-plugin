@@ -706,3 +706,71 @@ func TestPanelRendersEnterpriseNameBadge(t *testing.T) {
 		t.Fatal("panel.html is missing the ent-name badge style")
 	}
 }
+
+// A login that never said "personal" must not be turned into an enterprise
+// account by the account list alone: with several candidate enterprises and no
+// id from /login/account, the plugin cannot know which one the sign-in bound
+// to, so it must keep NO enterpriseId (the account stays personal) rather than
+// guess. A guess here would silently skip check-in, activity and travel for a
+// personal account and bill it against the wrong team.
+func TestEnterpriseNotGuessedWhenAccountListIsAmbiguous(t *testing.T) {
+	cases := []struct {
+		name         string
+		accountBody  string
+		accountsBody string
+	}{
+		{
+			name:        "two enterprises of the same type",
+			accountBody: `{"code":0,"data":{"uid":"u-1","nickname":"小明","type":"enterprise"}}`,
+			accountsBody: `{"code":0,"data":{"accounts":[
+				{"uid":"u-1","enterpriseId":"ent-aaa","enterpriseName":"团队甲","type":"enterprise"},
+				{"uid":"u-1","enterpriseId":"ent-bbb","enterpriseName":"团队乙","type":"enterprise"}
+			]}}`,
+		},
+		{
+			name:        "two enterprises, two lastLogin flags",
+			accountBody: `{"code":0,"data":{"uid":"u-1","nickname":"小明","type":"team"}}`,
+			accountsBody: `{"code":0,"data":{"accounts":[
+				{"uid":"u-1","enterpriseId":"ent-aaa","enterpriseName":"团队甲","type":"enterprise","lastLogin":true},
+				{"uid":"u-1","enterpriseId":"ent-bbb","enterpriseName":"团队乙","type":"enterprise","lastLogin":true}
+			]}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &loginPollServer{tokenBody: pollTokenBody, accountBody: tc.accountBody, accountsBody: tc.accountsBody}
+			sa := runPollLogin(t, srv)
+			if got := srv.count(pluginAccountsPath); got != 1 {
+				t.Fatalf("account list requests = %d, want 1", got)
+			}
+			if isEnterpriseAccount(sa) {
+				t.Fatalf("ambiguous account list must not pick one: %#v", sa.Account)
+			}
+			if got := authFileNameFor(sa); got != "workbuddy-u-1.json" {
+				t.Fatalf("file name = %q, want the personal name when no enterprise was chosen", got)
+			}
+		})
+	}
+}
+
+// An older /login/account response that carries no "type" at all describes a
+// personal sign-in (the field predates teams). Such an account must not be
+// reclassified as enterprise — that would skip its check-in, activity and
+// travel — so no account-list request is made for it.
+func TestLoginWithoutTypeStaysPersonal(t *testing.T) {
+	srv := &loginPollServer{
+		tokenBody:   pollTokenBody,
+		accountBody: `{"code":0,"data":{"uid":"u-1","nickname":"小明"}}`,
+		// A body that would classify it as enterprise if the request were made.
+		accountsBody: `{"code":0,"data":{"accounts":[
+			{"uid":"u-1","enterpriseId":"ent-aaa","enterpriseName":"团队甲","type":"enterprise"}
+		]}}`,
+	}
+	sa := runPollLogin(t, srv)
+	if got := srv.count(pluginAccountsPath); got != 0 {
+		t.Fatalf("account list requests = %d for a type-less (personal-era) login, want 0", got)
+	}
+	if isEnterpriseAccount(sa) {
+		t.Fatalf("type-less login must stay personal: %#v", sa.Account)
+	}
+}

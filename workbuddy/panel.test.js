@@ -803,3 +803,43 @@ test("checkinAll reports the disabled bucket alongside Global and enterprise", a
   assert.match(detail, /跳过企业版 4/);
   assert.match(detail, /跳过已禁用 5/);
 });
+
+// One person's personal account and their 「教育公益版」 team account share the
+// uid and the nickname, so the card title alone cannot tell the two apart. The
+// team's name rides its own badge next to the 企业版 badge, escaped, and only
+// when the dashboard supplied one.
+test("enterprise card shows the team name in its own badge", () => {
+  const { context } = loadPanel();
+  const team = context.card({
+    auth_index: "e1",
+    nickname: "小明",
+    region: "cn",
+    plan: "enterprise",
+    enterprise: true,
+    enterprise_name: "教育公益版",
+  });
+  assert.match(team, /class="badge ent-name"/, "team name has its own badge");
+  assert.match(team, />教育公益版</, "team name is rendered");
+  assert.match(team, /title="教育公益版"/, "truncated badge keeps the full value in title");
+  assert.match(team, /企业版/, "the plan badge stays");
+
+  const personal = context.card({ auth_index: "p1", nickname: "小明", region: "cn", plan: "pro" });
+  assert.doesNotMatch(personal, /badge ent-name/, "personal cards carry no team name");
+});
+
+test("enterprise team name is escaped and never folded into the card name", () => {
+  const { context } = loadPanel();
+  const html = context.card({
+    auth_index: "e2",
+    nickname: "小明",
+    region: "cn",
+    plan: "enterprise",
+    enterprise: true,
+    enterprise_name: 'x" onmouseover="alert(1)',
+  });
+  assert.doesNotMatch(html, /onmouseover="alert\(1\)"/, "badge content must be escaped");
+  assert.match(html, /title="小明"/, "the card name stays the person, not person + team");
+  // An enterprise flag without a stored name renders the 企业版 badge alone.
+  const unnamed = context.card({ auth_index: "e3", nickname: "小明", region: "cn", plan: "enterprise", enterprise: true });
+  assert.doesNotMatch(unnamed, /badge ent-name/);
+});

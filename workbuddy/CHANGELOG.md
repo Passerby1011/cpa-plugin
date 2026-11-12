@@ -17,11 +17,17 @@
 - **兼容旧文件名**：升级前写入的 `workbuddy-<uid>.json` 若已带 `enterpriseId`，会经
   `resolveAuthFileTarget` 的迁移路径改写到企业名后再删旧文件。删除源文件前会同时比对
   uid 与 enterpriseId（`shouldDeleteMigratedSource`）——只比对 uid 会误删同名的个人号文件。
+- **凭证身份键同样带企业维度**：新增 `credentialIDFor`（uid 或 uid-enterpriseId），
+  `authFileNameFor` 与 `toAuthDataOpts` 的 `AuthData.ID` 都由它派生，插件的身份键、文件名、
+  宿主按路径派生的记录键三者始终一致——不会出现「文件分开了、身份键仍相同」的半隔离状态。
 - **登录记录企业名与企业类型**：`/login/account` 未给企业名（或整个 enterpriseId 都未给）时，
   再请求 `GET /v2/plugin/accounts`，按参考实现的 `enterpriseOf()` 优先级挑出本账号的企业
   （同类型唯一 → lastLogin 唯一 → 唯一一条）。**个人号不发该请求**；该接口失败绝不中断登录，
   退化成「有 id 无名字」。`accountData` / `storedAccount` / `parseStored` 的 flat 与 nested
   两种存储形状都新增 `enterpriseName` 与 `type`。
+- **归属不确定时不猜**：`/login/account` 没给 `enterpriseId`、账号列表又有多条候选
+  （同类型多条、多条 lastLogin）时保持「无企业」——个人号不会因一次歧义猜测被误标成企业号
+  而丢掉签到/活跃/travel。缺 `type` 字段的旧登录同样按个人号处理，不发账号列表请求。
 - **企业微信登录入口不再被版本门禁挡住**：CN 登录页 `signin-callback` chunk 对
   `platform=workbuddy` 且 `version < 5.8.0` 隐藏企微入口。原先写死的 `5.3.14` 低于门禁，
   企微用户根本登不进去。新增 `desktopAppVersion = "5.8.3"`（与 `clientVersion` 对齐），
