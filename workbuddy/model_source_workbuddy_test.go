@@ -733,3 +733,92 @@ func syntheticStoredAuth(t *testing.T, realm workBuddyRealm) *storedAuth {
 		Account: storedAccount{UID: "uid-1", EnterpriseID: "enterprise-1"},
 	}
 }
+
+// An enterprise's own models arrive in /v3/config's data.models[] — not in the
+// cli agent's models[] roster — with ids of the form "custom:<name>|<name>"
+// (modelType "enterprise"). WorkBuddy's own CLI appends every "custom:" id to
+// the agent's list, after the ones the agent names, in the config's order, and
+// sends the id upstream unmodified — '|' and all. Without the append an
+// enterprise account's own models were never offered to clients.
+func TestParseWorkBuddyV3ConfigAppendsEnterpriseCustomModels(t *testing.T) {
+	raw := []byte(`{"code":0,"data":{` +
+		`"agents":[{"name":"cli","models":["serve-alpha"]}],` +
+		`"models":[` +
+		`{"id":"serve-alpha","name":"Alpha","maxInputTokens":200000},` +
+		`{"id":"custom:team-llm|team-llm","name":"Team LLM","modelType":"enterprise","maxInputTokens":128000,"maxOutputTokens":4096},` +
+		`{"id":"custom:别的模型|别的模型","name":"Another","modelType":"enterprise"}` +
+		`]}}`)
+	got, err := parseWorkBuddyV3Config(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("models = %#v, want the roster entry plus both custom entries", got)
+	}
+	if got[0].ID != "serve-alpha" {
+		t.Fatalf("roster entry moved: %#v", got)
+	}
+	if got[1].ID != "custom:team-llm|team-llm" || got[2].ID != "custom:别的模型|别的模型" {
+		t.Fatalf("custom entries = %q, %q — ids must keep their exact form and config order", got[1].ID, got[2].ID)
+	}
+	if got[1].ContextLength == nil || *got[1].ContextLength != 128000 {
+		t.Fatalf("custom entry limits = %#v, want the config's maxInputTokens", got[1].ContextLength)
+	}
+	if got[1].MaxCompletionTokens == nil || *got[1].MaxCompletionTokens != 4096 {
+		t.Fatalf("custom entry output limit = %#v", got[1].MaxCompletionTokens)
+	}
+}
+
+// A roster entry the config already lists is not appended twice, and a
+// custom: id outside the roster appears exactly once, after the roster.
+func TestParseWorkBuddyV3ConfigDoesNotDuplicateCustomModels(t *testing.T) {
+	raw := []byte(`{"code":0,"data":{` +
+		`"agents":[{"name":"cli","models":["custom:dup|dup","serve-alpha"]}],` +
+		`"models":[` +
+		`{"id":"custom:dup|dup","name":"Dup"},` +
+		`{"id":"serve-alpha","name":"Alpha"}` +
+		`]}}`)
+	got, err := parseWorkBuddyV3Config(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("models = %#v, want no duplicate custom entry", got)
+	}
+	if got[0].ID != "custom:dup|dup" || got[1].ID != "serve-alpha" {
+		t.Fatalf("roster order lost: %#v", got)
+	}
+}
+
+// The desktop's own local models carry tags "custom"/"chat" and their own
+// url/apiKey; they are not WorkBuddy's to serve. Only the "custom:" id prefix
+// marks an enterprise model, so tagged-only entries must stay out.
+func TestParseWorkBuddyV3ConfigKeepsTaggedLocalModelsOut(t *testing.T) {
+	raw := []byte(`{"code":0,"data":{` +
+		`"agents":[{"name":"cli","models":["serve-alpha"]}],` +
+		`"models":[` +
+		`{"id":"serve-alpha"},` +
+		`{"id":"local-ollama","name":"Local","tags":["custom","chat"],"url":"http://127.0.0.1:11434","apiKey":"x"}` +
+		`]}}`)
+	got, err := parseWorkBuddyV3Config(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "serve-alpha" {
+		t.Fatalf("models = %#v, want only the roster entry", got)
+	}
+	for _, m := range got {
+		if strings.Contains(m.ID, "local-ollama") {
+			t.Fatalf("desktop-local model leaked into the catalogue: %#v", m)
+		}
+	}
+}
+
+// Without a cli agent there is no roster to append to — the parse fails, as
+// before, rather than inventing a catalogue from data.models[].
+func TestParseWorkBuddyV3ConfigCustomModelsRequireCLIAgent(t *testing.T) {
+	raw := []byte(`{"code":0,"data":{"agents":[],"models":[{"id":"custom:x|x"}]}}`)
+	if got, err := parseWorkBuddyV3Config(raw); err == nil {
+		t.Fatalf("models = %#v, want an error without a cli agent", got)
+	}
+}

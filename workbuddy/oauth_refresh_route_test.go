@@ -40,7 +40,7 @@ func withOAuthClientMode(t *testing.T, mode string) {
 // gateway fails, so the refresh route must follow the account domain rather
 // than whatever login channel the user last started.
 func TestRefreshFollowsAccountDomainNotLoginChannel(t *testing.T) {
-	const desktopUA = "WorkBuddy/5.3.14 WorkBuddy/5.3.14 CLI/2.115.0"
+	const desktopUA = "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0"
 	cases := []struct {
 		name       string
 		mode       string

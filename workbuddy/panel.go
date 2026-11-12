@@ -28,11 +28,15 @@ type wbAccount struct {
 	UID        string `json:"uid"`
 	Region     string `json:"region"`               // "cn" or "global"
 	Enterprise bool   `json:"enterprise,omitempty"` // enterpriseId bound at login
-	Plan       string `json:"plan"`
-	Status     string `json:"status"`
-	Disabled   bool   `json:"disabled"`
-	Exhausted  bool   `json:"exhausted"`
-	Selected   bool   `json:"selected"` // panel active routing card
+	// EnterpriseName is the team's display name as WorkBuddy reports it. Kept
+	// out of Nickname on purpose: nickname drives displayNameFor() and the
+	// personal account's identity, and this is the team's name.
+	EnterpriseName string `json:"enterprise_name,omitempty"`
+	Plan           string `json:"plan"`
+	Status         string `json:"status"`
+	Disabled       bool   `json:"disabled"`
+	Exhausted      bool   `json:"exhausted"`
+	Selected       bool   `json:"selected"` // panel active routing card
 	// Note is the persisted auth-file note: for a disabled account it is the
 	// only record of why (fault disable, exhaustion), so the panel can show a
 	// reason instead of an upstream error.
@@ -199,6 +203,9 @@ func buildDashboardExWithCallback(force, fetchCredits bool, callbackID string) m
 			acct.UID = sa.Account.UID
 			acct.Region = accountRegion(sa)
 			acct.Enterprise = isEnterpriseAccount(sa)
+			if acct.Enterprise {
+				acct.EnterpriseName = strings.TrimSpace(sa.Account.EnterpriseName)
+			}
 			if phys != nil {
 				acct.Note = parseNoteFromAuthJSON(phys.JSON)
 			}

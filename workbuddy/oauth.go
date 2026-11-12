@@ -98,11 +98,28 @@ type oauthRequestProfile struct {
 	origin    string
 }
 
+// desktopAppVersion is the WorkBuddy desktop app version the login flow
+// advertises — both in the desktop User-Agent and in the sign-in page's
+// `version` query parameter.
+//
+// The CN sign-in page gates its 企业微信 (WeCom) entry on it: its
+// signin-callback chunk hides WeCom when platform is workbuddy and the
+// version compares below "5.8.0" (the literal is Gt="5.8.0", compared
+// segment by segment). The 5.3.14 this flow used to send was below the gate,
+// so enterprise users never saw a WeCom login at all. Kept equal to the app
+// version inside clientUA, which the rest of the plugin already advertises.
+const desktopAppVersion = "5.8.3"
+
 // oauthProfileForMode returns the login request profile for one client mode.
 // Desktop logins are region split: workbuddy uses the CN gateway with
 // platform=workbuddy, workbuddy-ai the international gateway with
 // platform=workbuddy-ai. Everything downstream keys off the token response's
 // domain field, so the profile only has to pick the right gateway.
+//
+// The UA must carry a full `WorkBuddy/<version>` segment: the login page's
+// host is chosen from it upstream (a versionless or curl UA falls back to
+// copilot.tencent.com instead of www.workbuddy.cn), and the version inside
+// the segment doubles as the WeCom gate above.
 func oauthProfileForMode(mode string) oauthRequestProfile {
 	switch mode {
 	case oauthClientModeWorkBuddy:
@@ -110,7 +127,7 @@ func oauthProfileForMode(mode string) oauthRequestProfile {
 			mode:      oauthClientModeWorkBuddy,
 			base:      upstreamBaseCN,
 			stateURL:  upstreamBaseCN + pluginAuthStatePath + "?platform=workbuddy",
-			userAgent: "WorkBuddy/5.3.14 WorkBuddy/5.3.14 CLI/2.115.0",
+			userAgent: clientUA,
 			origin:    "https://www.workbuddy.cn",
 		}
 	case oauthClientModeWorkBuddyAI:
@@ -118,7 +135,7 @@ func oauthProfileForMode(mode string) oauthRequestProfile {
 			mode:      oauthClientModeWorkBuddyAI,
 			base:      upstreamBaseGlobal,
 			stateURL:  upstreamBaseGlobal + pluginAuthStatePath + "?platform=workbuddy-ai",
-			userAgent: "WorkBuddy/5.3.14 WorkBuddy/5.3.14 CLI/2.115.0",
+			userAgent: clientUA,
 			origin:    originRefererGlobal,
 		}
 	}
@@ -199,6 +216,125 @@ func buildLoginAccountRequest(profile oauthRequestProfile, state, accessToken st
 	return req, nil
 }
 
+// buildLoginAccountsRequest builds GET /v2/plugin/accounts — the person's own
+// account list (personal, team, 「WorkBuddy 教育公益版」…), used to name the
+// enterprise a sign-in bound to when /login/account left the name out.
+func buildLoginAccountsRequest(profile oauthRequestProfile, accessToken, domain string) (*http.Request, error) {
+	req, err := http.NewRequest(http.MethodGet, authEndpointFor(profile, pluginAccountsPath), nil)
+	if err != nil {
+		return nil, err
+	}
+	applyOAuthProfileHeaders(req, profile)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		// The official client falls back to the API host when the token
+		// carried no domain (domainOf: a.domain || new URL(api(site)).host).
+		if u, err := url.Parse(profile.base); err == nil {
+			domain = u.Host
+		}
+	}
+	if domain != "" {
+		req.Header.Set("X-Domain", domain)
+	}
+	return req, nil
+}
+
+// loginAccountsResponse is one entry of /v2/plugin/accounts. Only the fields
+// the enterprise choice reads are decoded; the upstream sends more.
+type loginAccountsResponse struct {
+	Accounts []accountData `json:"accounts"`
+}
+
+// enterpriseRef is the enterprise a sign-in belongs to: an id and, when
+// WorkBuddy names one, its display name.
+type enterpriseRef struct {
+	ID   string
+	Name string
+}
+
+// resolveEnterprise decides which enterprise (if any) the account a sign-in
+// returned belongs to, mirroring the reference implementation's enterpriseOf():
+//
+//   - /login/account's own enterpriseId + enterpriseName win outright.
+//   - A named id without a name takes the name the account list has for that
+//     id (same uid).
+//   - No id at all: an account that isn't personal is a team account and the
+//     list says which — the uid's only entry of that type, else the only one
+//     it last signed in to, else the uid's only enterprise entry.
+//   - A personal account never asks: it has no enterprise by definition.
+//
+// The list call is best-effort. A failure (or an unparsable body) degrades to
+// "id known, name unknown" — it must never fail the login: the credential is
+// already valid at this point, and the enterprise id it carries is what
+// billing needs.
+func resolveEnterprise(client *http.Client, profile oauthRequestProfile, acct accountData, accessToken, domain string) enterpriseRef {
+	own := strings.TrimSpace(acct.EnterpriseID)
+	acctType := strings.ToLower(strings.TrimSpace(acct.Type))
+	// Personal (or untyped with no enterprise): nothing to resolve, no request.
+	if own == "" && (acctType == "" || acctType == "personal") {
+		return enterpriseRef{}
+	}
+	if own != "" && strings.TrimSpace(acct.EnterpriseName) != "" {
+		return enterpriseRef{ID: own, Name: strings.TrimSpace(acct.EnterpriseName)}
+	}
+	req, err := buildLoginAccountsRequest(profile, accessToken, domain)
+	if err != nil {
+		return enterpriseRef{ID: own}
+	}
+	data, _, err := doJSONRequest(client, req)
+	if err != nil {
+		return enterpriseRef{ID: own}
+	}
+	var list loginAccountsResponse
+	if err := json.Unmarshal(data, &list); err != nil {
+		return enterpriseRef{ID: own}
+	}
+	nameOf := func(entry accountData) string { return strings.TrimSpace(entry.EnterpriseName) }
+	mine := make([]accountData, 0, len(list.Accounts))
+	for _, entry := range list.Accounts {
+		if entry.UID != acct.UID || strings.TrimSpace(entry.EnterpriseID) == "" {
+			continue
+		}
+		mine = append(mine, entry)
+	}
+	if own != "" {
+		// The id is settled; the list only supplies the name, and only when
+		// it has an entry for exactly this enterprise.
+		for _, entry := range mine {
+			if strings.TrimSpace(entry.EnterpriseID) == own {
+				return enterpriseRef{ID: own, Name: nameOf(entry)}
+			}
+		}
+		return enterpriseRef{ID: own}
+	}
+	// No id: the account list decides, by the same priority the official
+	// client's mergeCurrentAccountDetails uses.
+	sameType := make([]accountData, 0, len(mine))
+	lastLogin := make([]accountData, 0, len(mine))
+	for _, entry := range mine {
+		if strings.EqualFold(strings.TrimSpace(entry.Type), acctType) {
+			sameType = append(sameType, entry)
+		}
+		if entry.LastLogin {
+			lastLogin = append(lastLogin, entry)
+		}
+	}
+	var pick *accountData
+	switch {
+	case len(sameType) == 1:
+		pick = &sameType[0]
+	case len(lastLogin) == 1:
+		pick = &lastLogin[0]
+	case len(mine) == 1:
+		pick = &mine[0]
+	}
+	if pick == nil {
+		return enterpriseRef{}
+	}
+	return enterpriseRef{ID: strings.TrimSpace(pick.EnterpriseID), Name: nameOf(*pick)}
+}
+
 func buildTokenRefreshRequest(profile oauthRequestProfile, sa *storedAuth) (*http.Request, error) {
 	req, err := http.NewRequest(http.MethodPost, endpointTokenRefreshFor(sa), nil)
 	if err != nil {
@@ -231,7 +367,9 @@ func decorateDesktopAuthURL(rawURL, loginSessionID string) (string, error) {
 		return "", err
 	}
 	query := u.Query()
-	query.Set("version", "5.3.14")
+	// desktopAppVersion, not a literal: the CN sign-in page hides the WeCom
+	// entry below 5.8.0 (see the constant's comment).
+	query.Set("version", desktopAppVersion)
 	// loginSessionId is the CN desktop's telemetry session id; the
 	// international login bundle has no such parameter, so it stays CN-only.
 	if loginSessionID != "" {
@@ -370,7 +508,11 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 		loginStates.Delete(state)
 		return nil, fmt.Errorf("poll: account lookup parse failed: %w", err)
 	}
-	sa, err := buildLoginStoredAuth(tok, acct)
+	// Name the enterprise this sign-in belongs to. Personal accounts answer
+	// without a request; everything else may need the account list. Failure
+	// here degrades to "id known, name unknown" and never fails the login.
+	ent := resolveEnterprise(pollClient, profile, acct, tok.AccessToken, tok.Domain)
+	sa, err := buildLoginStoredAuthWithEnterprise(tok, acct, ent)
 	if err != nil {
 		loginStates.Delete(state)
 		return nil, fmt.Errorf("poll: %w", err)
@@ -433,11 +575,22 @@ func handleRefreshAuth(raw []byte) ([]byte, error) {
 }
 
 func buildLoginStoredAuth(tok tokenData, acct accountData) (*storedAuth, error) {
+	return buildLoginStoredAuthWithEnterprise(tok, acct, enterpriseRef{})
+}
+
+func buildLoginStoredAuthWithEnterprise(tok tokenData, acct accountData, ent enterpriseRef) (*storedAuth, error) {
 	if strings.TrimSpace(tok.AccessToken) == "" {
 		return nil, fmt.Errorf("token response missing accessToken")
 	}
 	if strings.TrimSpace(acct.UID) == "" {
 		return nil, fmt.Errorf("account lookup missing uid")
+	}
+	account := storedAccount{
+		UID:            acct.UID,
+		EnterpriseID:   firstNonEmpty(strings.TrimSpace(ent.ID), acct.EnterpriseID),
+		EnterpriseName: firstNonEmpty(strings.TrimSpace(ent.Name), acct.EnterpriseName),
+		Nickname:       acct.Nickname,
+		Type:           acct.Type,
 	}
 	return &storedAuth{
 		Auth: storedTokens{
@@ -446,7 +599,7 @@ func buildLoginStoredAuth(tok tokenData, acct accountData) (*storedAuth, error) 
 			ExpiresAt:    expiryFromExpiresIn(tok.ExpiresIn, 0),
 			Domain:       tok.Domain,
 		},
-		Account: storedAccount(acct),
+		Account: account,
 	}, nil
 }
 

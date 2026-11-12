@@ -765,11 +765,26 @@ func accessTokenUsable(sa *storedAuth) bool {
 }
 
 // labelForAuth adds [CN]/[Global] for host labels.
+//
+// Enterprise accounts also carry the team's name: one person's personal and
+// team accounts share uid and nickname, so without it the host's auth list
+// shows two identical rows. The team name is composed here, at the display
+// layer — it is never written into Account.Nickname, which drives
+// displayNameFor() and the personal account's identity.
 func labelForAuth(sa *storedAuth) string {
 	base := "WorkBuddy"
 	if sa != nil {
 		if dn := displayNameFor(sa); dn != "" {
 			base = dn
+		}
+		if isEnterpriseAccount(sa) {
+			base = accountName(accountData{
+				UID:      sa.Account.UID,
+				Nickname: base,
+			}, enterpriseRef{
+				ID:   sa.Account.EnterpriseID,
+				Name: sa.Account.EnterpriseName,
+			})
 		}
 	}
 	tag := "CN"

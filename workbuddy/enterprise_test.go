@@ -4,14 +4,18 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
 // TestIsEnterpriseAccount covers the enterprise-member classification used to
@@ -358,5 +362,347 @@ func TestReconcileSkipsLifecycleWhenCreditsRefreshFailed(t *testing.T) {
 	}
 	if action != lifecycleNone {
 		t.Fatalf("action = %s, want none after credits refresh failure", action.String())
+	}
+}
+
+// loginPollServer scripts the three upstream endpoints one login poll walks:
+// auth/token, login/account and (only for non-personal accounts) the account
+// list. Every request is recorded so a test can assert which were made.
+type loginPollServer struct {
+	mu sync.Mutex
+
+	tokenBody    string
+	accountBody  string
+	accountsBody string
+	accountsCode int
+
+	paths  []string
+	header http.Header // headers of the last /v2/plugin/accounts request
+}
+
+func (s *loginPollServer) client() *http.Client {
+	return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		s.mu.Lock()
+		s.paths = append(s.paths, req.URL.Path)
+		s.mu.Unlock()
+		switch req.URL.Path {
+		case strings.TrimSuffix(pluginAuthTokenPath, "?state="):
+			return testHTTPResponse(req, s.tokenBody), nil
+		case "/v2/plugin/login/account":
+			return testHTTPResponse(req, s.accountBody), nil
+		case pluginAccountsPath:
+			s.mu.Lock()
+			s.header = req.Header.Clone()
+			s.mu.Unlock()
+			if s.accountsCode >= 400 {
+				resp := testHTTPResponse(req, `{"code":500,"msg":"unavailable"}`)
+				resp.StatusCode = s.accountsCode
+				return resp, nil
+			}
+			return testHTTPResponse(req, s.accountsBody), nil
+		default:
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+	})}
+}
+
+func (s *loginPollServer) requested(path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range s.paths {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *loginPollServer) count(path string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, p := range s.paths {
+		if p == path {
+			n++
+		}
+	}
+	return n
+}
+
+// runPollLogin drives one complete handlePollLogin against the scripted
+// server and returns the stored credential it produced.
+func runPollLogin(t *testing.T, srv *loginPollServer) *storedAuth {
+	t.Helper()
+	state := "enterprise-poll-" + t.Name()
+	loginStates.Store(state, &loginCtx{client: srv.client(), expires: time.Now().Add(time.Minute)})
+	t.Cleanup(func() { loginStates.Delete(state) })
+
+	raw, err := handlePollLogin(mustJSON(map[string]any{"state": state}))
+	if err != nil {
+		t.Fatalf("poll failed: %v", err)
+	}
+	var env envelope
+	if err := json.Unmarshal(raw, &env); err != nil || !env.OK {
+		t.Fatalf("poll envelope = %s (err %v)", raw, err)
+	}
+	var resp pluginapi.AuthLoginPollResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status != pluginapi.AuthLoginStatusSuccess {
+		t.Fatalf("poll status = %q, want success", resp.Status)
+	}
+	sa, err := parseStored(resp.Auth.StorageJSON)
+	if err != nil {
+		t.Fatalf("stored auth: %v", err)
+	}
+	return sa
+}
+
+const pollTokenBody = `{"code":0,"data":{"accessToken":"access","refreshToken":"refresh","expiresIn":3600,"domain":"www.codebuddy.cn"}}`
+
+// An enterprise sign-in asks /v2/plugin/accounts for the team's name; a
+// personal sign-in has no enterprise and must not make that call at all.
+func TestEnterpriseLoginQueriesAccountListAndPersonalDoesNot(t *testing.T) {
+	t.Run("enterprise queries the account list", func(t *testing.T) {
+		srv := &loginPollServer{
+			tokenBody:   pollTokenBody,
+			accountBody: `{"code":0,"data":{"uid":"u-1","nickname":"小明","enterpriseId":"ent-abc123","type":"enterprise"}}`,
+			accountsBody: `{"code":0,"data":{"accounts":[
+				{"uid":"u-1","enterpriseId":"ent-abc123","enterpriseName":"教育公益版","type":"enterprise"}
+			]}}`,
+		}
+		sa := runPollLogin(t, srv)
+		if got := srv.count(pluginAccountsPath); got != 1 {
+			t.Fatalf("account list requests = %d, want 1", got)
+		}
+		if sa.Account.EnterpriseName != "教育公益版" {
+			t.Fatalf("enterprise name = %q, want 教育公益版", sa.Account.EnterpriseName)
+		}
+		if got := authFileNameFor(sa); got != "workbuddy-u-1-ent-abc123.json" {
+			t.Fatalf("file name = %q, want the enterprise-suffixed name", got)
+		}
+		srv.mu.Lock()
+		header := srv.header
+		srv.mu.Unlock()
+		if got := header.Get("Authorization"); got != "Bearer access" {
+			t.Fatalf("account list authorization = %q, want the login's bearer", got)
+		}
+		if got := header.Get("X-Domain"); got != "www.codebuddy.cn" {
+			t.Fatalf("account list X-Domain = %q, want the token's domain", got)
+		}
+	})
+
+	t.Run("personal never queries the account list", func(t *testing.T) {
+		srv := &loginPollServer{
+			tokenBody:   pollTokenBody,
+			accountBody: `{"code":0,"data":{"uid":"u-2","nickname":"小红","type":"personal"}}`,
+		}
+		sa := runPollLogin(t, srv)
+		if got := srv.count(pluginAccountsPath); got != 0 {
+			t.Fatalf("account list requests = %d for a personal account, want 0", got)
+		}
+		if isEnterpriseAccount(sa) {
+			t.Fatalf("personal account stored an enterpriseId: %#v", sa.Account)
+		}
+		if got := authFileNameFor(sa); got != "workbuddy-u-2.json" {
+			t.Fatalf("personal file name = %q, want the unchanged uid-only name", got)
+		}
+	})
+}
+
+// /login/account often names the enterprise id without its display name; the
+// account list supplies it.
+func TestEnterpriseNameFilledFromAccountList(t *testing.T) {
+	srv := &loginPollServer{
+		tokenBody:   pollTokenBody,
+		accountBody: `{"code":0,"data":{"uid":"u-1","nickname":"小明","enterpriseId":"ent-abc123","type":"enterprise"}}`,
+		accountsBody: `{"code":0,"data":{"accounts":[
+			{"uid":"u-1","enterpriseId":"ent-other","enterpriseName":"别的团队","type":"enterprise"},
+			{"uid":"u-1","enterpriseId":"ent-abc123","enterpriseName":"教育公益版","type":"enterprise"}
+		]}}`,
+	}
+	sa := runPollLogin(t, srv)
+	if sa.Account.EnterpriseName != "教育公益版" {
+		t.Fatalf("enterprise name = %q, want the entry matching the login's id", sa.Account.EnterpriseName)
+	}
+	if sa.Account.EnterpriseID != "ent-abc123" {
+		t.Fatalf("enterprise id = %q", sa.Account.EnterpriseID)
+	}
+	if got := accountName(accountData{UID: sa.Account.UID, Nickname: sa.Account.Nickname}, enterpriseRef{
+		ID:   sa.Account.EnterpriseID,
+		Name: sa.Account.EnterpriseName,
+	}); got != "小明 · 教育公益版" {
+		t.Fatalf("display name = %q", got)
+	}
+}
+
+// When nothing in the account list matches, the name degrades to the id tail —
+// and the id itself must survive.
+func TestEnterpriseNameFallsBackToIDTailWhenListDoesNotMatch(t *testing.T) {
+	srv := &loginPollServer{
+		tokenBody:   pollTokenBody,
+		accountBody: `{"code":0,"data":{"uid":"u-1","nickname":"小明","enterpriseId":"ent-abc123","type":"enterprise"}}`,
+		accountsBody: `{"code":0,"data":{"accounts":[
+			{"uid":"u-1","enterpriseId":"ent-other","enterpriseName":"别的团队","type":"enterprise"}
+		]}}`,
+	}
+	sa := runPollLogin(t, srv)
+	if sa.Account.EnterpriseID != "ent-abc123" {
+		t.Fatalf("enterprise id = %q, want the login's id", sa.Account.EnterpriseID)
+	}
+	if sa.Account.EnterpriseName != "" {
+		t.Fatalf("enterprise name = %q, want empty", sa.Account.EnterpriseName)
+	}
+	got := accountName(accountData{UID: sa.Account.UID, Nickname: sa.Account.Nickname}, enterpriseRef{
+		ID:   sa.Account.EnterpriseID,
+		Name: sa.Account.EnterpriseName,
+	})
+	if got != "小明 · enterprise abc123" {
+		t.Fatalf("display name = %q, want the last six id characters", got)
+	}
+}
+
+// The account list is best-effort: a 500 there must not fail a login that has
+// already produced valid tokens, and the enterpriseId must be preserved.
+func TestEnterpriseAccountListFailureDoesNotFailLogin(t *testing.T) {
+	srv := &loginPollServer{
+		tokenBody:    pollTokenBody,
+		accountBody:  `{"code":0,"data":{"uid":"u-1","nickname":"小明","enterpriseId":"ent-abc123","type":"enterprise"}}`,
+		accountsCode: http.StatusInternalServerError,
+	}
+	sa := runPollLogin(t, srv)
+	if sa.Account.EnterpriseID != "ent-abc123" {
+		t.Fatalf("enterprise id = %q, want preserved through an account-list failure", sa.Account.EnterpriseID)
+	}
+	if sa.Account.EnterpriseName != "" {
+		t.Fatalf("enterprise name = %q, want empty", sa.Account.EnterpriseName)
+	}
+	if sa.Auth.AccessToken != "access" {
+		t.Fatalf("access token = %q", sa.Auth.AccessToken)
+	}
+}
+
+// A team sign-in whose /login/account response carries no enterpriseId at all
+// is identified from the account list: the uid's only non-personal entry.
+func TestEnterpriseResolvedFromAccountListWhenLoginOmitsID(t *testing.T) {
+	srv := &loginPollServer{
+		tokenBody:   pollTokenBody,
+		accountBody: `{"code":0,"data":{"uid":"u-1","nickname":"小明","type":"enterprise"}}`,
+		accountsBody: `{"code":0,"data":{"accounts":[
+			{"uid":"u-1","type":"personal"},
+			{"uid":"u-1","enterpriseId":"ent-abc123","enterpriseName":"教育公益版","type":"enterprise","lastLogin":true}
+		]}}`,
+	}
+	sa := runPollLogin(t, srv)
+	if sa.Account.EnterpriseID != "ent-abc123" || sa.Account.EnterpriseName != "教育公益版" {
+		t.Fatalf("account = %#v, want the sole enterprise entry", sa.Account)
+	}
+	if got := authFileNameFor(sa); got != "workbuddy-u-1-ent-abc123.json" {
+		t.Fatalf("file name = %q", got)
+	}
+}
+
+// Regression (red line): enterprise accounts must never enter the check-in,
+// growth, travel or daily-activity paths.
+func TestEnterpriseAccountsStillSkipAllGrowthPaths(t *testing.T) {
+	sa := &storedAuth{
+		Auth:    storedTokens{AccessToken: "tok", Domain: "www.codebuddy.cn"},
+		Account: storedAccount{UID: "u-1", EnterpriseID: "ent-1", EnterpriseName: "Team"},
+	}
+	reason, _ := checkinSkipReason(sa)
+	if reason != "enterprise" {
+		t.Fatalf("checkin skip reason = %q, want enterprise", reason)
+	}
+	if activityEligible(sa) {
+		t.Fatal("enterprise account must not be activity-eligible")
+	}
+	if dailyActivityEligible(sa) {
+		t.Fatal("enterprise account must not be daily-activity-eligible")
+	}
+	// A CN personal account with the same shape is eligible — the guard keys on
+	// the enterpriseId, not on the account being CN.
+	personal := &storedAuth{
+		Auth:    storedTokens{AccessToken: "tok", Domain: "www.codebuddy.cn"},
+		Account: storedAccount{UID: "u-2"},
+	}
+	if reason, _ := checkinSkipReason(personal); reason != "" {
+		t.Fatalf("personal skip reason = %q, want none", reason)
+	}
+	if !activityEligible(personal) {
+		t.Fatal("CN personal account must stay activity-eligible")
+	}
+}
+
+// The dashboard must carry the enterprise name separately from the nickname:
+// one person's personal and team accounts share uid and nickname, so the name
+// is the only thing telling their cards apart. Folding it into Nickname would
+// also drift displayNameFor() and the file-naming rule.
+func TestDashboardCarriesEnterpriseNameSeparately(t *testing.T) {
+	oldList, oldGet, oldDetails := panelHostAuthList, panelHostAuthGetBundle, panelAccountDetails
+	t.Cleanup(func() {
+		panelHostAuthList, panelHostAuthGetBundle, panelAccountDetails = oldList, oldGet, oldDetails
+	})
+	panelHostAuthList = func() ([]pluginapi.HostAuthFileEntry, error) {
+		return []pluginapi.HostAuthFileEntry{
+			{AuthIndex: "idx-personal", ID: "workbuddy-u-1.json", Name: "workbuddy-u-1.json"},
+			{AuthIndex: "idx-team", ID: "workbuddy-u-1-ent1.json", Name: "workbuddy-u-1-ent1.json"},
+		}, nil
+	}
+	panelHostAuthGetBundle = func(idx string) (*storedAuth, *hostAuthPhysical, error) {
+		if idx == "idx-team" {
+			return &storedAuth{
+				Auth:    storedTokens{AccessToken: "t", Domain: "www.codebuddy.cn"},
+				Account: storedAccount{UID: "u-1", Nickname: "小明", EnterpriseID: "ent1", EnterpriseName: "教育公益版"},
+			}, &hostAuthPhysical{Name: "workbuddy-u-1-ent1.json"}, nil
+		}
+		return &storedAuth{
+			Auth:    storedTokens{AccessToken: "t", Domain: "www.codebuddy.cn"},
+			Account: storedAccount{UID: "u-1", Nickname: "小明"},
+		}, &hostAuthPhysical{Name: "workbuddy-u-1.json"}, nil
+	}
+	panelAccountDetails = func(string, *storedAuth, bool, string) (string, *checkinSummary, *creditsSummary, []string) {
+		return "", nil, nil, nil
+	}
+
+	dash := buildDashboardExWithCallback(false, false, "")
+	accounts, _ := dash["accounts"].([]wbAccount)
+	if len(accounts) != 2 {
+		t.Fatalf("accounts = %#v", dash["accounts"])
+	}
+	byName := map[string]wbAccount{}
+	for _, acct := range accounts {
+		byName[acct.Name] = acct
+	}
+	team := byName["workbuddy-u-1-ent1.json"]
+	personal := byName["workbuddy-u-1.json"]
+	if !team.Enterprise {
+		t.Fatal("team account must be flagged enterprise")
+	}
+	if team.EnterpriseName != "教育公益版" {
+		t.Fatalf("enterprise_name = %q, want 教育公益版", team.EnterpriseName)
+	}
+	if team.Nickname != "小明" || personal.Nickname != "小明" {
+		t.Fatalf("nicknames = %q/%q, want the unchanged person name on both", team.Nickname, personal.Nickname)
+	}
+	if personal.EnterpriseName != "" {
+		t.Fatalf("personal enterprise_name = %q, want empty", personal.EnterpriseName)
+	}
+}
+
+// The panel renders the team name as its own badge next to the 企业版 badge,
+// escaped, and only for enterprise cards.
+func TestPanelRendersEnterpriseNameBadge(t *testing.T) {
+	html := string(panelHTML)
+	for _, want := range []string{
+		"enterprise_name",
+		"badge ent-name",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("panel.html is missing %q", want)
+		}
+	}
+	if !strings.Contains(html, ".badge.ent-name{") {
+		t.Fatal("panel.html is missing the ent-name badge style")
 	}
 }

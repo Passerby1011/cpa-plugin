@@ -118,6 +118,10 @@ const (
 	pluginAuthStatePath    = "/v2/plugin/auth/state"
 	pluginAuthTokenPath    = "/v2/plugin/auth/token?state="
 	pluginLoginAccountPath = "/v2/plugin/login/account?state="
+	// pluginAccountsPath lists the person's accounts (personal + every team
+	// they belong to). Read after login when /login/account did not name the
+	// enterprise the sign-in bound to.
+	pluginAccountsPath = "/v2/plugin/accounts"
 
 	// CN endpoint aliases (login / chat). upstreamBaseCN is the only
 	// CN base; Global has its own upstreamBaseGlobal. No "upstreamBase" legacy
@@ -362,7 +366,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.13.5"
+var version = "0.13.6"
 
 func wbRegistration() registration {
 	return registration{
@@ -385,7 +389,7 @@ func wbRegistration() registration {
 				{Name: "desensitize", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Insert U+200B into configured blocked terms in system/developer prompt text and tool title/description fields (default false)."},
 				{Name: "desensitize_terms", Type: pluginapi.ConfigFieldTypeArray, Description: "Editable literal term list for desensitize; missing uses the built-in 85 terms and [] means an empty custom list."},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model IDs, single-line strings only. A non-empty list is the complete catalog: it is served as-is, with no network request and no cache access. Missing, null, or [] keeps dynamic WorkBuddy discovery."},
-				{Name: "oauth_client_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{oauthClientModeCLI, oauthClientModeWorkBuddy, oauthClientModeWorkBuddyAI}, Description: "OAuth login channel: cli (default), workbuddy (CN desktop, platform=workbuddy) or workbuddy-ai (international desktop, platform=workbuddy-ai on www.workbuddy.ai)."},
+				{Name: "oauth_client_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{oauthClientModeCLI, oauthClientModeWorkBuddy, oauthClientModeWorkBuddyAI}, Description: "OAuth login channel: cli (default), workbuddy (CN desktop, platform=workbuddy, sign-in page www.workbuddy.cn) or workbuddy-ai (international desktop, platform=workbuddy-ai on www.workbuddy.ai). Enterprise accounts and 企业微信 (WeCom) sign-in REQUIRE workbuddy: the CLI channel's sign-in page (codebuddy.cn) offers neither the enterprise picker nor WeCom, and only the desktop channel advertises the app version (5.8.3) the WeCom entry is gated on."},
 				{Name: "enterprise_credits", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Probe strict CN enterprise credits before personal resource packages (default false; Global unchanged)."},
 				{Name: "management_key", Type: pluginapi.ConfigFieldTypeString, Description: "Optional Bearer key enforced by WorkBuddy for mutating management endpoints; also env WB_MANAGEMENT_KEY."},
 				{Name: "proxy-url", Type: pluginapi.ConfigFieldTypeString, Description: "Optional plugin-level proxy for all WorkBuddy HTTP traffic. Supports http, https, socks5, and socks5h; empty preserves existing routing and host-bridged calls inherit CPA. Invalid settings fail closed. Explicit proxy traffic bypasses CPA request-log."},
@@ -456,6 +460,15 @@ type storedAccount struct {
 	UID          string `json:"uid"`
 	EnterpriseID string `json:"enterpriseId"`
 	Nickname     string `json:"nickname"`
+	// EnterpriseName is the team's display name as WorkBuddy's account list
+	// reports it. It is deliberately separate from Nickname: the person's own
+	// name drives the display name and (for personal accounts) the file name,
+	// and joining the two into Nickname would drift both.
+	EnterpriseName string `json:"enterpriseName"`
+	// Type is the account type /login/account reports ("personal", a team
+	// type, …). Stored for diagnostics; the enterprise decision itself is the
+	// non-empty enterpriseId every billing/check-in gate already keys off.
+	Type string `json:"type"`
 }
 
 // apiEnvelope is the generic {code,msg,data} wrapper used by every CodeBuddy API.
@@ -474,9 +487,15 @@ type tokenData struct {
 }
 
 type accountData struct {
-	UID          string `json:"uid"`
-	EnterpriseID string `json:"enterpriseId"`
-	Nickname     string `json:"nickname"`
+	UID            string `json:"uid"`
+	EnterpriseID   string `json:"enterpriseId"`
+	Nickname       string `json:"nickname"`
+	EnterpriseName string `json:"enterpriseName"`
+	Type           string `json:"type"`
+	// LastLogin marks the entry the person most recently signed in to in
+	// WorkBuddy's account list; it breaks the tie when several of a uid's
+	// enterprises share a type.
+	LastLogin bool `json:"lastLogin"`
 }
 
 type authStateData struct {
@@ -502,19 +521,27 @@ func parseStored(raw []byte) (*storedAuth, error) {
 		}
 	} else {
 		var flat struct {
-			AccessToken  string `json:"accessToken"`
-			RefreshToken string `json:"refreshToken"`
-			ExpiresAt    int64  `json:"expiresAt"`
-			Domain       string `json:"domain"`
-			UID          string `json:"uid"`
-			EnterpriseID string `json:"enterpriseId"`
-			Nickname     string `json:"nickname"`
+			AccessToken    string `json:"accessToken"`
+			RefreshToken   string `json:"refreshToken"`
+			ExpiresAt      int64  `json:"expiresAt"`
+			Domain         string `json:"domain"`
+			UID            string `json:"uid"`
+			EnterpriseID   string `json:"enterpriseId"`
+			EnterpriseName string `json:"enterpriseName"`
+			Nickname       string `json:"nickname"`
+			Type           string `json:"type"`
 		}
 		if err := json.Unmarshal(raw, &flat); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
 		}
 		sa.Auth = storedTokens{AccessToken: flat.AccessToken, RefreshToken: flat.RefreshToken, ExpiresAt: flat.ExpiresAt, Domain: flat.Domain}
-		sa.Account = storedAccount{UID: flat.UID, EnterpriseID: flat.EnterpriseID, Nickname: flat.Nickname}
+		sa.Account = storedAccount{
+			UID:            flat.UID,
+			EnterpriseID:   flat.EnterpriseID,
+			EnterpriseName: flat.EnterpriseName,
+			Nickname:       flat.Nickname,
+			Type:           flat.Type,
+		}
 	}
 	if sa.Auth.AccessToken == "" {
 		return nil, fmt.Errorf("parse_error: missing accessToken")
@@ -794,7 +821,9 @@ func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool, carrier m
 	if sa != nil {
 		if uid := sanitizeUIDForFileName(sa.Account.UID); uid != "" {
 			id = uid
-			fileName = "workbuddy-" + uid + ".json"
+			// authFileNameFor adds the enterprise suffix, so one person's
+			// personal and team accounts never share a file.
+			fileName = authFileNameFor(sa)
 		}
 	}
 	label := labelForAuth(sa)

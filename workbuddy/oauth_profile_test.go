@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -43,7 +44,7 @@ func TestWorkBuddyProfileBuildsDesktopStateRequest(t *testing.T) {
 		t.Fatalf("desktop state request = %s %s", req.Method, req.URL)
 	}
 	for key, want := range map[string]string{
-		"User-Agent":           "WorkBuddy/5.3.14 WorkBuddy/5.3.14 CLI/2.115.0",
+		"User-Agent":           "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0",
 		"Origin":               "https://www.workbuddy.cn",
 		"Referer":              "https://www.workbuddy.cn/",
 		"X-No-Authorization":   "true",
@@ -73,7 +74,7 @@ func TestWorkBuddyAIProfileBuildsInternationalStateRequest(t *testing.T) {
 		t.Fatalf("international state request = %s %s", req.Method, req.URL)
 	}
 	for key, want := range map[string]string{
-		"User-Agent":           "WorkBuddy/5.3.14 WorkBuddy/5.3.14 CLI/2.115.0",
+		"User-Agent":           "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0",
 		"Origin":               "https://www.workbuddy.ai",
 		"Referer":              "https://www.workbuddy.ai/",
 		"X-No-Authorization":   "true",
@@ -133,7 +134,7 @@ func TestDecorateDesktopAuthURLPreservesBrowserQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Query().Get("state") != "s" || u.Query().Get("version") != "5.3.14" || u.Query().Get("loginSessionId") != "0123456789abcdef0123456789abcdef" {
+	if u.Query().Get("state") != "s" || u.Query().Get("version") != desktopAppVersion || u.Query().Get("loginSessionId") != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("query = %v", u.Query())
 	}
 }
@@ -149,7 +150,7 @@ func TestDecorateDesktopAuthURLOmitsEmptySessionID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Query().Get("state") != "s" || u.Query().Get("version") != "5.3.14" {
+	if u.Query().Get("state") != "s" || u.Query().Get("version") != desktopAppVersion {
 		t.Fatalf("query = %v", u.Query())
 	}
 	if u.Query().Has("loginSessionId") {
@@ -206,7 +207,7 @@ func TestDesktopLoginKeepsStartProfileAndSessionAcrossReconfigure(t *testing.T) 
 		t.Fatal(err)
 	}
 	loginSessionID := browserURL.Query().Get("loginSessionId")
-	if browserURL.Query().Get("state") != "original" || browserURL.Query().Get("version") != "5.3.14" || !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(loginSessionID) {
+	if browserURL.Query().Get("state") != "original" || browserURL.Query().Get("version") != desktopAppVersion || !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(loginSessionID) {
 		t.Fatalf("desktop browser URL = %q", start.URL)
 	}
 	loginState, ok := loginStates.Load("desktop-login-snapshot")
@@ -232,7 +233,7 @@ func TestDesktopLoginKeepsStartProfileAndSessionAcrossReconfigure(t *testing.T) 
 		t.Fatalf("OAuth requests = %d, want 3", len(requests))
 	}
 	for _, req := range requests {
-		if got := req.Header.Get("User-Agent"); got != "WorkBuddy/5.3.14 WorkBuddy/5.3.14 CLI/2.115.0" {
+		if got := req.Header.Get("User-Agent"); got != "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0" {
 			t.Errorf("%s User-Agent = %q", req.URL.Path, got)
 		}
 		if got := req.Header.Get("Origin"); got != "https://www.workbuddy.cn" {
@@ -299,7 +300,7 @@ func TestRefreshCallUsesDesktopProfile(t *testing.T) {
 		t.Fatalf("refresh request = %s %s", got.Method, got.URL)
 	}
 	for key, want := range map[string]string{
-		"User-Agent":            "WorkBuddy/5.3.14 WorkBuddy/5.3.14 CLI/2.115.0",
+		"User-Agent":            "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0",
 		"Origin":                "https://www.workbuddy.cn",
 		"Referer":               "https://www.workbuddy.cn/",
 		"X-No-Authorization":    "true",
@@ -315,4 +316,83 @@ func TestRefreshCallUsesDesktopProfile(t *testing.T) {
 	if gotValue := got.Header.Get("X-No-Enterprise-Id"); gotValue != "" {
 		t.Errorf("refresh X-No-Enterprise-Id = %q with enterprise", gotValue)
 	}
+}
+
+// The CN sign-in page hides its 企业微信 (WeCom) entry when platform=workbuddy
+// and the page version compares below "5.8.0" (its signin-callback chunk:
+// Gt="5.8.0"). The flow used to advertise 5.3.14, so enterprise users never
+// saw a WeCom sign-in at all. The version must clear the gate, match the
+// desktop UA's own app version, and stay in step with clientVersion's bundle.
+func TestDesktopAuthURLVersionClearsWeComGate(t *testing.T) {
+	if desktopAppVersion == "" {
+		t.Fatal("desktopAppVersion is empty")
+	}
+	if compareDottedVersions(desktopAppVersion, "5.8.0") < 0 {
+		t.Fatalf("desktopAppVersion %q is below the 5.8.0 WeCom gate", desktopAppVersion)
+	}
+	got, err := decorateDesktopAuthURL("https://www.workbuddy.cn/login?state=s", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := u.Query().Get("version")
+	if compareDottedVersions(version, "5.8.0") < 0 {
+		t.Fatalf("login page version = %q, want >= 5.8.0 or the WeCom entry stays hidden", version)
+	}
+	if version != desktopAppVersion {
+		t.Fatalf("login page version = %q, want desktopAppVersion %q", version, desktopAppVersion)
+	}
+	// The desktop UA carries the same app version: the login page's host is
+	// chosen from it upstream, and a bare "WorkBuddy/5" style version falls
+	// back to copilot.tencent.com.
+	if !strings.Contains(clientUA, "WorkBuddy/"+desktopAppVersion+" ") {
+		t.Fatalf("clientUA = %q, want it to advertise WorkBuddy/%s", clientUA, desktopAppVersion)
+	}
+	for _, mode := range []string{oauthClientModeWorkBuddy, oauthClientModeWorkBuddyAI} {
+		profile := oauthProfileForMode(mode)
+		if !strings.Contains(profile.userAgent, "WorkBuddy/"+desktopAppVersion+" ") {
+			t.Fatalf("%s UA = %q, want a full WorkBuddy/%s segment", mode, profile.userAgent, desktopAppVersion)
+		}
+	}
+}
+
+// compareDottedVersions is the sign-in page's own gate comparison, reimplemented
+// for the test: segment by segment, numeric, missing segments count as 0.
+func compareDottedVersions(a, b string) int {
+	as := strings.Split(strings.TrimSpace(a), ".")
+	bs := strings.Split(strings.TrimSpace(b), ".")
+	n := len(as)
+	if len(bs) > n {
+		n = len(bs)
+	}
+	for i := 0; i < n; i++ {
+		av, bv := 0, 0
+		if i < len(as) {
+			av = atoiOrZero(as[i])
+		}
+		if i < len(bs) {
+			bv = atoiOrZero(bs[i])
+		}
+		if av != bv {
+			if av < bv {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+func atoiOrZero(s string) int {
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			break
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
 }

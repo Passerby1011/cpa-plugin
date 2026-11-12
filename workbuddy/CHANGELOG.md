@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.13.6
+
+企业版支持（身份识别 · 账号隔离 · 企微登录 · 企业自有模型）。企业版的用量、签到、
+生命周期逻辑此前已正确（`get-enterprise-user-usage`、企业号跳过签到/活跃/travel），
+本次补齐外围四环：
+
+### 修复
+
+- **同一自然人的个人号与企业号不再互相覆盖**：企业版（团队版 /「WorkBuddy 教育公益版」）
+  与个人号 **uid 和昵称都相同**，原先都写 `workbuddy-<uid>.json`，第二次登录直接顶掉第一个
+  账号。现在企业号为 `workbuddy-<uid>-<enterpriseId>.json`（enterpriseId 经
+  `sanitizeUIDForFileName` 清洗），个人号保持原名。显示名同步区分：个人号 = 昵称，
+  企业号 = `昵称 · 企业名`，企业名缺失时 = `昵称 · enterprise <id 后 6 位>`
+  （`accountName`，对齐 magpie 参考实现）。
+- **兼容旧文件名**：升级前写入的 `workbuddy-<uid>.json` 若已带 `enterpriseId`，会经
+  `resolveAuthFileTarget` 的迁移路径改写到企业名后再删旧文件。删除源文件前会同时比对
+  uid 与 enterpriseId（`shouldDeleteMigratedSource`）——只比对 uid 会误删同名的个人号文件。
+- **登录记录企业名与企业类型**：`/login/account` 未给企业名（或整个 enterpriseId 都未给）时，
+  再请求 `GET /v2/plugin/accounts`，按参考实现的 `enterpriseOf()` 优先级挑出本账号的企业
+  （同类型唯一 → lastLogin 唯一 → 唯一一条）。**个人号不发该请求**；该接口失败绝不中断登录，
+  退化成「有 id 无名字」。`accountData` / `storedAccount` / `parseStored` 的 flat 与 nested
+  两种存储形状都新增 `enterpriseName` 与 `type`。
+- **企业微信登录入口不再被版本门禁挡住**：CN 登录页 `signin-callback` chunk 对
+  `platform=workbuddy` 且 `version < 5.8.0` 隐藏企微入口。原先写死的 `5.3.14` 低于门禁，
+  企微用户根本登不进去。新增 `desktopAppVersion = "5.8.3"`（与 `clientVersion` 对齐），
+  `decorateDesktopAuthURL` 与 desktop 模式 UA 统一使用；CN 模式保留 `loginSessionId`。
+- **企业自有模型可见**：企业模型 id 形如 `custom:<name>|<name>`（`modelType: enterprise`），
+  只出现在 `/v3/config` 的 `data.models[]`，不在 cli agent 的 `models[]` 名单里。
+  `parseWorkBuddyV3Config` 现在按 config 原始顺序把 id 以 `custom:` 开头且未被收录的条目
+  追加到末尾（仅在存在 cli agent 时），id 原样发送、不编码不截断。只认 `custom:` 前缀——
+  带 `custom`/`chat` tag 的桌面本地模型（自带 url/apiKey）不会被放进来。
+- **面板显示企业名**：`wbAccount` 新增 `enterprise_name`，企业号卡片在「企业版」徽标旁
+  单独显示企业名。企业名不写入 `Nickname`（那会连带漂移文件命名与 `displayNameFor()`）。
+- **`oauth_client_mode` 默认值保持 `cli` 不变**，但描述里写明：企业版 / 企业微信登录必须选
+  `workbuddy`（登录页 `platform=workbuddy` → `www.workbuddy.cn`，且只有 desktop 通道会
+  带上满足企微门禁的版本号）。
+
+### 红线（未改动）
+
+- `billing.go` 的企业用量路由（`get-enterprise-user-usage` + `X-Enterprise-Id`/`X-Tenant-Id`）不变。
+- 企业号仍不参与签到 / 每日活跃 / travel / growth：`checkinSkipReason`、
+  `activityEligible`、`dailyActivityEligible`、`lifecycle` 的 `isEnterpriseAccount` 守卫全部保留。
+
 ## 0.13.5
 
 合并上游 `cad83b4`..`8a3d087`（上游 0.12.5 → 0.12.8，含 0.12.8 的版本提交）。逐条处置如下。

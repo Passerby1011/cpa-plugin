@@ -17,8 +17,18 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-// authFileNameFor matches toAuthData naming: always workbuddy-<uid>.json when UID is known.
-// Bare "workbuddy.json" is legacy single-account only (no UID).
+// authFileNameFor is the canonical on-disk name for one credential:
+//
+//	personal   workbuddy-<uid>.json          (unchanged)
+//	enterprise workbuddy-<uid>-<enterpriseId>.json
+//
+// The enterprise suffix exists because one person's personal account and
+// their team account (「WorkBuddy 教育公益版」 and friends) share BOTH the
+// uid and the nickname — signing in to the team account used to overwrite
+// the personal one, and the two could never sit in one pool. The uid alone
+// cannot tell them apart; the enterpriseId can.
+//
+// Bare "workbuddy.json" stays the legacy single-account name (no UID).
 var unsafeUIDChars = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
 
 func sanitizeUIDForFileName(uid string) string {
@@ -33,9 +43,45 @@ func sanitizeUIDForFileName(uid string) string {
 	return uid
 }
 
+// accountName is the name an account is listed under: the person's own name,
+// plus the team's for an enterprise account. Mirrors the reference
+// implementation's accountName(): an enterprise is always distinguished from
+// the same person's personal account, falling back to the end of its id when
+// WorkBuddy names none.
+func accountName(who accountData, ent enterpriseRef) string {
+	person := strings.TrimSpace(firstNonEmpty(who.Nickname, who.UID))
+	if strings.TrimSpace(ent.ID) == "" {
+		return person
+	}
+	team := strings.TrimSpace(ent.Name)
+	if team == "" {
+		team = "enterprise " + enterpriseIDSuffix(ent.ID)
+	}
+	if person == "" {
+		return team
+	}
+	return person + " · " + team
+}
+
+// enterpriseIDSuffix returns the last six characters of an enterprise id —
+// the reference implementation's `ent.id.slice(-6)` fallback label.
+func enterpriseIDSuffix(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 6 {
+		return id
+	}
+	return id[len(id)-6:]
+}
+
+// authFileNameFor returns the canonical file name for one credential. An
+// enterprise account adds "-<sanitized enterpriseId>" so it can never collide
+// with the same person's personal account.
 func authFileNameFor(sa *storedAuth) string {
 	if sa != nil {
 		if uid := sanitizeUIDForFileName(sa.Account.UID); uid != "" {
+			if entID := sanitizeUIDForFileName(sa.Account.EnterpriseID); entID != "" {
+				return "workbuddy-" + uid + "-" + entID + ".json"
+			}
 			return "workbuddy-" + uid + ".json"
 		}
 	}
@@ -58,31 +104,80 @@ func shouldDeleteLegacyForUID(raw []byte, uid string) bool {
 	return err == nil && strings.EqualFold(strings.TrimSpace(sa.Account.UID), uid)
 }
 
+// shouldDeleteMigratedSource reports whether the file being migrated away from
+// holds the SAME credential that was just written under the target name.
+//
+// The uid alone is no longer enough: one person's personal account and their
+// team account share the uid, so a uid-only check would let an enterprise
+// migration delete the personal account's file (and the reverse). Two
+// credentials are the same when uid AND enterpriseId both match; that covers
+// the pre-enterprise file (no enterpriseId) migrating to the enterprise name,
+// and the bare legacy workbuddy.json migrating to either form.
+func shouldDeleteMigratedSource(raw []byte, sa *storedAuth) bool {
+	if sa == nil {
+		return false
+	}
+	uid := strings.TrimSpace(sa.Account.UID)
+	if uid == "" {
+		return false
+	}
+	source, err := parseStored(raw)
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(source.Account.UID), uid) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(source.Account.EnterpriseID), strings.TrimSpace(sa.Account.EnterpriseID))
+}
+
 // resolveAuthFileTarget picks the canonical file name + path for save/delete.
 // Prefer workbuddy-<uid>.json; if the host still points at legacy workbuddy.json
 // for a UID-bearing account, rewrite to the uid name and schedule legacy removal.
-
+//
+// The same migration covers the enterprise rename: a credential that carries an
+// enterpriseId but still lives at workbuddy-<uid>.json (written before the
+// enterprise suffix existed) is saved under workbuddy-<uid>-<enterpriseId>.json
+// and the old file is removed. Without this, the upgraded plugin would keep
+// writing the legacy name — and the next login would again overwrite it.
 func resolveAuthFileTarget(sa *storedAuth, phys *hostAuthPhysical) (name, path string, legacyPath string) {
 	name = authFileNameFor(sa)
 	if phys != nil {
 		path = strings.TrimSpace(phys.Path)
 		physName := strings.TrimSpace(phys.Name)
-		if physName != "" && !isLegacyWorkbuddyAuthName(physName) {
+		// The account is on the uid-only name but its canonical name now carries
+		// the enterprise suffix: that file is the migration source.
+		staleUIDOnlyName := sa != nil && isUIDOnlyWorkbuddyAuthName(physName, sa.Account.UID) &&
+			!strings.EqualFold(physName, name)
+		if physName != "" && !isLegacyWorkbuddyAuthName(physName) && !staleUIDOnlyName {
 			// Already on multi-account name — keep host name (should match uid form).
 			name = physName
 		}
-		if isLegacyWorkbuddyAuthName(physName) || isLegacyWorkbuddyAuthName(filepath.Base(path)) {
+		if isLegacyWorkbuddyAuthName(physName) || isLegacyWorkbuddyAuthName(filepath.Base(path)) || staleUIDOnlyName {
 			if sa != nil && strings.TrimSpace(sa.Account.UID) != "" {
 				// Migrate: write canonical, delete legacy path after save.
 				legacyPath = path
-				if isLegacyWorkbuddyAuthName(filepath.Base(path)) {
-					// path stays legacy until we write canonical beside it
-				}
 				// After persist to name, remove legacyPath if different.
 			}
 		}
 	}
 	return name, path, legacyPath
+}
+
+// isUIDOnlyWorkbuddyAuthName reports whether name is exactly the uid-only
+// multi-account name for uid (workbuddy-<uid>.json), i.e. the pre-enterprise
+// form — not the enterprise form, and not the bare legacy name.
+func isUIDOnlyWorkbuddyAuthName(name, uid string) bool {
+	name = strings.TrimSpace(name)
+	uid = strings.TrimSpace(uid)
+	if name == "" || uid == "" {
+		return false
+	}
+	sanitized := sanitizeUIDForFileName(uid)
+	if sanitized == "" {
+		return false
+	}
+	return strings.EqualFold(name, "workbuddy-"+sanitized+".json")
 }
 
 // hostAuthPersist saves via host API only. Dual-writing the physical path after
@@ -142,7 +237,7 @@ func hostAuthPersistMigrate(name, path, legacyPath string, raw []byte) error {
 	if legacyPath != "" && !strings.EqualFold(filepath.Base(legacyPath), name) {
 		target, targetErr := parseStored(raw)
 		legacyRaw, legacyErr := os.ReadFile(legacyPath)
-		if targetErr == nil && legacyErr == nil && shouldDeleteLegacyForUID(legacyRaw, target.Account.UID) {
+		if targetErr == nil && legacyErr == nil && shouldDeleteMigratedSource(legacyRaw, target) {
 			_ = deleteAuthFileInDir(legacyPath, filepath.Dir(legacyPath))
 		}
 	}
@@ -279,6 +374,12 @@ func parseNoteFromAuthJSON(raw []byte) string {
 // traversal attempts. It validates both the basename pattern AND that the path
 // does not escape via ".." segments. Callers that need to confine deletes to
 // a specific directory should additionally check isPathUnder(path, dir).
+//
+// Accepted names: the bare legacy workbuddy.json and every
+// workbuddy-<uid>[-<enterpriseId>].json form. Both suffix segments are
+// sanitized by sanitizeUIDForFileName (alphanumerics, "_" and "-" only) before
+// they reach a file name, and traversal is rejected above regardless of
+// basename, so the prefix check is the whole pattern.
 
 func isSafeWorkbuddyAuthPath(path string) bool {
 	path = strings.TrimSpace(path)

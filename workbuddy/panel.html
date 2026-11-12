@@ -67,6 +67,7 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .badge.cn{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-border)}
 .badge.global{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-border)}
 .badge.disabled{background:var(--mut-soft);color:var(--mut);border:1px solid var(--mut-border)}
+.badge.ent-name{background:var(--surface-muted);color:var(--fg);border:1px solid var(--border);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .filter-bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
 .ftag{background:var(--surface);border:1px solid var(--border);color:var(--mut);border-radius:99px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:600}
 .ftag.active{background:var(--acc);color:var(--on-acc);border-color:var(--acc)}
@@ -452,7 +453,12 @@ function card(a){
     ? ""
     : `<button class="sec" data-action="refresh" data-auth-index="${esc(a.auth_index)}" title="刷新积分">刷新</button>`;
   const planLabel=plan==="enterprise"?"企业版":(a.plan||"-");
-  const badges=(selected?`<span class="badge" style="background:var(--acc-ring);color:var(--acc);border-color:var(--acc)">使用中</span>`:"")+(disabled?`<span class="badge disabled">已禁用</span>`:"")+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${plan}">${esc(planLabel)}</span>`;
+  // The team's own name sits next to the 企业版 badge: one person's personal
+  // and team accounts share uid and nickname, so the enterprise name is what
+  // tells the two cards apart. Never folded into nickname (see panel.go).
+  const entName=isEnt?(a.enterprise_name||""):"";
+  const entNameBadge=entName?`<span class="badge ent-name" title="${esc(entName)}">${esc(entName)}</span>`:"";
+  const badges=(selected?`<span class="badge" style="background:var(--acc-ring);color:var(--acc);border-color:var(--acc)">使用中</span>`:"")+(disabled?`<span class="badge disabled">已禁用</span>`:"")+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${plan}">${esc(planLabel)}</span>`+entNameBadge;
   return `<div class="card${selected?" selected":""}" data-region="${region}" data-auth="${esc(a.auth_index)}">
   <h2><span class="card-name" title="${esc(displayName)}">${esc(displayName)}</span><span class="card-badges">${badges}</span></h2>
   <div class="uid">${esc(a.uid||"")} · ${esc(a.name||"")}</div>

@@ -276,11 +276,13 @@ func parseWorkBuddyV3Config(raw []byte) ([]modelFacts, error) {
 	}
 
 	models := make([]modelFacts, 0, len(modelIDs))
+	seen := make(map[string]struct{}, len(modelIDs))
 	for _, id := range modelIDs {
 		entry, ok := details[strings.TrimSpace(id)]
 		if !ok {
 			// Roster id with no detail row: keep it, limits stay nil.
 			models = append(models, modelFacts{ID: id})
+			seen[strings.TrimSpace(id)] = struct{}{}
 			continue
 		}
 		// Disabled entries are withdrawn from the catalogue: offering one
@@ -294,9 +296,40 @@ func parseWorkBuddyV3Config(raw []byte) ([]modelFacts, error) {
 			continue
 		}
 		models = append(models, entry.fact())
+		seen[strings.TrimSpace(id)] = struct{}{}
+	}
+	// An enterprise's own models come in the config's data.models[], NOT in
+	// the cli agent's models[] roster: their ids look like
+	// "custom:<name>|<name>" (modelType "enterprise"). WorkBuddy's own CLI
+	// appends every id starting with "custom:" to the agent's list itself,
+	// after the ones the agent names, in the config's order. The id is sent
+	// exactly as it stands — '|' and all — and the service serves a chat to it.
+	//
+	// Only the "custom:" prefix counts. The CLI also appends models tagged
+	// "custom" or "chat"; in a desktop's config those are the desktop's own
+	// local models, carrying their own url/apiKey, and are not WorkBuddy's to
+	// serve. Appending happens only when a cli agent exists, as in the
+	// official client.
+	for _, entry := range response.Data.Models {
+		id := strings.TrimSpace(entry.ID)
+		if !strings.HasPrefix(id, enterpriseModelIDPrefix) {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		if entry.Disabled || isNonChatModel(entry) {
+			continue
+		}
+		models = append(models, entry.fact())
+		seen[id] = struct{}{}
 	}
 	return validateModelFacts(models)
 }
+
+// enterpriseModelIDPrefix marks a model the enterprise published itself; its
+// full id is "custom:<name>|<name>" and travels upstream unmodified.
+const enterpriseModelIDPrefix = "custom:"
 
 // nonChatIDPrefixes are model-id prefixes for entries that are not chat models:
 // embeddings, code completion, and the internal "codewise" family. Selecting one

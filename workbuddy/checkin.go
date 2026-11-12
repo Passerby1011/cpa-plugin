@@ -324,6 +324,27 @@ func handleManualCheckinWithCallback(req pluginapi.ManagementRequest, callbackID
 	}
 }
 
+// checkinSkipReason reports why an account must not be checked in, as the
+// (reason, message) pair the panel contract uses. Empty reason means eligible.
+//
+// Global accounts: growth and check-in are CN-only features.
+// Enterprise accounts: the quota is admin-managed and resets per billing
+// cycle; a check-in call would be refused upstream (403) and the panel would
+// show a failure the operator cannot act on. This guard is a red line — the
+// enterprise support work must not open any growth path for these accounts.
+func checkinSkipReason(sa *storedAuth) (reason, message string) {
+	if sa == nil {
+		return "disabled", "账号已禁用，不参与签到"
+	}
+	if isGlobalDomain(sa.Auth.Domain) {
+		return "global", "国际版账号不支持签到，请使用领取专家加油包"
+	}
+	if isEnterpriseAccount(sa) {
+		return "enterprise", "企业版账号不走签到，额度由管理员按月发放"
+	}
+	return "", ""
+}
+
 // checkinOneAccountWithCallback performs the daily check-in for one account
 // with the minimum number of round-trips:
 //
@@ -357,18 +378,11 @@ func checkinOneAccountWithCallback(f pluginapi.HostAuthFileEntry, callbackID str
 	}
 	out["nickname"] = displayNameFor(sa)
 
-	if isGlobalDomain(sa.Auth.Domain) {
+	if reason, message := checkinSkipReason(sa); reason != "" {
 		out["success"] = false
 		out["skipped"] = true
-		out["reason"] = "global"
-		out["message"] = "国际版账号不支持签到，请使用领取专家加油包"
-		return out
-	}
-	if isEnterpriseAccount(sa) {
-		out["success"] = false
-		out["skipped"] = true
-		out["reason"] = "enterprise"
-		out["message"] = "企业版账号不走签到，额度由管理员按月发放"
+		out["reason"] = reason
+		out["message"] = message
 		return out
 	}
 
