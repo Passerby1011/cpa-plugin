@@ -3,7 +3,6 @@ package plugin
 // Cookie handling and its secrecy boundary.
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 
 	"github.com/hex-ci/cpa-plugin/geminiapi/internal/backend"
+	"github.com/hex-ci/cpa-plugin/geminiapi/internal/config"
 )
 
 // validCookie is a syntactically complete, obviously fake Google cookie.
@@ -216,22 +216,9 @@ func TestImportNeverPutsTheCookieInAnyResponse(t *testing.T) {
 				}
 				return tc.httpDo(req)
 			}
-			m := newTestManager(t, host)
-			m.mu.Lock()
-			m.cfg.AIStudio.BaseURL = ""
-			m.skipSupervision = false
-			m.backendMgr = &backend.Manager{}
-			m.resolveSetup = func(context.Context) (backend.Setup, error) {
-				return backend.Setup{
-					Origin:     "http://127.0.0.1:2048",
-					BaseURL:    "http://127.0.0.1:2048/v1",
-					APIKey:     "backend-key",
-					AdminToken: "admin-token",
-				}, nil
-			}
-			m.mu.Unlock()
+			m := managedTestManager(t, host, config.NamespaceGeminiWeb, "gemini-web-key", "admin-token")
 
-			body, _ := json.Marshal(importRequest{Cookie: validCookie})
+			body, _ := json.Marshal(importRequest{Namespace: config.NamespaceGeminiWeb, Cookie: validCookie})
 			resp, err := m.importAccountResponse(pluginapi.ManagementRequest{
 				Method: http.MethodPost,
 				Path:   accountsPath,
@@ -277,11 +264,11 @@ func TestImportRejectsIncompleteCookieBeforeTouchingTheBackend(t *testing.T) {
 	}
 	m := newTestManager(t, host)
 	m.mu.Lock()
-	m.cfg.AIStudio.BaseURL = ""
-	m.skipSupervision = false
+	m.externals[config.NamespaceGeminiWeb] = false
+	m.backends[config.NamespaceGeminiWeb] = &backend.Manager{}
 	m.mu.Unlock()
 
-	body, _ := json.Marshal(importRequest{Cookie: "SID=only-one"})
+	body, _ := json.Marshal(importRequest{Namespace: config.NamespaceGeminiWeb, Cookie: "SID=only-one"})
 	resp, err := m.importAccountResponse(pluginapi.ManagementRequest{Method: http.MethodPost, Path: accountsPath, Body: body})
 	if err != nil {
 		t.Fatalf("importAccountResponse: %v", err)

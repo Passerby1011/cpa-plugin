@@ -3,16 +3,16 @@ package plugin
 // Registration, management routes, and the panel.
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 
-	"github.com/hex-ci/cpa-plugin/geminiapi/internal/backend"
+	"github.com/hex-ci/cpa-plugin/geminiapi/internal/config"
 )
 
 func TestRegistrationDeclaresOneProviderAndStaticScope(t *testing.T) {
@@ -174,8 +174,25 @@ func TestManagementStatusRouteAnswersJSON(t *testing.T) {
 	if doc.Provider != ProviderID {
 		t.Fatalf("provider = %q", doc.Provider)
 	}
-	if doc.PinnedVersion != "4.28.0-magpie.1" {
-		t.Fatalf("pinned backend version = %q", doc.PinnedVersion)
+	// The top-level pinned version is the ai-studio backend's; EACH namespace
+	// also reports its own, because the two backends have different versions.
+	if doc.PinnedVersion != "0.3.5-magpie.1" {
+		t.Fatalf("pinned backend version = %q, want the ai-studio backend's", doc.PinnedVersion)
+	}
+	if len(doc.Backends) != 2 {
+		t.Fatalf("backends = %+v, want one section per namespace", doc.Backends)
+	}
+	want := map[string]string{
+		config.NamespaceAIStudio:  "0.3.5-magpie.1",
+		config.NamespaceGeminiWeb: "4.28.0-magpie.1",
+	}
+	for _, section := range doc.Backends {
+		if want[section.Name] != section.PinnedVersion {
+			t.Fatalf("namespace %s pinned version = %q, want %q", section.Name, section.PinnedVersion, want[section.Name])
+		}
+		if section.Backend == "" {
+			t.Fatalf("namespace %s reports no backend name", section.Name)
+		}
 	}
 }
 
@@ -209,7 +226,10 @@ func TestManagementBackendRoutesRefuseWhenExternal(t *testing.T) {
 	host := newScriptedHost()
 	m := newTestManager(t, host) // external by construction
 	for _, path := range []string{backendPath + "/install", backendPath + "/start", backendPath + "/stop"} {
-		resp, err := m.handleManagementRequest(pluginapi.ManagementRequest{Method: http.MethodPost, Path: path})
+		resp, err := m.handleManagementRequest(pluginapi.ManagementRequest{
+			Method: http.MethodPost, Path: path,
+			Query: url.Values{"namespace": []string{config.NamespaceAIStudio}},
+		})
 		if err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
@@ -241,21 +261,46 @@ func TestManagementModelsRouteReportsSkips(t *testing.T) {
 		t.Fatalf("models: %v", err)
 	}
 	var doc struct {
-		Count   int                 `json:"count"`
-		Models  []catalogRecordJSON `json:"models"`
-		Skipped []struct {
-			ID     string `json:"id"`
-			Reason string `json:"reason"`
-		} `json:"skipped"`
+		Count      int `json:"count"`
+		Namespaces []struct {
+			Namespace string              `json:"namespace"`
+			Count     int                 `json:"count"`
+			Models    []catalogRecordJSON `json:"models"`
+			Skipped   []struct {
+				ID     string `json:"id"`
+				Reason string `json:"reason"`
+			} `json:"skipped"`
+			Error string `json:"error"`
+		} `json:"namespaces"`
 	}
 	if err := json.Unmarshal(resp.Body, &doc); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if doc.Count != 1 || len(doc.Models) != 1 {
-		t.Fatalf("count = %d, models = %d", doc.Count, len(doc.Models))
+	if len(doc.Namespaces) != 2 {
+		t.Fatalf("namespaces = %+v, want one section per namespace", doc.Namespaces)
 	}
-	if doc.Models[0].PublicID != "ai-studio/gemini-2.5-pro" {
-		t.Fatalf("public id = %q", doc.Models[0].PublicID)
+	ids := map[string][]string{}
+	for _, section := range doc.Namespaces {
+		for _, model := range section.Models {
+			ids[section.Namespace] = append(ids[section.Namespace], model.PublicID)
+		}
+	}
+	// Each namespace publishes under ITS OWN prefix. This is the assertion that
+	// would have caught the shipped defect: the ai-studio namespace served a
+	// gemini-web catalog and published nothing.
+	if len(ids[config.NamespaceAIStudio]) != 1 || ids[config.NamespaceAIStudio][0] != "ai-studio/gemini-2.5-pro" {
+		t.Fatalf("ai-studio models = %v", ids[config.NamespaceAIStudio])
+	}
+	if len(ids[config.NamespaceGeminiWeb]) == 0 {
+		t.Fatalf("gemini-web published no models: %+v", doc.Namespaces)
+	}
+	for _, id := range ids[config.NamespaceGeminiWeb] {
+		if !strings.HasPrefix(id, "gemini-web/") {
+			t.Fatalf("gemini-web model %q lacks its own prefix", id)
+		}
+	}
+	if doc.Count != len(ids[config.NamespaceAIStudio])+len(ids[config.NamespaceGeminiWeb]) {
+		t.Fatalf("total count = %d, sections = %v", doc.Count, ids)
 	}
 }
 
@@ -273,17 +318,12 @@ func TestAccountsRouteReportsCountsOnly(t *testing.T) {
 		}
 		return http.StatusOK, nil, []byte(`{}`), nil
 	}
-	m := newTestManager(t, host)
-	m.mu.Lock()
-	m.cfg.AIStudio.BaseURL = ""
-	m.skipSupervision = false
-	m.resolveSetup = func(ctx context.Context) (backend.Setup, error) {
-		return backend.Setup{Origin: "http://127.0.0.1:2048", BaseURL: "http://127.0.0.1:2048/v1",
-			APIKey: "k", AdminToken: "t"}, nil
-	}
-	m.mu.Unlock()
+	m := managedTestManager(t, host, config.NamespaceGeminiWeb, "k", "t")
 
-	resp, err := m.handleManagementRequest(pluginapi.ManagementRequest{Method: http.MethodGet, Path: accountsPath})
+	resp, err := m.handleManagementRequest(pluginapi.ManagementRequest{
+		Method: http.MethodGet, Path: accountsPath,
+		Query: url.Values{"namespace": []string{config.NamespaceGeminiWeb}},
+	})
 	if err != nil {
 		t.Fatalf("accounts: %v", err)
 	}
@@ -291,11 +331,67 @@ func TestAccountsRouteReportsCountsOnly(t *testing.T) {
 	if err := json.Unmarshal(resp.Body, &doc); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// The count is nested under the status snapshot; what matters is that no
+	// The count is nested under the account summary; what matters is that no
 	// account identifier or label appears.
 	for _, banned := range []string{"\"" + "id" + "\":", "email", "@"} {
 		if strings.Contains(string(resp.Body), banned) {
 			t.Fatalf("the accounts route leaks account detail (%q): %s", banned, resp.Body)
+		}
+	}
+}
+
+// TestAccountsRouteNamesBothNamespaces pins the two-namespace answer: a GET
+// without a selector reports both, and each says which import mechanism it
+// uses, because the two backends genuinely differ.
+func TestAccountsRouteNamesBothNamespaces(t *testing.T) {
+	host := newScriptedHost()
+	m := newTestManager(t, host)
+	resp, err := m.handleManagementRequest(pluginapi.ManagementRequest{Method: http.MethodGet, Path: accountsPath})
+	if err != nil {
+		t.Fatalf("accounts: %v", err)
+	}
+	var doc struct {
+		Backends []struct {
+			Namespace string `json:"namespace"`
+			Import    string `json:"import"`
+		} `json:"backends"`
+	}
+	if err := json.Unmarshal(resp.Body, &doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(doc.Backends) != 2 {
+		t.Fatalf("backends = %+v, want both namespaces", doc.Backends)
+	}
+	imports := map[string]string{}
+	for _, section := range doc.Backends {
+		imports[section.Namespace] = section.Import
+	}
+	// AI Studio adds accounts with a browser, gemini-web with a pasted Cookie.
+	// Reporting the same mechanism for both would be the lie this split fixes.
+	if imports[config.NamespaceAIStudio] != "browser" {
+		t.Fatalf("ai-studio import mechanism = %q, want browser", imports[config.NamespaceAIStudio])
+	}
+	if imports[config.NamespaceGeminiWeb] != "cookie" {
+		t.Fatalf("gemini-web import mechanism = %q, want cookie", imports[config.NamespaceGeminiWeb])
+	}
+}
+
+// TestBackendRoutesRequireANamespace: acting on the wrong backend is the failure
+// this split exists to prevent, so a route that needs a namespace refuses rather
+// than guessing.
+func TestBackendRoutesRequireANamespace(t *testing.T) {
+	host := newScriptedHost()
+	m := newTestManager(t, host)
+	for _, path := range []string{backendPath + "/install", backendPath + "/start", backendPath + "/stop"} {
+		resp, err := m.handleManagementRequest(pluginapi.ManagementRequest{Method: http.MethodPost, Path: path})
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, want 400 for a missing namespace", path, resp.StatusCode)
+		}
+		if !strings.Contains(string(resp.Body), "namespace") {
+			t.Fatalf("%s refusal does not name the missing selector: %s", path, resp.Body)
 		}
 	}
 }

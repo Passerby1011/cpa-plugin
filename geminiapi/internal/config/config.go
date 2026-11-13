@@ -1,12 +1,12 @@
 // Package config loads and validates the geminiapi plugin configuration from
 // the plugins.configs.geminiapi node of CPA's config.yaml.
 //
-// The plugin serves ONE provider id ("geminiapi") but two model namespaces:
+// The plugin serves ONE provider id ("geminiapi") but TWO model namespaces:
 // model ids are published as "<namespace>/<model>", where the namespace is
-// "ai-studio" (this card) or "gemini-web" (downstream card). A namespace that
-// is backed by an external, already-running service is expressed by
-// "<namespace>.base-url": when it is set the plugin does NOT manage that
-// backend, it only proxies.
+// "ai-studio" (AIStudio2API) or "gemini-web" (gemini-web2api-go). Each
+// namespace has its own backend block and, when it is backed by an external
+// service, its own base-url: a namespace with base-url set is not managed by
+// this plugin, it is only proxied.
 package config
 
 import (
@@ -29,50 +29,53 @@ const (
 )
 
 const (
-	// DefaultNamespace is the namespace whose backend this card manages.
+	// DefaultNamespace is the namespace an operator means when they name none.
 	DefaultNamespace = NamespaceAIStudio
 
-	// DefaultRequestTimeout is the base per-request deadline. AI Studio turns
+	// DefaultRequestTimeout is the base per-request deadline. Both backends
 	// can think for minutes; 30m matches the card's requirement and outlasts
 	// the backend's own upstream retries.
 	DefaultRequestTimeout = 30 * time.Minute
 	// DefaultStreamIdleTimeout bounds the gap between upstream chunks, NOT the
 	// whole stream: a long-but-productive reasoning stream must not be killed,
-	// while a silently stalled one must not hold a stream forever. Gemini can
-	// stay quiet for a while before its first token, so this is generous.
+	// while a silently stalled one must not hold a stream forever.
 	DefaultStreamIdleTimeout = 5 * time.Minute
 	// DefaultModelTimeout bounds catalog/account/health reads.
 	DefaultModelTimeout = 15 * time.Second
 
-	// DefaultPort is the backend's own default port; the manager picks the
-	// next free one when it is taken and persists the choice.
-	DefaultPort = 2048
+	// DefaultPortAIStudio / DefaultPortGeminiWeb are the two backends' own
+	// defaults. gemini-web2api-go publishes 2048; AIStudio2API also defaults to
+	// 2048, so this plugin starts the second backend one port up: two fresh
+	// installs on one machine must not race for the same port. A port already
+	// recorded in a data directory always wins afterwards.
+	DefaultPortAIStudio  = 2049
+	DefaultPortGeminiWeb = 2048
 
 	// DefaultContextLimit / DefaultOutputLimit are used only when the backend
-	// does not report per-model limits.
+	// does not report per-model limits (gemini-web2api-go never does).
 	DefaultContextLimit = int64(1000000)
 	DefaultOutputLimit  = int64(8192)
 )
 
-// AIStudio is the configuration of the ai-studio namespace.
-type AIStudio struct {
+// NamespaceConfig is the configuration of ONE namespace's backend.
+type NamespaceConfig struct {
 	// BaseURL points at an external, already-running OpenAI-compatible
-	// backend (for example an AIStudio2API instance the operator manages
-	// themselves). When set, the plugin never installs, starts or stops a
-	// backend for this namespace: it only proxies. Empty means the plugin
-	// manages its own local backend.
+	// backend. When set, the plugin never installs, starts or stops a backend
+	// for this namespace: it only proxies. Empty means the plugin manages its
+	// own local backend.
 	BaseURL string
 	// APIKey is the external backend's API key. Ignored (and refused) when
 	// BaseURL is empty, because a managed backend's key lives in the plugin's
 	// data directory.
 	APIKey string
-	// Proxy is the proxy the backend uses to reach Google. It is NOT the
-	// proxy the plugin uses to reach the backend: localhost traffic must not
-	// go through a proxy. Empty means the backend keeps its saved pool.
+	// Proxy is the proxy the BACKEND uses to reach Google. It is NOT the proxy
+	// the plugin uses to reach the backend: localhost traffic must not go
+	// through a proxy. Empty means the backend keeps its saved pool
+	// (gemini-web) or its saved .env value (AI Studio).
 	Proxy string
-	// AllowImageModels exposes image-generation models. CPA has no image
-	// generation route, so a chat request naming one of these models can only
-	// fail; it is off by default and the README says why.
+	// AllowImageModels exposes image-generation models. Only AI Studio
+	// publishes any; CPA has no image generation route, so a chat request
+	// naming one can only fail. Off by default, and the README says why.
 	AllowImageModels bool
 	// ContextLimit and OutputLimit override the per-model limits the backend
 	// reports. Zero keeps the backend's values.
@@ -84,7 +87,7 @@ type AIStudio struct {
 }
 
 // Managed reports whether the plugin owns this namespace's backend process.
-func (a AIStudio) Managed() bool { return a.BaseURL == "" }
+func (n NamespaceConfig) Managed() bool { return n.BaseURL == "" }
 
 // ModelFilter restricts which discovered models are published and routable.
 //
@@ -177,11 +180,12 @@ func asciiEqualFold(a, b byte) bool {
 
 // Config is the validated plugin configuration.
 type Config struct {
-	// DataDir holds the managed backend's binary, config, secrets, accounts
-	// and log. Defaults to a directory under the user's local app data.
+	// DataDir is the ROOT of the managed backends' state. Each namespace keeps
+	// its own subdirectory under it (see DataDirFor), because two backends
+	// writing one config.json would overwrite each other.
 	DataDir string
-	// SyncProxy is the proxy used to download the backend binary and to reach
-	// the backend's own admin API. It is never used for 127.0.0.1 traffic.
+	// SyncProxy is the proxy used to download the backend binaries and to reach
+	// a backend's own admin surface. It is never used for 127.0.0.1 traffic.
 	SyncProxy string
 	// RequestTimeout is the base per-request deadline.
 	RequestTimeout time.Duration
@@ -190,14 +194,26 @@ type Config struct {
 	// ModelTimeout bounds catalog / account / health reads.
 	ModelTimeout time.Duration
 	Models       ModelFilter
-	AIStudio     AIStudio
-	// Namespaces lists the model namespaces this deployment publishes. It is
-	// always ai-studio for this card; gemini-web is added by its own card.
+	// AIStudio and GeminiWeb are the two namespaces' backend settings.
+	AIStudio  NamespaceConfig
+	GeminiWeb NamespaceConfig
+	// Namespaces lists the model namespaces this deployment publishes.
 	Namespaces []string
 }
 
-// DefaultDataDir is where a managed backend lives when data-dir is unset.
-func DefaultDataDir() string {
+// Namespace returns the configuration of one namespace.
+func (c Config) Namespace(name string) (NamespaceConfig, error) {
+	switch strings.TrimSpace(name) {
+	case NamespaceAIStudio:
+		return c.AIStudio, nil
+	case NamespaceGeminiWeb:
+		return c.GeminiWeb, nil
+	}
+	return NamespaceConfig{}, fmt.Errorf("unknown namespace %q; this plugin serves %s and %s", name, NamespaceAIStudio, NamespaceGeminiWeb)
+}
+
+// DataDirRoot is where the managed backends live when data-dir is unset.
+func DataDirRoot() string {
 	if dir := strings.TrimSpace(os.Getenv("GEMINIAPI_DATA_DIR")); dir != "" {
 		return filepath.Clean(dir)
 	}
@@ -206,6 +222,18 @@ func DefaultDataDir() string {
 		base, _ = os.UserHomeDir()
 	}
 	return filepath.Join(base, "cpa-plugin", "geminiapi")
+}
+
+// DataDirFor is the state directory of one namespace under the configured root.
+//
+// The two backends get separate directories because they keep incompatible
+// state under the same file names (config.json, backend.pid, backend.log). A
+// shared directory would make one backend read the other's config.
+func (c Config) DataDirFor(namespace string) string {
+	if strings.TrimSpace(c.DataDir) == "" {
+		return ""
+	}
+	return filepath.Join(c.DataDir, namespace)
 }
 
 // rawConfig mirrors the YAML node. Duration-ish values are strings so an
@@ -220,15 +248,19 @@ type rawConfig struct {
 		Allow []string `yaml:"allow"`
 		Deny  []string `yaml:"deny"`
 	} `yaml:"models"`
-	AIStudio struct {
-		BaseURL          string `yaml:"base-url"`
-		APIKey           string `yaml:"api-key"`
-		Proxy            string `yaml:"proxy"`
-		AllowImageModels bool   `yaml:"allow-image-models"`
-		ContextLimit     int64  `yaml:"context-limit"`
-		OutputLimit      int64  `yaml:"output-limit"`
-		Port             int    `yaml:"port"`
-	} `yaml:"ai-studio"`
+	AIStudio  rawNamespace `yaml:"ai-studio"`
+	GeminiWeb rawNamespace `yaml:"gemini-web"`
+}
+
+// rawNamespace is one namespace's YAML node.
+type rawNamespace struct {
+	BaseURL          string `yaml:"base-url"`
+	APIKey           string `yaml:"api-key"`
+	Proxy            string `yaml:"proxy"`
+	AllowImageModels bool   `yaml:"allow-image-models"`
+	ContextLimit     int64  `yaml:"context-limit"`
+	OutputLimit      int64  `yaml:"output-limit"`
+	Port             int    `yaml:"port"`
 }
 
 // Load parses the plugins.configs.geminiapi YAML node.
@@ -254,19 +286,10 @@ func Load(node []byte) (Config, error) {
 			Allow: trimAll(raw.Models.Allow),
 			Deny:  trimAll(raw.Models.Deny),
 		},
-		AIStudio: AIStudio{
-			BaseURL:          strings.TrimSpace(raw.AIStudio.BaseURL),
-			APIKey:           strings.TrimSpace(raw.AIStudio.APIKey),
-			Proxy:            strings.TrimSpace(raw.AIStudio.Proxy),
-			AllowImageModels: raw.AIStudio.AllowImageModels,
-			ContextLimit:     raw.AIStudio.ContextLimit,
-			OutputLimit:      raw.AIStudio.OutputLimit,
-			Port:             raw.AIStudio.Port,
-		},
-		Namespaces: []string{NamespaceAIStudio},
+		Namespaces: []string{NamespaceAIStudio, NamespaceGeminiWeb},
 	}
 	if cfg.DataDir == "" {
-		cfg.DataDir = DefaultDataDir()
+		cfg.DataDir = DataDirRoot()
 	}
 	cfg.DataDir = filepath.Clean(cfg.DataDir)
 
@@ -286,42 +309,73 @@ func Load(node []byte) (Config, error) {
 			return Config{}, fmt.Errorf("invalid proxy: %w", err)
 		}
 	}
-	if cfg.AIStudio.BaseURL != "" {
-		normalized, err := NormalizeBaseURL(cfg.AIStudio.BaseURL)
-		if err != nil {
-			return Config{}, fmt.Errorf("invalid ai-studio.base-url: %w", err)
-		}
-		cfg.AIStudio.BaseURL = normalized
-		if cfg.AIStudio.APIKey == "" {
-			return Config{}, fmt.Errorf("ai-studio.base-url is set but ai-studio.api-key is empty: an external backend needs its own API key")
-		}
-		if err := checkHeaderSafe("ai-studio.api-key", cfg.AIStudio.APIKey); err != nil {
-			return Config{}, err
-		}
-	} else if cfg.AIStudio.APIKey != "" {
-		// A managed backend's key is generated into the data directory. Accepting
-		// one here would silently mislead: the operator would expect their key to
-		// be used, and the backend would keep rejecting it.
-		return Config{}, fmt.Errorf("ai-studio.api-key is only valid together with ai-studio.base-url; a plugin-managed backend generates its own key in data-dir/secrets.json")
+
+	aiStudio, err := validateNamespace(NamespaceAIStudio, raw.AIStudio)
+	if err != nil {
+		return Config{}, err
 	}
-	if cfg.AIStudio.Proxy != "" {
-		if _, err := ValidateProxy(cfg.AIStudio.Proxy); err != nil {
-			return Config{}, fmt.Errorf("invalid ai-studio.proxy: %w", err)
-		}
+	geminiWeb, err := validateNamespace(NamespaceGeminiWeb, raw.GeminiWeb)
+	if err != nil {
+		return Config{}, err
 	}
-	if cfg.AIStudio.ContextLimit < 0 || cfg.AIStudio.OutputLimit < 0 {
-		return Config{}, fmt.Errorf("ai-studio.context-limit and ai-studio.output-limit must not be negative")
+	// AI Studio is the only namespace that can publish image models, so an
+	// allow-image-models switch on the other one is meaningless: refusing it is
+	// better than accepting a setting that does nothing.
+	if raw.GeminiWeb.AllowImageModels {
+		return Config{}, fmt.Errorf("gemini-web.allow-image-models is not supported: gemini-web2api-go publishes no image models, so only ai-studio can expose them")
 	}
-	if cfg.AIStudio.OutputLimit > 0 && cfg.AIStudio.ContextLimit > 0 && cfg.AIStudio.OutputLimit > cfg.AIStudio.ContextLimit {
-		return Config{}, fmt.Errorf("ai-studio.output-limit (%d) cannot exceed ai-studio.context-limit (%d)", cfg.AIStudio.OutputLimit, cfg.AIStudio.ContextLimit)
-	}
-	if cfg.AIStudio.Port < 0 || cfg.AIStudio.Port > 65535 {
-		return Config{}, fmt.Errorf("ai-studio.port must be between 1 and 65535, got %d", cfg.AIStudio.Port)
-	}
-	if cfg.AIStudio.BaseURL != "" && cfg.AIStudio.Port != 0 {
-		return Config{}, fmt.Errorf("ai-studio.port cannot be set together with ai-studio.base-url: the plugin does not manage an external backend")
-	}
+	cfg.AIStudio = aiStudio
+	cfg.GeminiWeb = geminiWeb
 	return cfg, nil
+}
+
+// validateNamespace validates one namespace's block.
+func validateNamespace(name string, raw rawNamespace) (NamespaceConfig, error) {
+	out := NamespaceConfig{
+		BaseURL:          strings.TrimSpace(raw.BaseURL),
+		APIKey:           strings.TrimSpace(raw.APIKey),
+		Proxy:            strings.TrimSpace(raw.Proxy),
+		AllowImageModels: raw.AllowImageModels,
+		ContextLimit:     raw.ContextLimit,
+		OutputLimit:      raw.OutputLimit,
+		Port:             raw.Port,
+	}
+	if out.BaseURL != "" {
+		normalized, err := NormalizeBaseURL(out.BaseURL)
+		if err != nil {
+			return NamespaceConfig{}, fmt.Errorf("invalid %s.base-url: %w", name, err)
+		}
+		out.BaseURL = normalized
+		if out.APIKey == "" {
+			return NamespaceConfig{}, fmt.Errorf("%s.base-url is set but %s.api-key is empty: an external backend needs its own API key", name, name)
+		}
+		if err := checkHeaderSafe(name+".api-key", out.APIKey); err != nil {
+			return NamespaceConfig{}, err
+		}
+	} else if out.APIKey != "" {
+		// A managed backend's key is generated into its data directory.
+		// Accepting one here would silently mislead: the operator would expect
+		// their key to be used, and the backend would keep rejecting it.
+		return NamespaceConfig{}, fmt.Errorf("%s.api-key is only valid together with %s.base-url; a plugin-managed backend generates its own key in its data directory", name, name)
+	}
+	if out.Proxy != "" {
+		if _, err := ValidateProxy(out.Proxy); err != nil {
+			return NamespaceConfig{}, fmt.Errorf("invalid %s.proxy: %w", name, err)
+		}
+	}
+	if out.ContextLimit < 0 || out.OutputLimit < 0 {
+		return NamespaceConfig{}, fmt.Errorf("%s.context-limit and %s.output-limit must not be negative", name, name)
+	}
+	if out.OutputLimit > 0 && out.ContextLimit > 0 && out.OutputLimit > out.ContextLimit {
+		return NamespaceConfig{}, fmt.Errorf("%s.output-limit (%d) cannot exceed %s.context-limit (%d)", name, out.OutputLimit, name, out.ContextLimit)
+	}
+	if out.Port < 0 || out.Port > 65535 {
+		return NamespaceConfig{}, fmt.Errorf("%s.port must be between 1 and 65535, got %d", name, out.Port)
+	}
+	if out.BaseURL != "" && out.Port != 0 {
+		return NamespaceConfig{}, fmt.Errorf("%s.port cannot be set together with %s.base-url: the plugin does not manage an external backend", name, name)
+	}
+	return out, nil
 }
 
 func trimAll(in []string) []string {
@@ -356,8 +410,8 @@ func durationValue(key, value string, fallback, minimum time.Duration) (time.Dur
 }
 
 // ValidateProxy accepts http, https, socks5 and socks5h proxy URLs and rejects
-// a value containing a newline: it ends up in an Authorization-free request
-// header and in the backend's proxy pool.
+// a value containing a newline: it ends up in a request header and in the
+// backend's proxy pool.
 func ValidateProxy(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

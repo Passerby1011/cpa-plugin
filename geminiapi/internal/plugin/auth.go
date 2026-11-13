@@ -10,9 +10,16 @@ package plugin
 // before this executor runs. The model list and the panel still work, which
 // makes the failure look like a routing bug.
 //
-// So one record per account exists purely so the host can schedule this
-// provider. The record's JSON carries the BACKEND's API key (a local credential),
-// never a Google cookie.
+// So one record per namespace exists purely so the host can schedule this
+// provider. The record's JSON carries the BACKEND's API key (a local
+// credential), never a Google credential.
+//
+// # Why one record per namespace
+//
+// The two backends have different keys, and a record carries one. Writing a
+// single record would mean one namespace's requests travel with the other
+// backend's key — a 401 at the backend. Each record's label names its namespace
+// so an operator looking at CPA's auth list can tell them apart.
 //
 // # The honest caveat this code cannot fix
 //
@@ -36,65 +43,88 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 
 	"github.com/hex-ci/cpa-plugin/geminiapi/internal/backend"
+	"github.com/hex-ci/cpa-plugin/geminiapi/internal/config"
 )
 
 // authSaveTimeout bounds one host auth-save callback.
 const authSaveTimeout = 10 * time.Second
 
 // authKeyHash is the digest that names one record. Deriving the id from the
-// credential's digest makes re-registration idempotent: rotating a label cannot
-// orphan the previous record.
-func authKeyHash(secret string) string {
-	digest := sha256.Sum256([]byte(secret))
+// namespace + credential makes re-registration idempotent: rotating a label
+// cannot orphan the previous record.
+func authKeyHash(namespace, secret string) string {
+	digest := sha256.Sum256([]byte(namespace + "\n" + secret))
 	return hex.EncodeToString(digest[:])
 }
 
-func authRecordID(hash string) string { return ProviderID + "-key-" + hash }
-func authFileName(hash string) string { return authRecordID(hash) + ".json" }
+func authRecordID(namespace, hash string) string {
+	return ProviderID + "-" + namespace + "-key-" + hash
+}
 
-// materializeAuth ensures an auth record exists for the backend this plugin
-// talks to.
+func authFileName(namespace, hash string) string { return authRecordID(namespace, hash) + ".json" }
+
+// materializeAuth ensures one auth record per namespace exists.
 //
 // For an EXTERNAL backend the record carries the operator's own key (that is
 // what the plugin sends upstream). For a MANAGED backend the key is the one the
 // backend generated into its data directory. Both are local to this deployment,
-// and neither is a Google cookie.
+// and neither is a Google credential.
 func (m *Manager) materializeAuth(ctx context.Context) error {
 	if m.bridge == nil {
 		return nil
 	}
 	m.mu.RLock()
 	cfg := m.cfg
-	mgr := m.backendMgr
-	external := m.skipSupervision
+	externals := m.externals
+	backends := m.backends
 	m.mu.RUnlock()
 
-	var (
-		secret  string
-		baseURL string
-	)
-	if external {
-		secret = cfg.AIStudio.APIKey
-		baseURL = cfg.AIStudio.BaseURL
-	} else {
-		setup, ok := backend.ReadSetup(cfg.DataDir)
-		if !ok || setup.APIKey == "" {
-			// Nothing imported yet: the backend has no key until its data
-			// files exist. Registration must still succeed so the panel can
-			// drive an install, so this is not an error.
-			return nil
+	var lastErr error
+	for _, ns := range cfg.Namespaces {
+		secret, baseURL := "", ""
+		nsCfg, cfgErr := cfg.Namespace(ns)
+		if cfgErr != nil {
+			lastErr = cfgErr
+			continue
 		}
-		secret = setup.APIKey
-		baseURL = setup.BaseURL
+		if externals[ns] {
+			secret = nsCfg.APIKey
+			baseURL = nsCfg.BaseURL
+		} else {
+			mgr := backends[ns]
+			if mgr == nil {
+				continue
+			}
+			flavor, flavorErr := backend.FlavorFor(backend.FlavorID(ns))
+			if flavorErr != nil {
+				lastErr = flavorErr
+				continue
+			}
+			setup, ok := flavor.ReadSetup(mgr.DataDir())
+			if !ok || setup.APIKey == "" {
+				// Nothing installed yet: the backend has no key until its data
+				// files exist. Registration must still succeed so the panel can
+				// drive an install, so this is not an error.
+				continue
+			}
+			secret = setup.APIKey
+			baseURL = setup.BaseURL
+		}
+		if strings.TrimSpace(secret) == "" {
+			continue
+		}
+		if err := m.saveAuthRecord(ctx, ns, secret, baseURL); err != nil {
+			lastErr = err
+		}
 	}
-	if strings.TrimSpace(secret) == "" {
-		return nil
-	}
-	_ = mgr // only needed for install; the setup read above is enough here
+	return lastErr
+}
 
-	hash := authKeyHash(secret)
-	recordID := authRecordID(hash)
-	name := authFileName(hash)
+// saveAuthRecord writes one namespace's auth record if it does not exist.
+func (m *Manager) saveAuthRecord(ctx context.Context, namespace, secret, baseURL string) error {
+	hash := authKeyHash(namespace, secret)
+	recordID := authRecordID(namespace, hash)
+	name := authFileName(namespace, hash)
 
 	entries, err := m.bridge.AuthList(ctx)
 	if err == nil {
@@ -105,9 +135,9 @@ func (m *Manager) materializeAuth(ctx context.Context) error {
 		}
 	}
 
-	// The label carries the digest prefix, never the secret: an auth record is
-	// visible in the Management Center and in host logs.
-	label := "geminiapi backend key (" + hash[:12] + ")"
+	// The label carries the namespace and the digest prefix, never the secret:
+	// an auth record is visible in the Management Center and in host logs.
+	label := ProviderID + " " + namespace + " backend key (" + hash[:12] + ")"
 	payload, err := json.Marshal(struct {
 		Type    string `json:"type"`
 		ID      string `json:"id"`
@@ -192,4 +222,26 @@ func ensureHTTPStatus(err error) int {
 		return http.StatusGatewayTimeout
 	}
 	return http.StatusInternalServerError
+}
+
+// namespaceOfModel reports the namespace prefix of a published model id, or ""
+// when it has none.
+func namespaceOfModel(model string) string {
+	ns, _, ok := backendNamespaceSplit(model)
+	if !ok {
+		return ""
+	}
+	return ns
+}
+
+// backendNamespaceSplit is catalog.ResolveNamespace without importing catalog
+// here (this file only needs the prefix).
+func backendNamespaceSplit(model string) (string, string, bool) {
+	model = strings.TrimSpace(model)
+	for _, ns := range []string{config.NamespaceGeminiWeb, config.NamespaceAIStudio} {
+		if strings.HasPrefix(model, ns+"/") {
+			return ns, strings.TrimPrefix(model, ns+"/"), true
+		}
+	}
+	return "", "", false
 }

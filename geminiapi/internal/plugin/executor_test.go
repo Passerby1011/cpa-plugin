@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -130,21 +131,12 @@ func (h *scriptedHost) lastBody(method string) []byte {
 	return entries[len(entries)-1]
 }
 
-// newTestManager builds a Manager with a prepared catalog and config.
+// newTestManager builds a Manager with prepared catalogs and an EXTERNAL
+// backend per namespace, so no download or spawn is involved.
 func newTestManager(t *testing.T, host *scriptedHost) *Manager {
 	t.Helper()
 	m := NewManager(NewHostBridge(host.call))
-	m.mu.Lock()
-	m.cfg = config.Config{
-		DataDir:           t.TempDir(),
-		RequestTimeout:    config.DefaultRequestTimeout,
-		StreamIdleTimeout: config.DefaultStreamIdleTimeout,
-		ModelTimeout:      config.DefaultModelTimeout,
-		Namespaces:        []string{config.NamespaceAIStudio},
-		AIStudio:          config.AIStudio{BaseURL: "http://127.0.0.1:2048/v1", APIKey: "backend-key"},
-	}
-	m.skipSupervision = true
-	m.catalog = catalog.Build([]backend.Model{
+	aiStudioCatalog, err := catalog.Build([]backend.Model{
 		{
 			ID:                         "gemini-2.5-pro",
 			Capabilities:               map[string]any{"chat_model": true, "thinking": true},
@@ -153,6 +145,62 @@ func newTestManager(t *testing.T, host *scriptedHost) *Manager {
 			OutputTokenLimit:           8192,
 		},
 	}, catalog.BuildOptions{Namespace: catalog.AIStudio})
+	if err != nil {
+		t.Fatalf("build the ai-studio fixture catalog: %v", err)
+	}
+	geminiWebCatalog, err := catalog.Build([]backend.Model{
+		{ID: "gemini-2.5-pro", Object: "model", OwnedBy: "google"},
+		{ID: "gemini-3-pro", Object: "model", OwnedBy: "google"},
+		{ID: "gemini-2.5-pro-thinking", Object: "model", OwnedBy: "google"},
+	}, catalog.BuildOptions{Namespace: catalog.GeminiWeb})
+	if err != nil {
+		t.Fatalf("build the gemini-web fixture catalog: %v", err)
+	}
+	m.mu.Lock()
+	m.cfg = config.Config{
+		DataDir:           t.TempDir(),
+		RequestTimeout:    config.DefaultRequestTimeout,
+		StreamIdleTimeout: config.DefaultStreamIdleTimeout,
+		ModelTimeout:      config.DefaultModelTimeout,
+		Namespaces:        []string{config.NamespaceAIStudio, config.NamespaceGeminiWeb},
+		AIStudio:          config.NamespaceConfig{BaseURL: "http://127.0.0.1:2049/v1", APIKey: "ai-studio-key"},
+		GeminiWeb:         config.NamespaceConfig{BaseURL: "http://127.0.0.1:2048/v1", APIKey: "gemini-web-key"},
+	}
+	m.externals = map[string]bool{config.NamespaceAIStudio: true, config.NamespaceGeminiWeb: true}
+	m.catalogs = map[string]catalog.BuildResult{
+		config.NamespaceAIStudio:  aiStudioCatalog,
+		config.NamespaceGeminiWeb: geminiWebCatalog,
+	}
+	m.mu.Unlock()
+	return m
+}
+
+// managedTestManager marks one namespace as plugin-managed and hands the
+// supervisor resolution to a fake Setup, so a management route can be exercised
+// without a data directory or a binary.
+func managedTestManager(t *testing.T, host *scriptedHost, namespace, apiKey string, adminToken string) *Manager {
+	t.Helper()
+	m := newTestManager(t, host)
+	m.mu.Lock()
+	m.externals[namespace] = false
+	m.backends[namespace] = &backend.Manager{}
+	m.cfg.AIStudio.BaseURL = ""
+	if namespace == config.NamespaceAIStudio {
+		m.cfg.AIStudio.APIKey = ""
+	}
+	m.resolveSetup = func(_ context.Context, ns string) (backend.Setup, error) {
+		origin := "http://127.0.0.1:2049"
+		if ns == config.NamespaceGeminiWeb {
+			origin = "http://127.0.0.1:2048"
+		}
+		return backend.Setup{
+			Origin:     origin,
+			BaseURL:    origin + "/v1",
+			APIKey:     apiKey,
+			AdminToken: adminToken,
+			Flavor:     backend.FlavorID(ns),
+		}, nil
+	}
 	m.mu.Unlock()
 	return m
 }
@@ -204,27 +252,71 @@ func TestExecuteRoutesAISStudioNamespace(t *testing.T) {
 	}
 }
 
-// TestExecuteRejectsGeminiWebNamespaceUntilItsCardLands: answering for a
-// namespace whose backend does not exist would be a silent lie.
-func TestExecuteRejectsGeminiWebNamespace(t *testing.T) {
+// TestExecuteRejectsNonsenseButServesBothNamespaces pins the routing rule that
+// replaced "gemini-web is another card's problem": both namespaces are served,
+// each by its own backend, and each rejects a model it never published.
+func TestExecuteRoutesEachNamespaceToItsOwnBackend(t *testing.T) {
+	host := newScriptedHost()
+	seen := map[string]string{}
+	host.httpDo = func(req hostHTTPReq) (int, http.Header, []byte, error) {
+		seen[req.URL] = string(req.Body)
+		return http.StatusOK, http.Header{"Content-Type": []string{"application/json"}}, []byte(`{"ok":true}`), nil
+	}
+	m := newTestManager(t, host)
+
+	for _, model := range []string{"ai-studio/gemini-2.5-pro", "gemini-web/gemini-2.5-pro"} {
+		raw, err := m.executeWithContext(t.Context(), executorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
+			Model:   model,
+			Payload: []byte(`{"model":"` + model + `"}`),
+		}})
+		if err != nil {
+			t.Fatalf("execute %s: %v", model, err)
+		}
+		env := decodeTestEnvelope(t, raw)
+		if !env.OK {
+			t.Fatalf("execute %s failed: %s", model, envelopeErrorText(env))
+		}
+	}
+	// Each namespace reached ITS OWN backend port: ai-studio 2049, gemini-web
+	// 2048. Routing one namespace's request at the other's port is the defect
+	// this split exists to remove.
+	for url := range seen {
+		switch {
+		case strings.HasPrefix(url, "http://127.0.0.1:2049"):
+			if !strings.Contains(seen[url], `"model":"gemini-2.5-pro"`) {
+				t.Fatalf("ai-studio request body = %s", seen[url])
+			}
+		case strings.HasPrefix(url, "http://127.0.0.1:2048"):
+		default:
+			t.Fatalf("unexpected backend URL %q", url)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("backend calls = %d, want one per namespace: %v", len(seen), seen)
+	}
+}
+
+// TestExecuteRefusesAModelOutsideItsNamespaceCatalog: a gemini-web-only model
+// must not be answered by ai-studio, even though the id is plausible.
+func TestExecuteRefusesAModelOutsideItsNamespaceCatalog(t *testing.T) {
 	host := newScriptedHost()
 	m := newTestManager(t, host)
 	raw, err := m.executeWithContext(t.Context(), executorRequest{ExecutorRequest: pluginapi.ExecutorRequest{
-		Model:   "gemini-web/gemini-2.5-pro",
-		Payload: []byte(`{"model":"gemini-web/gemini-2.5-pro"}`),
+		Model:   "ai-studio/gemini-3-pro",
+		Payload: []byte(`{"model":"ai-studio/gemini-3-pro"}`),
 	}})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	env := decodeTestEnvelope(t, raw)
 	if env.OK {
-		t.Fatal("a gemini-web model was executed by the ai-studio executor")
+		t.Fatal("a model published only by gemini-web was executed under ai-studio")
 	}
-	if !strings.Contains(envelopeErrorText(env), "gemini-web") {
-		t.Fatalf("error does not name the unsupported namespace: %s", envelopeErrorText(env))
+	if !strings.Contains(envelopeErrorText(env), "ai-studio") {
+		t.Fatalf("error does not name the namespace whose catalog was searched: %s", envelopeErrorText(env))
 	}
 	if host.count(pluginabi.MethodHostHTTPDo) != 0 {
-		t.Fatal("the plugin called the backend for an unsupported namespace")
+		t.Fatal("the plugin called a backend for a model it never published")
 	}
 }
 
@@ -263,7 +355,7 @@ func TestExecuteRejectsModelOutsideCatalog(t *testing.T) {
 	if env.OK {
 		t.Fatal("an unknown model was forwarded to the backend")
 	}
-	if !strings.Contains(envelopeErrorText(env), "not in the published catalog") {
+	if !strings.Contains(envelopeErrorText(env), "is not in the published ai-studio catalog") {
 		t.Fatalf("error does not explain the catalog miss: %s", envelopeErrorText(env))
 	}
 }
@@ -286,8 +378,8 @@ func TestExecuteNeverForwardsTheClientAuthorization(t *testing.T) {
 	if env := decodeTestEnvelope(t, raw); !env.OK {
 		t.Fatalf("execution failed: %s", envelopeErrorText(env))
 	}
-	if seenAuth != "Bearer backend-key" {
-		t.Fatalf("outbound Authorization = %q, want the backend's own key", seenAuth)
+	if seenAuth != "Bearer ai-studio-key" {
+		t.Fatalf("outbound Authorization = %q, want the ai-studio backend's own key", seenAuth)
 	}
 }
 

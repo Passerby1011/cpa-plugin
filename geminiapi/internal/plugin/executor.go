@@ -1,14 +1,22 @@
 package plugin
 
-// Execution: route a request by its model-id namespace, call the backend
-// through the host transport, and stream back.
+// Execution: route a request by its model-id namespace, call that namespace's
+// backend through the host transport, and stream back.
+//
+// # Why the namespace decides the backend
+//
+// The public model id carries the namespace, and each namespace has exactly one
+// backend. So routing is a lookup, not a heuristic: "ai-studio/x" can only ever
+// reach AIStudio2API, "gemini-web/x" only gemini-web2api-go. There is no
+// fallback to the other backend, because falling back would send a request to a
+// service the operator did not ask for and whose account pool is different.
 //
 // # Cancellation, idle timeout, total timeout
 //
 // These are three DIFFERENT budgets and conflating them breaks real traffic:
 //
-//   - request-timeout: the whole request. Generous (30m by default), because an
-//     AI Studio turn legitimately thinks for minutes.
+//   - request-timeout: the whole request. Generous (30m by default), because a
+//     Gemini turn legitimately thinks for minutes.
 //   - stream-idle-timeout: the gap between two CHUNKS. A productive stream is
 //     never killed by this, however long it runs; a silently stalled one is
 //     stopped long before the 30m total.
@@ -66,23 +74,20 @@ func (m *Manager) handleExecuteStream(request []byte) ([]byte, error) {
 }
 
 // prepare resolves the model and the backend setup for a request.
+//
+// A model is looked up in its OWN namespace's snapshot only. Looking it up in
+// the other namespace's snapshot would route a request to a backend that never
+// published it — the wrong-backend failure this split exists to prevent.
 func (m *Manager) prepare(ctx context.Context, req executorRequest) (catalog.Record, backend.Setup, int, error) {
 	ns, bare, ok := catalog.ResolveNamespace(req.Model)
 	if !ok {
 		return catalog.Record{}, backend.Setup{}, http.StatusBadRequest, catalog.ModelIDError(req.Model)
 	}
-	if ns != config.NamespaceAIStudio {
-		// gemini-web is its own card: this provider must not silently answer
-		// for a namespace whose backend does not exist yet.
-		return catalog.Record{}, backend.Setup{}, http.StatusBadRequest,
-			fmt.Errorf("namespace %q is not served by this build; only %s is", ns, config.NamespaceAIStudio)
-	}
 
 	m.mu.RLock()
 	cfg := m.cfg
-	result := m.catalog
-	mgr := m.backendMgr
-	external := m.skipSupervision
+	result := m.catalogs[ns]
+	catalogErr := m.catalogErrs[ns]
 	m.mu.RUnlock()
 
 	rec, found := result.Resolve(bare)
@@ -90,14 +95,17 @@ func (m *Manager) prepare(ctx context.Context, req executorRequest) (catalog.Rec
 		rec, found = result.Resolve(req.Model)
 	}
 	if !found {
-		// A model the catalog does not know is refused with a clear reason.
-		// Passing it through would send an id the backend may or may not
+		// A model the namespace's catalog does not know is refused with a clear
+		// reason. Passing it through would send an id the backend may or may not
 		// accept, and a wrong model on a paid account is worse than an error.
-		return catalog.Record{}, backend.Setup{}, http.StatusNotFound,
-			fmt.Errorf("model %q is not in the published catalog; refresh the model list on the plugin page, or check models.allow/deny", req.Model)
+		reason := fmt.Sprintf("model %q is not in the published %s catalog; refresh the model list on the plugin page, or check models.allow/deny", req.Model, ns)
+		if catalogErr != "" {
+			reason += "; the last catalog refresh for this namespace reported: " + catalogErr
+		}
+		return catalog.Record{}, backend.Setup{}, http.StatusNotFound, fmt.Errorf("%s", reason)
 	}
 
-	setup, err := m.setupFor(ctx, cfg, mgr, external)
+	setup, err := m.setupFor(ctx, cfg, ns)
 	if err != nil {
 		return catalog.Record{}, backend.Setup{}, http.StatusBadGateway, err
 	}
@@ -139,7 +147,7 @@ func (m *Manager) executeWithContext(ctx context.Context, req executorRequest) (
 			// retry, and the upstream call is already cancelled by ctx.
 			return classEnvelope(499, fmt.Errorf("request cancelled before the backend answered")), nil
 		}
-		return classEnvelope(http.StatusBadGateway, fmt.Errorf("the local backend could not be reached: %s", redact(err))), nil
+		return classEnvelope(http.StatusBadGateway, fmt.Errorf("the local %s backend could not be reached: %s", setup.Flavor, redact(err))), nil
 	}
 	if resp.StatusCode >= 400 {
 		return upstreamErrorEnvelope(resp.StatusCode, resp.Body, setup), nil
@@ -190,7 +198,7 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 		if ctx.Err() != nil {
 			return classEnvelope(499, fmt.Errorf("request cancelled before the backend answered")), nil
 		}
-		return classEnvelope(http.StatusBadGateway, fmt.Errorf("the local backend could not be reached: %s", redact(err))), nil
+		return classEnvelope(http.StatusBadGateway, fmt.Errorf("the local %s backend could not be reached: %s", setup.Flavor, redact(err))), nil
 	}
 	if stream.StatusCode >= 400 {
 		cancel()
@@ -278,10 +286,11 @@ func (m *Manager) pumpStream(ctx context.Context, cancel context.CancelFunc, bri
 		}
 		if firstChunk {
 			firstChunk = false
-			// The backend may echo the model we sent (the bare upstream id).
-			// The client asked for the namespaced id, so rewrite the first
-			// chunks' model field back to what it requested. Only the model
-			// field is touched; the SSE framing is passed through verbatim.
+			// The backend may echo the model we sent (the bare upstream id, or
+			// a thinking twin). The client asked for the namespaced id, so
+			// rewrite the first chunks' model field back to what it requested.
+			// Only the model field is touched; the SSE framing is passed
+			// through verbatim.
 			payload = rewriteStreamModel(payload, upstreamModel, publicID)
 		}
 		if emitErr := bridge.Emit(downstreamID, payload); emitErr != nil {
@@ -321,9 +330,14 @@ func (m *Manager) streamIdleTimeout() time.Duration {
 // rewriteBody replaces the client's model id with the backend's own id.
 //
 // The published id carries the namespace, the backend expects the bare model.
-// Everything else in the body is forwarded untouched: the backend is
+// Everything else in the body is forwarded untouched: both backends are
 // OpenAI-compatible, so translating it would only lose fields this plugin does
 // not know about.
+//
+// A reasoning level the client asked for is honoured by switching to the model
+// that level runs on (gemini-web needs this: it has no effort parameter, its
+// levels are separate ids). The level itself stays in the body: the Studio
+// backend reads reasoning_effort directly.
 func (m *Manager) rewriteBody(req executorRequest, rec catalog.Record) ([]byte, error) {
 	body := req.Payload
 	if len(body) == 0 {
@@ -332,11 +346,34 @@ func (m *Manager) rewriteBody(req executorRequest, rec catalog.Record) ([]byte, 
 	if len(body) == 0 {
 		return nil, fmt.Errorf("the request carries no body")
 	}
-	out, err := rewriteModelID(body, rec.UpstreamID)
+	level := reasoningLevel(body)
+	upstreamID := rec.UpstreamModelForLevel(level)
+	out, err := rewriteModelID(body, upstreamID)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// reasoningLevel reads the requested reasoning effort from a request body.
+//
+// Two spellings exist in the wild: OpenAI's flat "reasoning_effort", and the
+// nested "reasoning": {"effort": "..."} shape some SDKs send. Both are read, and
+// an absent one means "whatever the model does by default".
+func reasoningLevel(body []byte) string {
+	var doc struct {
+		ReasoningEffort string `json:"reasoning_effort"`
+		Reasoning       struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return ""
+	}
+	if level := strings.TrimSpace(doc.ReasoningEffort); level != "" {
+		return strings.ToLower(level)
+	}
+	return strings.ToLower(strings.TrimSpace(doc.Reasoning.Effort))
 }
 
 // backendHeaders builds the outbound headers: the backend's key, a JSON
@@ -376,7 +413,7 @@ func responseHeaders(in http.Header) http.Header {
 func upstreamErrorEnvelope(status int, body []byte, setup backend.Setup) []byte {
 	message := upstreamErrorMessage(body)
 	if message == "" {
-		message = fmt.Sprintf("the local backend returned HTTP %d", status)
+		message = fmt.Sprintf("the local %s backend returned HTTP %d", setup.Flavor, status)
 	}
 	return classEnvelope(status, fmt.Errorf("%s", message))
 }
@@ -446,8 +483,8 @@ func redact(err error) string {
 		return ""
 	}
 	msg := err.Error()
-	if idx := strings.Index(msg, "http"); idx >= 0 && strings.Contains(msg, "://") {
-		return truncate(msg, 240)
+	if strings.Contains(msg, "://") && strings.Contains(msg, "@") {
+		msg = backend.RedactText(msg, 240)
 	}
 	return truncate(msg, 240)
 }

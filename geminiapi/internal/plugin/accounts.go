@@ -1,14 +1,29 @@
 package plugin
 
-// Account import: paste a Google cookie, hand it to the backend's own admin
-// API, and probe whether it can sign in.
+// Account import: hand a credential to the BACKEND THAT OWNS IT, and report
+// whether it can serve requests.
 //
-// # The cookie never becomes this plugin's data
+// # Two backends, two mechanisms — and neither is optional
+//
+// AIStudio2API and gemini-web2api-go do not share an account API, so "import an
+// account" means something different per namespace:
+//
+//   - gemini-web2api-go owns a Google Cookie. A pasted Cookie header is POSTed
+//     to its /admin/api/cookies, stored in its own database, then probed to
+//     confirm it signs in.
+//   - AIStudio2API never accepts a pasted Cookie. It signs accounts in with its
+//     own browser and keeps the auth state itself, so the plugin starts that
+//     sign-in (POST /api/accounts) and reports the task.
+//
+// Posting a Cookie at AI Studio would fail at a nonexistent endpoint, and
+// pretending it worked is worse than saying so.
+//
+// # The credential never becomes this plugin's data
 //
 // A pasted cookie is a live Google session. This code therefore:
 //
-//   - sends it straight to the local backend's /admin/api/cookies over
-//     loopback, and nowhere else;
+//   - sends it straight to the local backend's own admin surface over loopback,
+//     and nowhere else;
 //   - never logs it, never includes it in an error string, never puts it in a
 //     management response, and never writes it to the plugin's own files;
 //   - on a failed probe, deletes the account it just added so a dead cookie
@@ -30,6 +45,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 
 	"github.com/hex-ci/cpa-plugin/geminiapi/internal/backend"
+	"github.com/hex-ci/cpa-plugin/geminiapi/internal/config"
 )
 
 // requiredCookies are the cookies a gemini.google.com request carries. Without
@@ -47,16 +63,14 @@ var cookieName = regexp.MustCompile(`^[!#$%&'*+\-.^_` + "`" + `|~0-9A-Za-z]+$`)
 // authuserPattern accepts the /u/N account index. Empty means 0.
 var authuserPattern = regexp.MustCompile(`^[0-9]$`)
 
-// importedAccount is what the backend returns for a new account.
-type importedAccount struct {
-	ID    int    `json:"id"`
-	Label string `json:"label"`
-}
-
 // importRequest is the management POST body.
 type importRequest struct {
+	// Namespace selects which backend receives the account. It is required:
+	// the two backends take different inputs.
+	Namespace string `json:"namespace"`
 	// Cookie is the pasted "cookie" header value (with or without the
-	// "Cookie:" prefix), or a JSON export of the same pairs.
+	// "Cookie:" prefix), or a JSON export of the same pairs. Used by
+	// gemini-web only.
 	Cookie string `json:"cookie"`
 	// AuthUser is the /u/N index of the window the cookie came from.
 	AuthUser string `json:"authuser,omitempty"`
@@ -66,19 +80,36 @@ type importRequest struct {
 	// for an offline deployment whose backend cannot reach Google right now;
 	// the UI does not expose it by default.
 	SkipProbe bool `json:"skip_probe,omitempty"`
+	// LoginTimeout bounds AI Studio's browser sign-in, in seconds. Zero uses
+	// the default.
+	LoginTimeout int `json:"login_timeout,omitempty"`
 }
 
 // importAccountResponse is what the page receives. It never contains a cookie
 // or the backend's keys — only whether the import worked and why not.
 type importAccountResponse struct {
-	OK bool `json:"ok"`
+	OK        bool   `json:"ok"`
+	Namespace string `json:"namespace"`
 	// AccountID is the backend's own account id, useful for a later delete.
 	AccountID int `json:"account_id,omitempty"`
 	// Detail is the backend's own verdict (already free of cookie material).
 	Detail string `json:"detail,omitempty"`
+	// TaskID / TaskState report AI Studio's asynchronous sign-in.
+	TaskID    string `json:"task_id,omitempty"`
+	TaskState string `json:"task_state,omitempty"`
 	// Error explains a failure in operator terms.
 	Error string `json:"error,omitempty"`
 }
+
+// studioLoginDefaultTimeout bounds an AI Studio browser sign-in. It is generous
+// because a human may have to complete a Google flow in the window the backend
+// opens.
+const studioLoginDefaultTimeout = 5 * time.Minute
+
+// importTimeout covers gemini-web's own account check, which visits Google
+// through the backend. A short timeout would report a false failure on a slow
+// proxy.
+const importTimeout = 90 * time.Second
 
 // ParseCookieHeader turns pasted text into a normalized Cookie header value,
 // keeping only the cookies that matter for a Google sign-in.
@@ -116,10 +147,6 @@ func ParseCookieHeader(input string) (string, error) {
 		}
 		if _, seen := pairs[name]; !seen {
 			order = append(order, name)
-		}
-		// First wins: a browser sends one value per name, and a duplicate
-		// later in the pasted text is usually a stale copy.
-		if _, seen := pairs[name]; !seen {
 			pairs[name] = value
 		}
 	}
@@ -227,59 +254,123 @@ func ParseAuthUser(input string) (int, error) {
 	if !authuserPattern.MatchString(trimmed) {
 		return 0, fmt.Errorf("账号索引须为 0–9 的整数：请填写复制 Cookie 的同一窗口中 /u/N/app 的 N；单账号会话可留空（0）")
 	}
-	n := int(trimmed[0] - '0')
-	return n, nil
+	return int(trimmed[0] - '0'), nil
 }
 
 // importAccountResponse handles POST /accounts.
 func (m *Manager) importAccountResponse(req pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
 	var body importRequest
 	if err := json.Unmarshal(req.Body, &body); err != nil {
-		return jsonResponse(http.StatusBadRequest, importAccountResponse{Error: "请求体不是合法 JSON：期望 {\"cookie\":\"...\"}"})
+		return jsonResponse(http.StatusBadRequest, importAccountResponse{Error: "请求体不是合法 JSON：期望 {\"namespace\":\"ai-studio|gemini-web\", ...}"})
 	}
-	m.mu.RLock()
-	cfg := m.cfg
-	mgr := m.backendMgr
-	external := m.skipSupervision
-	m.mu.RUnlock()
-	if external {
+	namespace := strings.TrimSpace(body.Namespace)
+	if namespace == "" {
 		return jsonResponse(http.StatusBadRequest, importAccountResponse{
-			Error: "ai-studio.base-url 指向外部后端：本插件无法向它导入账号，请在外部后端自己的管理页里导入",
+			Error: "缺少 namespace：请填 \"ai-studio\"（AIStudio2API，浏览器登录）或 \"gemini-web\"（gemini-web2api-go，粘贴 Cookie）；" +
+				"两个后端的加账号方式不同，插件不会替你猜",
 		})
 	}
+	// Re-use the query selector so a form POST and a query-driven POST agree.
+	req.Query = setNamespaceQuery(req.Query, namespace)
+
+	fleet, err := m.fleetFor(req)
+	if err != nil {
+		return jsonResponse(statusForManagementError(err), importAccountResponse{Namespace: namespace, Error: err.Error()})
+	}
+	if fleet.external {
+		return jsonResponse(http.StatusBadRequest, importAccountResponse{
+			Namespace: fleet.namespace,
+			Error:     fleet.namespace + ".base-url 指向外部后端：本插件无法向它导入账号，请在外部后端自己的管理页里导入",
+		})
+	}
+	if fleet.manager == nil {
+		return jsonResponse(http.StatusConflict, importAccountResponse{Namespace: fleet.namespace, Error: "插件尚未完成注册，请稍后再试"})
+	}
+
+	m.mu.RLock()
+	cfg := m.cfg
+	m.mu.RUnlock()
 
 	// Validate the pasted material BEFORE any backend round-trip: an operator
-	// who pasted half a Cookie header should get the "which cookies are missing"
-	// explanation even when the backend is not running yet.
-	authUser, err := ParseAuthUser(body.AuthUser)
-	if err != nil {
-		return jsonResponse(http.StatusBadRequest, importAccountResponse{Error: err.Error()})
-	}
-	cookie, err := ParseCookieHeader(body.Cookie)
-	if err != nil {
-		// The parsing error is written for the operator and contains no cookie
-		// material.
-		return jsonResponse(http.StatusBadRequest, importAccountResponse{Error: err.Error()})
-	}
-
-	if mgr == nil {
-		return jsonResponse(http.StatusConflict, importAccountResponse{Error: "插件尚未完成注册，请稍后再试"})
+	// who pasted half a Cookie header should get the "which cookies are
+	// missing" explanation even when the backend is not running yet.
+	var authUser int
+	var cookie string
+	if fleet.flavor.ID == backend.FlavorGeminiWeb {
+		var parseErr error
+		authUser, parseErr = ParseAuthUser(body.AuthUser)
+		if parseErr != nil {
+			return jsonResponse(http.StatusBadRequest, importAccountResponse{Namespace: fleet.namespace, Error: parseErr.Error()})
+		}
+		cookie, parseErr = ParseCookieHeader(body.Cookie)
+		if parseErr != nil {
+			// The parsing error is written for the operator and contains no
+			// cookie material.
+			return jsonResponse(http.StatusBadRequest, importAccountResponse{Namespace: fleet.namespace, Error: parseErr.Error()})
+		}
+	} else if strings.TrimSpace(body.Cookie) != "" {
+		return jsonResponse(http.StatusBadRequest, importAccountResponse{
+			Namespace: fleet.namespace,
+			Error: "AIStudio2API 不接受粘贴的 Cookie：它用自带的浏览器完成 Google 登录并把授权状态存在自己的数据目录里。" +
+				"这里会启动它的登录流程（浏览器窗口由后端打开）；如果你要粘贴 Cookie，请改用 gemini-web 命名空间",
+		})
 	}
 
 	ctx, cancel := contextWithTimeout(importTimeout)
 	defer cancel()
-	setup, err := m.setupFor(ctx, cfg, mgr, external)
-	if err != nil {
-		return jsonResponse(ensureHTTPStatus(err), importAccountResponse{Error: "本地后端未就绪：" + err.Error()})
+	setup, setupErr := m.setupFor(ctx, cfg, fleet.namespace)
+	if setupErr != nil {
+		return jsonResponse(ensureHTTPStatus(setupErr), importAccountResponse{
+			Namespace: fleet.namespace, Error: "本地后端未就绪：" + setupErr.Error(),
+		})
 	}
-	_ = mgr
 
-	if proxy := cfg.AIStudio.Proxy; proxy != "" {
-		// The backend does not read HTTP_PROXY: a proxy must be registered in
+	switch fleet.flavor.ID {
+	case backend.FlavorAIStudio:
+		return m.importStudioAccount(ctx, fleet, setup, body)
+	default:
+		return m.importGeminiWebAccount(ctx, cfg, fleet, setup, body, cookie, authUser)
+	}
+}
+
+// importStudioAccount starts AIStudio2API's own browser sign-in.
+//
+// AI Studio does not accept a pasted Cookie, so the plugin's job is to START its
+// sign-in and report the task. A pasted cookie is refused (above) rather than
+// posted at an endpoint that does not exist.
+func (m *Manager) importStudioAccount(ctx context.Context, fleet namespaceFleet, setup backend.Setup, body importRequest) (pluginapi.ManagementResponse, error) {
+	timeout := studioLoginDefaultTimeout
+	if body.LoginTimeout > 0 {
+		timeout = time.Duration(body.LoginTimeout) * time.Second
+	}
+	loginCtx, cancel := contextWithTimeout(timeout)
+	defer cancel()
+	task, err := backend.StartStudioLogin(loginCtx, m.httpDoer(), setup, timeout)
+	if err != nil {
+		return jsonResponse(ensureHTTPStatus(err), importAccountResponse{Namespace: fleet.namespace, Error: err.Error()})
+	}
+	return jsonResponse(http.StatusOK, importAccountResponse{
+		OK:        true,
+		Namespace: fleet.namespace,
+		TaskID:    task.ID,
+		TaskState: task.State,
+		Detail:    "AI Studio 已开始浏览器登录；任务完成后请刷新账号数。登录在它的浏览器窗口里完成，插件不接触任何 Google 凭据",
+	})
+}
+
+// importGeminiWebAccount pastes an already-validated Cookie into
+// gemini-web2api-go's pool and probes it.
+func (m *Manager) importGeminiWebAccount(ctx context.Context, cfg config.Config, fleet namespaceFleet, setup backend.Setup, body importRequest, cookie string, authUser int) (pluginapi.ManagementResponse, error) {
+	nsCfg, cfgErr := cfg.Namespace(fleet.namespace)
+	if cfgErr != nil {
+		return jsonResponse(http.StatusBadRequest, importAccountResponse{Namespace: fleet.namespace, Error: cfgErr.Error()})
+	}
+	if proxy := nsCfg.Proxy; proxy != "" {
+		// That backend does not read HTTP_PROXY: a proxy must be registered in
 		// ITS pool before the sign-in check can reach Google.
 		if _, proxyErr := backend.EnsureProxy(ctx, m.httpDoer(), setup, proxy); proxyErr != nil {
 			return jsonResponse(http.StatusBadGateway, importAccountResponse{
-				Error: "无法把代理注册到本地后端：" + proxyErr.Error(),
+				Namespace: fleet.namespace, Error: "无法把代理注册到本地后端：" + proxyErr.Error(),
 			})
 		}
 	}
@@ -289,11 +380,11 @@ func (m *Manager) importAccountResponse(req pluginapi.ManagementRequest) (plugin
 		label = "CPA " + timeNow().Format("2006-01-02")
 	}
 
-	created, err := backend.ImportCookie(ctx, m.httpDoer(), setup, cookie, label, authUser, importTimeout)
-	if err != nil {
+	created, importErr := backend.ImportCookie(ctx, m.httpDoer(), setup, cookie, label, authUser, importTimeout)
+	if importErr != nil {
 		// backend.ImportCookie already deletes a rejected account; its error
 		// text is operator-facing and cookie-free.
-		return jsonResponse(ensureHTTPStatus(err), importAccountResponse{Error: err.Error()})
+		return jsonResponse(ensureHTTPStatus(importErr), importAccountResponse{Namespace: fleet.namespace, Error: importErr.Error()})
 	}
 
 	// A successful import is what makes the provider schedulable at all: the auth
@@ -302,20 +393,18 @@ func (m *Manager) importAccountResponse(req pluginapi.ManagementRequest) (plugin
 	if errAuth := m.materializeAuth(context.Background()); errAuth != nil {
 		_ = m.log("warn", "account imported but the auth record could not be written: "+errAuth.Error(), nil)
 	}
-	// Refresh the catalog: a model may now be covered by an account when it
-	// was not before.
+	// Refresh that namespace's catalog: a model may now be covered by an account
+	// when it was not before.
 	refreshCtx, cancelRefresh := contextWithTimeout(registerRefreshTimeout)
 	defer cancelRefresh()
-	_, _ = m.refreshCatalog(refreshCtx)
+	if refreshErr := m.refreshNamespace(refreshCtx, cfg, fleet.namespace); refreshErr != nil {
+		_ = m.log("warn", "catalog refresh after account import failed: "+refreshErr.Error(), nil)
+	}
 
 	return jsonResponse(http.StatusOK, importAccountResponse{
 		OK:        true,
+		Namespace: fleet.namespace,
 		AccountID: created.ID,
 		Detail:    created.Detail,
 	})
 }
-
-// importTimeout covers the backend's own account check, which visits Google
-// through the backend. A short timeout would report a false failure on a slow
-// proxy.
-const importTimeout = 90 * time.Second

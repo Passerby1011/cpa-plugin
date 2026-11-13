@@ -125,7 +125,6 @@ func TestProbeReportsUnresponsiveOnTimeout(t *testing.T) {
 // errString is errString from health.go; the tests use it to script transport
 // failures without importing errors.
 
-
 // TestProbeNeverLeaksTheAPIKeyIntoReason asserts the redaction requirement:
 // status text is rendered in a page.
 func TestProbeNeverLeaksTheAPIKeyIntoReason(t *testing.T) {

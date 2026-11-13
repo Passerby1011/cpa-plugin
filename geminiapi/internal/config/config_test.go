@@ -23,8 +23,16 @@ func TestLoadDefaultsAreUsable(t *testing.T) {
 	if cfg.AIStudio.Managed() == false {
 		t.Fatal("an empty config must mean a plugin-managed backend")
 	}
-	if len(cfg.Namespaces) != 1 || cfg.Namespaces[0] != NamespaceAIStudio {
-		t.Fatalf("namespaces = %v", cfg.Namespaces)
+	if cfg.GeminiWeb.Managed() == false {
+		t.Fatal("an empty config must mean a plugin-managed gemini-web backend too")
+	}
+	if len(cfg.Namespaces) != 2 || cfg.Namespaces[0] != NamespaceAIStudio || cfg.Namespaces[1] != NamespaceGeminiWeb {
+		t.Fatalf("namespaces = %v, want both namespaces published", cfg.Namespaces)
+	}
+	// Each namespace needs its OWN data directory: two backends writing one
+	// config.json would overwrite each other.
+	if cfg.DataDirFor(NamespaceAIStudio) == cfg.DataDirFor(NamespaceGeminiWeb) {
+		t.Fatal("the two namespaces share a data directory")
 	}
 }
 

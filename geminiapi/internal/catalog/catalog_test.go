@@ -23,12 +23,24 @@ func chatModel(id string, extra map[string]any) backend.Model {
 	}
 }
 
-func buildIDs(t *testing.T, models []backend.Model, opts BuildOptions) []string {
+// buildT is Build with its error folded away: the Studio ruleset's positive
+// cases must never produce an empty result, so a test that does gets a failure
+// rather than a silently empty slice.
+func buildT(t *testing.T, models []backend.Model, opts BuildOptions) BuildResult {
 	t.Helper()
 	if opts.Namespace.Name == "" {
 		opts.Namespace = AIStudio
 	}
-	res := Build(models, opts)
+	res, err := Build(models, opts)
+	if err != nil && len(res.Records) > 0 {
+		t.Fatalf("Build returned records AND an error: %v", err)
+	}
+	return res
+}
+
+func buildIDs(t *testing.T, models []backend.Model, opts BuildOptions) []string {
+	t.Helper()
+	res := buildT(t, models, opts)
 	ids := make([]string, 0, len(res.Records))
 	for _, rec := range res.Records {
 		ids = append(ids, rec.PublicID)
@@ -54,7 +66,7 @@ func TestBuildPublishesNamespacePrefixedIDs(t *testing.T) {
 }
 
 func TestBuildKeepsUpstreamIDForExecution(t *testing.T) {
-	res := Build([]backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
+	res := buildT(t, []backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
 	if len(res.Records) != 1 {
 		t.Fatalf("records = %d", len(res.Records))
 	}
@@ -110,7 +122,7 @@ func TestBuildExcludesImageModelsByDefault(t *testing.T) {
 		t.Fatalf("ids = %v: an image model must be published when explicitly allowed", idsWithImages)
 	}
 	// And it must be marked as an image OUTPUT model, not a text one.
-	res := Build([]backend.Model{imageModel}, BuildOptions{Namespace: AIStudio, AllowImageModels: true})
+	res := buildT(t, []backend.Model{imageModel}, BuildOptions{Namespace: AIStudio, AllowImageModels: true})
 	if len(res.Records) != 1 {
 		t.Fatalf("records = %d", len(res.Records))
 	}
@@ -121,7 +133,7 @@ func TestBuildExcludesImageModelsByDefault(t *testing.T) {
 
 // TestBuildReportsWhyAModelWasSkipped: a missing model must be explainable.
 func TestBuildReportsWhyAModelWasSkipped(t *testing.T) {
-	res := Build([]backend.Model{chatModel("gemini-2.5-flash-image", map[string]any{"image_route": true})}, BuildOptions{Namespace: AIStudio})
+	res := buildT(t, []backend.Model{chatModel("gemini-2.5-flash-image", map[string]any{"image_route": true})}, BuildOptions{Namespace: AIStudio})
 	if len(res.Records) != 0 {
 		t.Fatalf("image model was published: %v", res.Records)
 	}
@@ -176,7 +188,7 @@ func TestBuildPublishesThinkingLevels(t *testing.T) {
 	model := chatModel("gemini-2.5-pro", map[string]any{"thinking": true, "thinking_level": true})
 	model.ThinkingLevels = []string{"low", "medium", "high", "minimal"}
 
-	res := Build([]backend.Model{model}, BuildOptions{Namespace: AIStudio})
+	res := buildT(t, []backend.Model{model}, BuildOptions{Namespace: AIStudio})
 	if len(res.Records) != 1 {
 		t.Fatalf("records = %d", len(res.Records))
 	}
@@ -198,7 +210,7 @@ func TestBuildFiltersUnknownThinkingLevels(t *testing.T) {
 	model := chatModel("gemini-2.5-pro", map[string]any{"thinking_level": true})
 	model.ThinkingLevels = []string{"low", "extreme", "", "LOW"}
 
-	res := Build([]backend.Model{model}, BuildOptions{Namespace: AIStudio})
+	res := buildT(t, []backend.Model{model}, BuildOptions{Namespace: AIStudio})
 	levels := res.Records[0].Thinking.Levels
 	if len(levels) != 1 || levels[0] != "low" {
 		t.Fatalf("levels = %v, want [low]", levels)
@@ -206,7 +218,7 @@ func TestBuildFiltersUnknownThinkingLevels(t *testing.T) {
 }
 
 func TestBuildOmitsThinkingWhenBackendSaysNo(t *testing.T) {
-	res := Build([]backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
+	res := buildT(t, []backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
 	if res.Records[0].Thinking != nil {
 		t.Fatal("a model without thinking capabilities published reasoning support")
 	}
@@ -214,7 +226,7 @@ func TestBuildOmitsThinkingWhenBackendSaysNo(t *testing.T) {
 
 // TestBuildInputModes: images in a chat are on by default.
 func TestBuildInputModes(t *testing.T) {
-	res := Build([]backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
+	res := buildT(t, []backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
 	modes := res.Records[0].InputModes
 	found := false
 	for _, m := range modes {
@@ -265,7 +277,7 @@ func TestBuildUsesBackendLimits(t *testing.T) {
 	m := chatModel("gemini-2.5-pro", nil)
 	m.InputTokenLimit = 500000
 	m.OutputTokenLimit = 4096
-	res := Build([]backend.Model{m}, BuildOptions{Namespace: AIStudio})
+	res := buildT(t, []backend.Model{m}, BuildOptions{Namespace: AIStudio})
 	if res.Records[0].ContextLimit != 500000 || res.Records[0].OutputLimit != 4096 {
 		t.Fatalf("limits = %d/%d, want the backend's 500000/4096",
 			res.Records[0].ContextLimit, res.Records[0].OutputLimit)
@@ -276,7 +288,7 @@ func TestBuildClampsLimitsToConfiguredMaximums(t *testing.T) {
 	m := chatModel("gemini-2.5-pro", nil)
 	m.InputTokenLimit = 500000
 	m.OutputTokenLimit = 20000
-	res := Build([]backend.Model{m}, BuildOptions{Namespace: AIStudio, ContextLimit: 200000, OutputLimit: 8192})
+	res := buildT(t, []backend.Model{m}, BuildOptions{Namespace: AIStudio, ContextLimit: 200000, OutputLimit: 8192})
 	if res.Records[0].ContextLimit != 200000 {
 		t.Fatalf("context = %d, want the configured 200000", res.Records[0].ContextLimit)
 	}
@@ -289,7 +301,7 @@ func TestBuildNeverExceedsContextWithOutput(t *testing.T) {
 	m := chatModel("gemini-2.5-pro", nil)
 	m.InputTokenLimit = 1000
 	m.OutputTokenLimit = 50000
-	res := Build([]backend.Model{m}, BuildOptions{Namespace: AIStudio})
+	res := buildT(t, []backend.Model{m}, BuildOptions{Namespace: AIStudio})
 	if res.Records[0].OutputLimit > res.Records[0].ContextLimit {
 		t.Fatalf("output %d exceeds context %d", res.Records[0].OutputLimit, res.Records[0].ContextLimit)
 	}
@@ -298,7 +310,7 @@ func TestBuildNeverExceedsContextWithOutput(t *testing.T) {
 // --- resolution tests ---
 
 func TestResolveAcceptsPublicID(t *testing.T) {
-	res := Build([]backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
+	res := buildT(t, []backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
 	rec, ok := res.Resolve("ai-studio/gemini-2.5-pro")
 	if !ok {
 		t.Fatal("Resolve rejected a published public id")
@@ -309,7 +321,7 @@ func TestResolveAcceptsPublicID(t *testing.T) {
 }
 
 func TestResolveAcceptsBareUpstreamID(t *testing.T) {
-	res := Build([]backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
+	res := buildT(t, []backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
 	rec, ok := res.Resolve("gemini-2.5-pro")
 	if !ok {
 		t.Fatal("Resolve rejected a bare upstream id that exists in exactly one namespace")
@@ -320,7 +332,7 @@ func TestResolveAcceptsBareUpstreamID(t *testing.T) {
 }
 
 func TestResolveRejectsUnknownModel(t *testing.T) {
-	res := Build([]backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
+	res := buildT(t, []backend.Model{chatModel("gemini-2.5-pro", nil)}, BuildOptions{Namespace: AIStudio})
 	if _, ok := res.Resolve("ai-studio/gemini-9.9-imaginary"); ok {
 		t.Fatal("Resolve accepted a model that was never published")
 	}
