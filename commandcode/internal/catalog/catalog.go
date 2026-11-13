@@ -105,6 +105,13 @@ type rawModel struct {
 	// means "no claim", which keeps the historical chat-completions default
 	// rather than inventing a route the upstream never advertised.
 	SupportedEndpoints []string `json:"supported_endpoints"`
+	// Decides marks the entry as a DECISION model (TypeSafe's Jev:
+	// `decides: true`) rather than a chat model - it answers typed questions
+	// with probabilities and holds no conversation. The host has no
+	// capability slot for one (see docs/PROVENANCE.md), so nothing here
+	// routes it: the field is decoded only so such an entry can be
+	// recognised and kept OUT of the chat list. See swap for why.
+	Decides bool `json:"decides"`
 }
 
 // rawThinking tolerantly decodes the optional per-model thinking object;
@@ -290,6 +297,23 @@ func (m *Manager) swap(entries []rawModel, extraWarns ...string) {
 			continue
 		}
 		seen[e.ID] = true
+		// A DECISION model is not a chat model: it answers typed questions and
+		// holds no conversation, and the host (v7.2.138) has no capability
+		// slot, no `/v1/models` field and no route for one (verified against
+		// sdk/pluginapi/types.go Capabilities + internal/api/server_routes.go;
+		// see docs/PROVENANCE.md). Publishing it as a chat model would offer
+		// clients a model that cannot hold a conversation - so it is excluded
+		// and explained, exactly like an allow/deny exclusion, rather than
+		// silently dropped. The reference implementation DOES list it (magpie
+		// has its own `decides` model surface); this host does not, so the
+		// capability is absent here on purpose, not by oversight.
+		if e.Decides {
+			unsup = append(unsup, UnsupportedModel{
+				UpstreamID: e.ID,
+				Reason:     "decision model: the host has no decides capability",
+			})
+			continue
+		}
 		route, endpoint, ok, warn := m.resolve(e)
 		if warn != "" {
 			warns = append(warns, warn)

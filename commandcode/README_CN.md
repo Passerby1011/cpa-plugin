@@ -202,6 +202,7 @@ plugins:
 | `request-timeout` | `duration` | `5m` | 上游 HTTP 超时（配额/账号请求另按 30s 上限）。 |
 | `max-response-bytes` | `int64` | `67108864` | 非流式响应体上限。 |
 | `allow-http` | `bool` | `false` | 允许 `http://` 上游，仅供本地测试。 |
+| `zdr` | `bool` | `false` | 对**每一个要回复的请求**都要求零数据保留（`x-cmd-zdr: 1`），Provider API 与 `/alpha/generate` 两条路径都带；也可用 `CMD_ZDR=1` 打开。两者都**每请求重读**，改配置或设环境变量都不需要重启。上游拒绝时**原样透传**（Provider API `422 code=cmd_zdr_no_providers`、go-cli `400 type=cmd_zdr_no_providers`），插件绝不会悄悄去掉该头重发——对一次明确要求「不保留」的请求来说，那样的回答比失败更糟。 |
 
 ### 配额页面
 
@@ -249,6 +250,21 @@ go vet ./...         # 静态检查
 - [cpa-plugin-commandcode](https://github.com/ahoo/cpa-plugin-commandcode)（ahoo）是更早的一个独立 CommandCode 插件，它的文档最先记录了本插件必须复现的厂商行为：思考文本出现在 `reasoning` / `reasoning_details[].text` 而从不使用标准的 `reasoning_content`；因此必须在 CLIProxyAPI 的 openai→claude 翻译器读取之前回填 `reasoning_content`；流式 `/v1/messages` 要求每个分块带 SSE `data: ` 前缀；上游只接受完整厂商名（`deepseek/deepseek-v4.1-flash`）。
 
 本仓库：<https://github.com/mczhoucn/commandcode>
+
+## 决策模型（Jev）未暴露
+
+Command Code 提供 TypeSafe 的 **Jev**（`typesafe/jev`），它是一个**决策模型**：用
+`{model, state, questions}` 回答带类型的判断题并返回概率，不承载对话。参考实现把它标为
+`decides: true`，并通过自己的 `/v1/systemone` 面提供服务。
+
+**本插件不暴露它**，因为宿主（CLIProxyAPI v7.2.138）没有对应能力位：
+`sdk/pluginapi/types.go` 的 `Capabilities` 里没有任何决策/分类器接口，
+`internal/api/server_routes.go` 未注册 `/systemone` 路由，而面向客户端的 `/v1/models`
+只保留 `id`/`object`/`created`/`owned_by`，所以 `decides` 标记连广告都做不到。把一个决策
+模型当聊天模型发布，等于让客户端拿它承载一段它承载不了的对话，因此这类目录项会**被排除**
+出模型列表，并在 unsupported 诊断里写明
+`decision model: the host has no decides capability`。判定依据与源码位置见
+[`docs/PROVENANCE.md`](docs/PROVENANCE.md)。
 
 ## 许可证
 

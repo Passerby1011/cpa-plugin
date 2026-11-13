@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.6.0
+
+**补齐相对参考实现（magpie `packages/commandcode` @ `0135b7b`）的五项缺失能力** —— ZDR、
+`supported_endpoints` 分端点路由、`reasoning_effort` 的 off 档、whoami 复核后的失效标记、
+以及 Jev（决策模型）的可行性判定。已有机制（go-cli `/alpha/generate`、套餐过滤、配额页、
+池调度）一律不动，只做增量。
+
+### 1. ZDR（零数据保留，`zdr` / `CMD_ZDR=1`）
+
+每一个要回复的请求都带 `x-cmd-zdr: 1`，Provider API（三条 route）与 `/alpha/generate`
+两条腿都带。上游拒绝时**原样透传**（Provider API `422 code=cmd_zdr_no_providers`、
+go-cli `400 type=cmd_zdr_no_providers`，后者也可能藏在 200 回复的 error 事件里），
+**绝不自动关 ZDR 重发** —— 对一次明确要求「不保留」的请求，悄悄给出回答比失败更糟。
+
+### 2. `supported_endpoints` 分端点路由
+
+上游 `/models` 每项若声明 `supported_endpoints`，就按它选 chat-completions /
+responses / messages（固定偏好顺序，先选支持面最宽的）。原来一律塞 chat-completions，
+于是被上游独占在 `/messages` 的模型只要被选中就必然拿到
+"Model is not supported on this endpoint"。声明缺省或为空仍沿用 chat 默认 —— 不凭空
+发明一条上游没列的 route。
+
+### 3. `reasoning_effort` 的 `off` 档
+
+上游关思考用自己的词 `reasoning_effort:"off"`，并且只对**能关**的模型才收；OpenAI 词汇的
+`none` 它一概拒绝。插件把客户端的 `none` / `"off"` 发成 `"off"`（内置实测表：DeepSeek
+V4 Pro / V4 Flash / V4 Flash Vision(exp) / V4.1 Flash / V4.1 Flash Fast），对实测**拒绝**
+`"off"` 的模型（DeepSeek V4 Flash Fast、Kimi K3 等）**不发**该字段 —— 目标模型没有的状态，
+丢掉它比送一个必 400 的值诚实。go-cli 路径未经验证，一律不发 off。其它档位一字不动。
+
+### 4. whoami 复核后的账号失效标记
+
+`401` 本身不是判决：同一个 key 可能只被某个端点的规则拒绝（套餐缺模型），也可能撞上
+上游一时的 429/5xx。现在只有 `GET /alpha/whoami` **也拒绝**该 key（401/403）才标记失效；
+网络错误 / 429 / 5xx / 无法解析一律视为「无法确认」，不标记。这个不对称是全部安全性的
+来源 —— 误判会把一个能用的凭据踢出轮换。
+- 触发点只有 401（Provider API 与 go-cli 的非流式/流式四条腿，外加面板的 usage 读取）；
+  403（套餐缺模型）连复核都不做，那说的是模型，不是凭据。
+- 干净的读取（请求成功或 usage 读成功）清除标记并报 `sign_in: "renewed"`，失效行不再
+  挂着「重新登录」。
+- 便宜的列表读不花上游调用，只报已知状态，否则每次开页一个已失效的凭据都会重新看起来正常。
+- 面板：失效行加「已失效」徽标与「重新登录」按钮；该 provider 没有 OAuth 登录，按钮打开
+  已有的添加表单并提示填写新 key。
+
+### 5. Jev（`typesafe/jev`）—— 判定为**不暴露**
+
+Jev 是 TypeSafe 的**决策模型**（`decides: true`）：用 `{model, state, questions}` 回答
+带类型的判断题并返回概率，不承载对话。参考实现能把它标出来并挂在 `/v1/systemone` 上，
+是因为 magpie 自己拥有 `decide`/`decides` 概念。
+
+对宿主 **CLIProxyAPI v7.2.138** 逐条读了源码，确认没有对应能力：
+- `sdk/pluginapi/types.go` 的 `Capabilities` 没有决策/分类器接口位（`ModelRouter` 决定
+  请求**去哪**，不是分类器）；
+- `internal/api/server_routes.go` 未注册 `/systemone`（也没有 `/provider/v1/*`），
+  没有地方承接一次 System One 提问；
+- 面向客户端的 `/v1/models` 只保留 `id`/`object`/`created`/`owned_by`，`decides` 标记
+  连广告都做不到。
+
+因此**不暴露**，并且**主动把这类目录项排除**出聊天模型列表，同时在 unsupported 诊断里写明
+`decision model: the host has no decides capability` —— 静默消失的模型是没人能诊断的。
+完整依据与源码位置见 `docs/PROVENANCE.md`。
+
+### 验证口径
+
+- `go vet ./...` 与 `go test -race -count=1 ./...` 全绿（容器 `golang:1.26`）。
+- 每项新行为都有**能失败**的测试，并做了变异验证（把修复回退，测试必须红）：ZDR 两条路径
+  头存在/关闭不带/拒绝码透传、三分支端点路由、五模型发 `"off"`/拒绝模型不发/go-cli 不发、
+  `401+whoami` 拒绝才标记/`401+whoami` 正常不标记/429·5xx·传输失败不标记、干净读取清除
+  标记、列表报已知标记、面板只在 `expired` 行出「重新登录」入口、Jev 排除且诊断写明原因。
+- **真实上游未验证**：本机无运行中的 CPA、无真实 Command Code key，上述行为均止于单测。
+
 ## 0.5.4
 
 **`models.allow/deny` 支持通配符** —— 不用再逐个列出整个模型家族。

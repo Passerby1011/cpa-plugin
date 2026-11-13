@@ -198,6 +198,7 @@ plugins:
 | `request-timeout` | `duration` | `5m` | Upstream HTTP timeout (also bounds account/quota calls to 30s). |
 | `max-response-bytes` | `int64` | `67108864` | Maximum non-streaming response body size. |
 | `allow-http` | `bool` | `false` | Permit `http://` upstreams for local testing. |
+| `zdr` | `bool` | `false` | Ask for **Zero Data Retention** on every request that answers (`x-cmd-zdr: 1`), on both the Provider API and `/alpha/generate`. Also switched on by `CMD_ZDR=1`; both are re-read per request, so no restart is needed. An upstream refusal (Provider API `422 code=cmd_zdr_no_providers`, go-cli `400 type=cmd_zdr_no_providers`) is passed through **as the upstream gave it** — the plugin never silently retries without the header, because answering a request that asked not to be retained defeats the only thing it asked for. |
 
 ### Quota page
 The `CommandCode Quota` page (Management Center → plugins) reads the account surface on the same authority as `base-url`:
@@ -273,6 +274,24 @@ This plugin was built with reference to two prior CommandCode plugins:
 
 Upstream repository: <https://github.com/mczhoucn/commandcode>. See
 [docs/PROVENANCE.md](docs/PROVENANCE.md) for exactly what this repackaging changed.
+
+## Decision models (Jev) are not exposed
+
+Command Code serves TypeSafe's **Jev** (`typesafe/jev`), a *decision model*: it
+answers typed questions (`{model, state, questions}`) with probabilities and holds
+no conversation. The reference implementation lists it as `decides: true` and serves
+it on its own `/v1/systemone` surface.
+
+**This plugin does not expose it**, because the host (CLIProxyAPI v7.2.138) has no
+capacity for one: `sdk/pluginapi/types.go`'s `Capabilities` has no
+decision/classifier slot, `internal/api/server_routes.go` registers no
+`/systemone` route, and the client-facing `/v1/models` answer is filtered to
+`id`/`object`/`created`/`owned_by`, so a `decides` marker could not even be
+advertised. A decision model offered as a chat model would accept a conversation
+it cannot hold, so such catalogue entries are **excluded** from the model list and
+reported in the unsupported diagnostics as
+`decision model: the host has no decides capability`. The reasoning, with the exact
+source references, is in [`docs/PROVENANCE.md`](docs/PROVENANCE.md).
 
 ## License
 
