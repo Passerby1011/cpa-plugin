@@ -122,10 +122,9 @@ func TestProbeReportsUnresponsiveOnTimeout(t *testing.T) {
 	}
 }
 
-// errString is an error type usable without importing errors in every test.
-type errString string
+// errString is errString from health.go; the tests use it to script transport
+// failures without importing errors.
 
-func (e errString) Error() string { return string(e) }
 
 // TestProbeNeverLeaksTheAPIKeyIntoReason asserts the redaction requirement:
 // status text is rendered in a page.

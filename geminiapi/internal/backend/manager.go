@@ -2,6 +2,14 @@ package backend
 
 // Manager: the supervised lifecycle of ONE managed backend.
 //
+// # One Manager, one flavor
+//
+// A Manager is constructed with a Flavor and is permanently bound to it: its
+// pin, its data directory, its port, its pid file, its process group and its
+// health probe all come from that flavor. Two namespaces are therefore two
+// Managers, and neither can answer for the other — which is the whole reason
+// Flavor exists rather than a shared supervisor with a mode flag.
+//
 // # States and why they matter
 //
 //	stopped  – nothing is listening and nothing of ours is running
@@ -18,7 +26,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -37,15 +44,19 @@ const (
 )
 
 // Status is the operator-facing snapshot. It must never contain a cookie, an
-// API key, or an admin token: it is rendered in a page and included in a
+// API key, or an admin credential: it is rendered in a page and included in a
 // Management API response.
 type Status struct {
 	State State `json:"state"`
+	// Flavor names the backend this snapshot describes.
+	Flavor FlavorID `json:"flavor"`
 	// Managed is false when the namespace points at an external backend, in
 	// which case this plugin owns no process.
 	Managed bool `json:"managed"`
 	// Version is the pinned release version.
 	Version string `json:"version,omitempty"`
+	// BinaryName is the executable this manager supervises.
+	BinaryName string `json:"binary_name,omitempty"`
 	// PinnedSHA256 is the digest the launch path must match (truncated).
 	PinnedSHA256 string `json:"pinned_sha256,omitempty"`
 	// BinaryPresent reports whether a digest-verified binary exists.
@@ -62,8 +73,8 @@ type Status struct {
 	PIDVerified bool `json:"pid_verified"`
 	// Health is the last probe result.
 	Health Health `json:"health"`
-	// Accounts are pool counts read from the backend's admin API (counts only,
-	// never identifiers or cookies).
+	// Accounts are pool counts read from the backend's own admin surface
+	// (counts only, never identifiers or cookies).
 	Accounts AccountCounts `json:"accounts"`
 	// LastError is a secret-free failure description.
 	LastError string `json:"last_error,omitempty"`
@@ -87,6 +98,7 @@ type AccountCounts struct {
 // Manager owns one managed backend's lifecycle. It is safe for concurrent use:
 // the Management API and the request path both drive it.
 type Manager struct {
+	flavor        Flavor
 	dataDir       string
 	preferredPort int
 	syncProxy     string
@@ -116,6 +128,10 @@ type Manager struct {
 
 // Options configures a Manager.
 type Options struct {
+	// Flavor selects the backend. It is required: a Manager with no flavor
+	// would have to guess which binary, ports and files it owns.
+	Flavor Flavor
+	// DataDir is this flavor's OWN data directory.
 	DataDir       string
 	PreferredPort int
 	SyncProxy     string
@@ -128,9 +144,18 @@ type Options struct {
 	DownloadURL string
 }
 
-// New returns a Manager. Nothing is downloaded or spawned here: the Manager
-// reads existing state and reports it.
+// New returns a Manager bound to one flavor. Nothing is downloaded or spawned
+// here: the Manager reads existing state and reports it.
 func New(opts Options) *Manager {
+	if !opts.Flavor.Valid() {
+		return &Manager{
+			flavor: opts.Flavor,
+			state:  StateFailed,
+			lastErr: fmt.Sprintf("no backend flavor configured: %q is not a flavor this plugin can supervise",
+				opts.Flavor.ID),
+			dataDir: opts.DataDir,
+		}
+	}
 	if opts.StartTimeout <= 0 {
 		opts.StartTimeout = 30 * time.Second
 	}
@@ -138,6 +163,7 @@ func New(opts Options) *Manager {
 		opts.ModelTimeout = DefaultModelTimeout
 	}
 	m := &Manager{
+		flavor:        opts.Flavor,
 		dataDir:       opts.DataDir,
 		preferredPort: opts.PreferredPort,
 		syncProxy:     opts.SyncProxy,
@@ -150,6 +176,12 @@ func New(opts Options) *Manager {
 	}
 	return m
 }
+
+// Flavor returns the backend this manager supervises.
+func (m *Manager) Flavor() Flavor { return m.flavor }
+
+// FlavorID returns the backend id, which equals the model namespace it serves.
+func (m *Manager) FlavorID() FlavorID { return m.flavor.ID }
 
 // DataDir returns the managed data directory.
 func (m *Manager) DataDir() string { return m.dataDir }
@@ -184,36 +216,34 @@ func (m *Manager) StatusSnapshot(ctx context.Context) Status {
 	restarts := m.restarts
 	m.mu.Unlock()
 
-	pin, pinErr := CurrentPin()
+	layout := m.flavor.Layout(m.dataDir)
 	st := Status{
-		State:        state,
-		Managed:      true,
-		Version:      ReleaseVersion,
-		DataDir:      m.dataDir,
-		PinnedSHA256: RedactHashes(pin.SHA256),
-		LastError:    lastErr,
-		Restarts:     restarts,
+		State:      state,
+		Flavor:     m.flavor.ID,
+		Managed:    true,
+		Version:    m.flavor.ReleaseVersion,
+		BinaryName: m.flavor.BinaryName,
+		DataDir:    m.dataDir,
+		LastError:  lastErr,
+		Restarts:   restarts,
 	}
-	if pinErr != nil {
-		st.LastError = pinErr.Error()
+	if digest, err := m.flavor.ExpectedBinaryDigest(platformGOOS(), platformGOARCH()); err == nil {
+		st.PinnedSHA256 = RedactHashes(digest)
+	} else {
+		st.LastError = err.Error()
 		st.State = StateFailed
 	}
-	if _, err := os.Stat(m.dataDir); err == nil {
-		binPath := installedPath(m.dataDir)
-		if _, perr := os.Stat(binPath); perr == nil {
-			if digest, derr := FileSHA256(binPath); derr == nil && pinErr == nil && digest == pin.SHA256 {
-				st.BinaryPresent = true
-			}
-		}
+	if _, verified := m.flavor.VerifiedPath(m.dataDir); verified {
+		st.BinaryPresent = true
 	}
 	if !ok {
 		return st
 	}
 	st.Origin = setup.Origin
-	st.Port = portFromOrigin(setup.Origin)
+	st.Port = setup.Port()
 	st.PID = pid
 	if spawned != nil && spawned.PID > 0 {
-		st.PIDVerified = VerifyProcessIdentity(spawned.PID, installedPath(m.dataDir))
+		st.PIDVerified = VerifyProcessIdentity(spawned.PID, layout.Binary)
 	}
 	if !startedAt.IsZero() {
 		st.StartedAt = startedAt.Format(time.RFC3339)
@@ -256,36 +286,35 @@ func (m *Manager) StatusSnapshot(ctx context.Context) Status {
 // accountCounts reads the pool summary. A failure yields Known=false with a
 // redacted reason; it never fails the whole status call.
 func (m *Manager) accountCounts(ctx context.Context, setup Setup) AccountCounts {
-	if m.doer == nil || setup.AdminToken == "" {
-		return AccountCounts{Error: "the backend's admin API is not reachable through this plugin (external backend, or no admin token)"}
+	if m.doer == nil || !setup.HasAdminCredentials() {
+		return AccountCounts{Error: "the backend's admin surface is not reachable through this plugin (external backend, or no admin credentials)"}
 	}
-	total, enabled, err := ReadAccountCounts(ctx, m.doer, setup)
+	accounts, err := ReadAccountCounts(ctx, m.doer, setup)
 	if err != nil {
-		return AccountCounts{Error: "the backend did not report its account pool"}
+		return AccountCounts{Error: "the backend did not report its account pool: " + RedactText(err.Error(), 180)}
 	}
-	return AccountCounts{Total: total, Enabled: enabled, Known: true}
+	return accounts
 }
 
 // Install downloads and verifies the pinned binary. It does NOT start it.
 func (m *Manager) Install(ctx context.Context) (string, error) {
-	pin, err := CurrentPin()
-	if err != nil {
-		return "", err
+	if !m.flavor.Valid() {
+		return "", m.fail(errors.New("no backend flavor configured"))
 	}
-	if err := os.MkdirAll(m.dataDir, 0o700); err != nil {
-		return "", fmt.Errorf("create data directory %s: %w", m.dataDir, err)
+	if err := EnsureDataDir(m.dataDir); err != nil {
+		return "", m.fail(err)
 	}
 	url := m.downloadURL
 	if url == "" {
-		url = DownloadURL(pin)
+		pin, err := m.flavor.CurrentPin()
+		if err != nil {
+			return "", m.fail(err)
+		}
+		url = m.flavor.ReleaseBaseURL() + pin.Asset
 	}
-	path, err := Install(m.dataDir, pin, url, m.syncProxy, m.download)
+	path, err := m.flavor.Install(m.dataDir, url, m.syncProxy, m.download)
 	if err != nil {
-		m.mu.Lock()
-		m.state = StateFailed
-		m.lastErr = err.Error()
-		m.mu.Unlock()
-		return "", err
+		return "", m.fail(err)
 	}
 	return path, nil
 }
@@ -302,14 +331,14 @@ func (m *Manager) Install(ctx context.Context) (string, error) {
 //  4. the binary is installed if missing or not the pin (digest verified);
 //  5. spawn, then poll health until green or the start deadline lapses.
 func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
+	if !m.flavor.Valid() {
+		return Setup{}, m.fail(errors.New("no backend flavor configured"))
+	}
 	m.mu.Lock()
 	if m.state == StateStarting {
 		m.mu.Unlock()
 		return Setup{}, errors.New("the local backend is already starting")
 	}
-	m.mu.Unlock()
-
-	m.mu.Lock()
 	m.state = StateStarting
 	m.mu.Unlock()
 	defer func() {
@@ -320,17 +349,17 @@ func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
 		m.mu.Unlock()
 	}()
 
-	pin, err := CurrentPin()
-	if err != nil {
+	layout := m.flavor.Layout(m.dataDir)
+	if err := EnsureDataDir(m.dataDir); err != nil {
 		return Setup{}, m.fail(err)
 	}
-	if err := os.MkdirAll(m.dataDir, 0o700); err != nil {
-		return Setup{}, m.fail(fmt.Errorf("create data directory %s: %w", m.dataDir, err))
+	if _, err := m.flavor.CurrentPin(); err != nil {
+		return Setup{}, m.fail(err)
 	}
 
 	// 1. Something already answering with our key: adopt it. This is the
 	// normal case after a plugin reload — the process is still running.
-	if setup, ok := ReadSetup(m.dataDir); ok {
+	if setup, ok := m.flavor.ReadSetup(m.dataDir); ok {
 		if m.doer != nil {
 			if health := Probe(ctx, m.doer, setup); health.State == HealthUp {
 				m.mu.Lock()
@@ -344,9 +373,8 @@ func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
 	}
 
 	// 2. Reclaim a leftover process from a previous run, with an identity check.
-	binPath := installedPath(m.dataDir)
-	if _, verified := VerifiedPath(m.dataDir, pin); verified {
-		if report := ReclaimStale(m.dataDir, binPath); report.Recorded > 0 && report.Alive && !report.Ours {
+	if _, verified := m.flavor.VerifiedPath(m.dataDir); verified {
+		if report := ReclaimStale(m.dataDir, layout.Binary); report.Recorded > 0 && report.Alive && !report.Ours {
 			// A live PID that is not ours: record it, never kill it.
 			m.mu.Lock()
 			m.foreignPID = report.Recorded
@@ -358,19 +386,23 @@ func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
 	// foreign occupies it.
 	port := m.preferredPort
 	if port <= 0 {
-		port = DefaultPortValue
+		port = m.flavor.DefaultPort
 	}
-	if existing, ok := ReadSetup(m.dataDir); ok {
-		port = portFromOrigin(existing.Origin)
+	if existing, ok := m.flavor.ReadSetup(m.dataDir); ok {
+		port = existing.Port()
 	}
 	if m.doer != nil && PortInUse(port) {
 		// Occupied: is it OUR backend (key accepted) or a stranger?
 		trySetup := Setup{
 			Origin:  fmt.Sprintf("http://127.0.0.1:%d", port),
 			BaseURL: fmt.Sprintf("http://127.0.0.1:%d/v1", port),
+			Flavor:  m.flavor.ID,
 		}
-		if saved, ok := ReadSetup(m.dataDir); ok && saved.Port() == port {
+		if saved, ok := m.flavor.ReadSetup(m.dataDir); ok && saved.Port() == port {
 			trySetup.APIKey = saved.APIKey
+			trySetup.AdminToken = saved.AdminToken
+			trySetup.AdminUser = saved.AdminUser
+			trySetup.AdminPassword = saved.AdminPassword
 		}
 		health := Probe(ctx, m.doer, trySetup)
 		if health.State == HealthForeign {
@@ -378,7 +410,7 @@ func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
 			if perr != nil {
 				return Setup{}, m.fail(perr)
 			}
-			if serr := SetPort(m.dataDir, next); serr != nil {
+			if serr := m.flavor.SetPort(m.dataDir, next); serr != nil {
 				return Setup{}, m.fail(serr)
 			}
 			port = next
@@ -386,20 +418,19 @@ func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
 	}
 
 	// 4. Ensure the data files exist, then the binary.
-	setup, err := EnsureDataFiles(m.dataDir, port)
+	setup, err := m.flavor.EnsureDataFiles(m.dataDir, port)
 	if err != nil {
 		return Setup{}, m.fail(err)
 	}
-	paths := PathsFor(m.dataDir)
-	secrets, secErr := readSecretsFile(paths.Secrets)
-	if secErr != nil {
-		return Setup{}, m.fail(secErr)
-	}
 	url := m.downloadURL
 	if url == "" {
-		url = DownloadURL(pin)
+		pin, perr := m.flavor.CurrentPin()
+		if perr != nil {
+			return Setup{}, m.fail(perr)
+		}
+		url = m.flavor.ReleaseBaseURL() + pin.Asset
 	}
-	if _, err := Install(m.dataDir, pin, url, m.syncProxy, m.download); err != nil {
+	if _, err := m.flavor.Install(m.dataDir, url, m.syncProxy, m.download); err != nil {
 		return Setup{}, m.fail(err)
 	}
 	if err := ValidateBindTarget("127.0.0.1", portFromOrigin(setup.Origin)); err != nil {
@@ -407,16 +438,16 @@ func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
 	}
 
 	// 5. Spawn and wait for green.
-	args, err := LaunchArgs(paths)
+	args, err := m.flavor.LaunchArgs(m.dataDir)
 	if err != nil {
 		return Setup{}, m.fail(err)
 	}
 	spawned, err := Spawn(SpawnOptions{
-		BinaryPath: installedPath(m.dataDir),
+		BinaryPath: layout.Binary,
 		Args:       args,
-		Env:        LaunchEnv(secrets, nil),
+		Env:        m.flavor.LaunchEnv(setup, nil),
 		Dir:        m.dataDir,
-		LogPath:    paths.LogFile,
+		LogPath:    layout.LogFile,
 	})
 	if err != nil && spawned == nil {
 		return Setup{}, m.fail(err)
@@ -459,7 +490,7 @@ func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
 		}
 		if health.State == HealthForeign {
 			_ = spawned.Terminate()
-			return Setup{}, m.fail(fmt.Errorf("%s answers with another service's key; the backend may have bound the wrong port — see %s", setup.Origin, paths.LogFile))
+			return Setup{}, m.fail(fmt.Errorf("%s answers with another service's key; the backend may have bound the wrong port — see %s", setup.Origin, layout.LogFile))
 		}
 		select {
 		case <-ctx.Done():
@@ -470,17 +501,8 @@ func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
 	}
 	_ = spawned.Terminate()
 	removePIDFile(m.dataDir)
-	return Setup{}, m.fail(fmt.Errorf("the backend did not answer within %s; see %s", m.startTimeout, paths.LogFile))
-}
-
-// readSecretsFile reads secrets.json without creating it (EnsureDataFiles has
-// already created it).
-func readSecretsFile(path string) (Secrets, error) {
-	s, err := readOrCreateSecrets(path)
-	if err != nil {
-		return Secrets{}, err
-	}
-	return s, nil
+	return Setup{}, m.fail(fmt.Errorf("the %s backend did not answer within %s; see %s",
+		m.flavor.Label(), m.startTimeout, layout.LogFile))
 }
 
 // Start installs-if-needed and starts the backend, returning its status.
@@ -506,20 +528,19 @@ func (m *Manager) Stop(ctx context.Context) (Status, error) {
 	spawned := m.spawned
 	m.mu.Unlock()
 
+	layout := m.flavor.Layout(m.dataDir)
 	if spawned == nil {
 		// No child in this run. A previous run's process may still be alive: stop
 		// it with the same identity check.
-		pin, err := CurrentPin()
-		if err == nil {
-			if _, verified := VerifiedPath(m.dataDir, pin); verified {
-				if report := ReclaimStale(m.dataDir, installedPath(m.dataDir)); report.Recorded > 0 && report.Alive && !report.Ours {
-					return m.StatusSnapshot(ctx), fmt.Errorf("cannot stop unknown process on pid %d: it does not match this backend's binary", report.Recorded)
-				}
+		if _, verified := m.flavor.VerifiedPath(m.dataDir); verified {
+			if report := ReclaimStale(m.dataDir, layout.Binary); report.Recorded > 0 && report.Alive && !report.Ours {
+				return m.StatusSnapshot(ctx), fmt.Errorf("cannot stop unknown process on pid %d: it does not match this backend's binary", report.Recorded)
 			}
 		}
-		if setup, ok := ReadSetup(m.dataDir); ok && m.doer != nil {
+		if setup, ok := m.flavor.ReadSetup(m.dataDir); ok && m.doer != nil {
 			if health := Probe(ctx, m.doer, setup); health.State == HealthForeign {
-				return m.StatusSnapshot(ctx), fmt.Errorf("port %d is owned by another service; refusing to stop it — change ai-studio.port", portFromOrigin(setup.Origin))
+				return m.StatusSnapshot(ctx), fmt.Errorf("port %d is owned by another service; refusing to stop it — change the port for namespace %s",
+					setup.Port(), m.flavor.ID)
 			}
 		}
 		m.mu.Lock()
@@ -618,36 +639,35 @@ func (m *Manager) watchForCrash() {
 			case <-time.After(2 * time.Second):
 			}
 
-			pin, err := CurrentPin()
-			if err != nil {
+			if !m.flavor.Valid() {
 				return
 			}
-			paths := PathsFor(m.dataDir)
-			secrets, errSecrets := readOrCreateSecrets(paths.Secrets)
-			if errSecrets != nil {
-				m.fail(errSecrets)
+			layout := m.flavor.Layout(m.dataDir)
+			savedSetup, okSetup := m.flavor.ReadSetup(m.dataDir)
+			if !okSetup {
+				m.fail(errors.New("the backend's config disappeared; refusing to restart"))
 				return
 			}
-			setup, errSetup := EnsureDataFiles(m.dataDir, m.preferredPort)
+			setup, errSetup := m.flavor.EnsureDataFiles(m.dataDir, savedSetup.Port())
 			if errSetup != nil {
 				m.fail(errSetup)
 				return
 			}
-			args, errArgs := LaunchArgs(paths)
+			args, errArgs := m.flavor.LaunchArgs(m.dataDir)
 			if errArgs != nil {
 				m.fail(errArgs)
 				return
 			}
-			if _, verified := VerifiedPath(m.dataDir, pin); !verified {
+			if _, verified := m.flavor.VerifiedPath(m.dataDir); !verified {
 				m.fail(fmt.Errorf("backend binary no longer matches its pin; refusing to restart"))
 				return
 			}
 			next, errSpawn := Spawn(SpawnOptions{
-				BinaryPath: installedPath(m.dataDir),
+				BinaryPath: layout.Binary,
 				Args:       args,
-				Env:        LaunchEnv(secrets, nil),
+				Env:        m.flavor.LaunchEnv(setup, nil),
 				Dir:        m.dataDir,
-				LogPath:    paths.LogFile,
+				LogPath:    layout.LogFile,
 			})
 			if errSpawn != nil {
 				m.fail(errSpawn)
@@ -679,7 +699,7 @@ func (m *Manager) watchForCrash() {
 				}
 				if !healthy {
 					_ = next.Terminate()
-					m.fail(fmt.Errorf("the restarted backend did not answer within %s; see %s", m.startTimeout, paths.LogFile))
+					m.fail(fmt.Errorf("the restarted backend did not answer within %s; see %s", m.startTimeout, layout.LogFile))
 					return
 				}
 			}
@@ -733,8 +753,7 @@ func portFromOrigin(origin string) int {
 	return port
 }
 
-// Port returns the setup's port.
-func (s Setup) Port() int { return portFromOrigin(s.Origin) }
-
 // LogFile is this manager's backend log path (used in operator-facing errors).
-func (m *Manager) LogFile() string { return filepath.Join(m.dataDir, LogFileName) }
+func (m *Manager) LogFile() string {
+	return filepath.Join(m.dataDir, LogFileName)
+}

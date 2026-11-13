@@ -1,13 +1,33 @@
 package backend
 
-// The backend's account pool, driven through its own admin API.
+// Each backend's own account pool, driven through its own admin surface.
+//
+// # Two surfaces, two ways to add an account
+//
+// The two backends do NOT share an account API, and treating them as
+// interchangeable is what made an earlier implementation import a Google cookie
+// into a service that has no cookie endpoint:
+//
+//   - gemini-web2api-go owns the Google cookie itself. Its /admin/api/cookies
+//     takes a pasted Cookie header, stores it in its own SQLite database and can
+//     then check that it signs in. A cookie is the account.
+//
+//   - AIStudio2API never accepts a pasted cookie. It signs accounts in with a
+//     browser (its own Camoufox build) and keeps the resulting auth state under
+//     its data directory. POST /api/accounts starts that sign-in and returns a
+//     task; GET /api/accounts/tasks reports progress. There is no cookie
+//     endpoint to post to.
+//
+// So "import an account" means one thing per flavor, and the two functions
+// below are deliberately not variations of one another.
 //
 // # What lives here and what does NOT
 //
-// The backend owns the Google cookies: they are written into its SQLite
-// database by its own admin handler. This package only ever passes a cookie
-// THROUGH — in a request body to 127.0.0.1 — and never keeps, logs or returns
-// one. Every function's error text is deliberately free of cookie material.
+// The backend owns the Google credential: gemini-web writes the cookie into
+// its database, AI Studio writes its auth state into its own directory. This
+// package only ever passes a cookie THROUGH — in a request body to 127.0.0.1 —
+// and never keeps, logs or returns one. Every function's error text is
+// deliberately free of credential material.
 
 import (
 	"context"
@@ -24,7 +44,7 @@ type ImportedAccount struct {
 	Detail string
 }
 
-// adminProxy is one entry of the backend's proxy pool.
+// adminProxy is one entry of gemini-web2api-go's proxy pool.
 type adminProxy struct {
 	ID        int    `json:"id"`
 	Name      string `json:"name"`
@@ -52,13 +72,20 @@ func adminCallJSON(ctx context.Context, doer HTTPDoer, setup Setup, method, path
 	return nil
 }
 
-// EnsureProxy registers a proxy in the backend's own pool and returns its id.
+// EnsureProxy registers a proxy in gemini-web2api-go's own pool and returns
+// its id.
 //
-// This matters because the backend does NOT read HTTP_PROXY: it only reaches
+// This matters because that backend does NOT read HTTP_PROXY: it only reaches
 // Google directly or through a proxy registered here. An operator who filled in
 // the proxy on the plugin page would otherwise see every account check fail with
 // a misleading "cannot reach Google".
 func EnsureProxy(ctx context.Context, doer HTTPDoer, setup Setup, proxyURL string) (int, error) {
+	if setup.Flavor == FlavorAIStudio {
+		// AI Studio takes its proxy from .env (PROXY), which EnsureStudioFiles
+		// already writes; there is no pool to populate. Saying so is better
+		// than silently posting to an endpoint that does not exist.
+		return 0, fmt.Errorf("AIStudio2API takes its proxy from its own .env (the PROXY key), not from a pool: set it in the plugin config and the manager writes it")
+	}
 	const managedName = "CPA geminiae"
 	var list adminProxyList
 	if err := adminCallJSON(ctx, doer, setup, http.MethodGet, "/proxies", nil, 5*time.Second, "", &list); err != nil {
@@ -104,7 +131,8 @@ func EnsureProxy(ctx context.Context, doer HTTPDoer, setup Setup, proxyURL strin
 	return created.ID, nil
 }
 
-// ImportCookie adds one Google cookie to the backend's pool and probes it.
+// ImportCookie adds one Google cookie to gemini-web2api-go's pool and probes
+// it. It is refused for AI Studio, which has no cookie endpoint at all.
 //
 // The probe is what distinguishes "added" from "works": a cookie that is
 // syntactically fine but cannot sign in would otherwise sit in the pool and
@@ -113,6 +141,9 @@ func EnsureProxy(ctx context.Context, doer HTTPDoer, setup Setup, proxyURL strin
 //
 // The returned error is written for the operator and never contains the cookie.
 func ImportCookie(ctx context.Context, doer HTTPDoer, setup Setup, cookie, label string, authUser int, timeout time.Duration) (ImportedAccount, error) {
+	if setup.Flavor != FlavorGeminiWeb {
+		return ImportedAccount{}, fmt.Errorf("%s does not accept a pasted Cookie: it signs accounts in through its own browser (see StartStudioLogin)", flavorLabelOr(setup.Flavor))
+	}
 	if strings.TrimSpace(cookie) == "" {
 		return ImportedAccount{}, fmt.Errorf("没有收到 Cookie")
 	}
@@ -152,16 +183,114 @@ func ImportCookie(ctx context.Context, doer HTTPDoer, setup Setup, cookie, label
 		if detail == "" {
 			detail = "检测未通过"
 		}
-		return ImportedAccount{}, fmt.Errorf("这个 Cookie 无法登录 Gemini：%s", redactAccountDetail(detail))
+		return ImportedAccount{}, fmt.Errorf("这个 Cookie 无法登录 Gemini：%s", RedactAccountDetail(detail))
 	}
-	return ImportedAccount{ID: added.ID, Detail: redactAccountDetail(check.Detail)}, nil
+	return ImportedAccount{ID: added.ID, Detail: RedactAccountDetail(check.Detail)}, nil
 }
 
-// AccountCounts reads the pool summary.
+// StudioLoginTask is what AIStudio2API reports for a sign-in it is performing.
 //
-// It reports COUNTS only: the list endpoint's rows carry labels and account
-// email addresses, and a page refresh has no business echoing those.
-func ReadAccountCounts(ctx context.Context, doer HTTPDoer, setup Setup) (total int, enabled int, err error) {
+// The sign-in is a real browser session against Google, so it is asynchronous
+// by nature: the POST returns a task, and the task moves from pending/running
+// to done or failed. Nothing here carries account material — a task id, a state
+// and an operator-facing error are all this plugin ever sees.
+type StudioLoginTask struct {
+	ID    string
+	State string
+	Error string
+}
+
+// StartStudioLogin starts AIStudio2API's own account sign-in.
+//
+// This is AI Studio's ONLY way to add an account: it drives its own browser and
+// stores the resulting auth state itself. A pasted cookie is not an input it
+// accepts, so the plugin must not pretend otherwise.
+//
+// The call is bounded by loginTimeout because upstream's own sign-in may wait
+// for a human to complete a Google flow in the browser window it opens.
+func StartStudioLogin(ctx context.Context, doer HTTPDoer, setup Setup, timeout time.Duration) (StudioLoginTask, error) {
+	if setup.Flavor != FlavorAIStudio {
+		return StudioLoginTask{}, fmt.Errorf("%s adds accounts by pasting a Cookie; POST /accounts is the cookie path", flavorLabelOr(setup.Flavor))
+	}
+	if !setup.HasAdminCredentials() {
+		return StudioLoginTask{}, fmt.Errorf("这个后端没有管理凭据：只有插件自己托管的后端才能加账号")
+	}
+	var res struct {
+		Task struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"task"`
+		Account struct {
+			ID string `json:"id"`
+		} `json:"account"`
+	}
+	if err := adminCallJSON(ctx, doer, setup, http.MethodPost, "/api/accounts", struct{}{}, timeout,
+		"AI Studio 没有在限定时间内开始登录任务", &res); err != nil {
+		return StudioLoginTask{}, err
+	}
+	if res.Task.ID != "" {
+		return StudioLoginTask{ID: res.Task.ID, State: res.Task.State}, nil
+	}
+	if res.Account.ID != "" {
+		// Upstream returns the account directly when no browser is needed.
+		return StudioLoginTask{ID: res.Account.ID, State: "done"}, nil
+	}
+	return StudioLoginTask{}, fmt.Errorf("AI Studio 没有返回登录任务 id")
+}
+
+// PollStudioLogin reads one sign-in task's current state.
+func PollStudioLogin(ctx context.Context, doer HTTPDoer, setup Setup, taskID string) (StudioLoginTask, bool, error) {
+	if setup.Flavor != FlavorAIStudio {
+		return StudioLoginTask{}, false, fmt.Errorf("%s has no login tasks", flavorLabelOr(setup.Flavor))
+	}
+	if strings.TrimSpace(taskID) == "" {
+		return StudioLoginTask{}, false, fmt.Errorf("缺少登录任务 id")
+	}
+	var res struct {
+		Tasks []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+			Error string `json:"error"`
+			Items []struct {
+				State string `json:"state"`
+				Error string `json:"error"`
+			} `json:"items"`
+		} `json:"tasks"`
+	}
+	if err := adminCallJSON(ctx, doer, setup, http.MethodGet, "/api/accounts/tasks", nil, 10*time.Second, "", &res); err != nil {
+		return StudioLoginTask{}, false, err
+	}
+	for _, task := range res.Tasks {
+		if task.ID != taskID {
+			continue
+		}
+		out := StudioLoginTask{ID: task.ID, State: task.State, Error: RedactAccountDetail(task.Error)}
+		for _, item := range task.Items {
+			if item.State == "failed" && out.Error == "" {
+				out.Error = RedactAccountDetail(item.Error)
+			}
+		}
+		done := task.State == "done" || task.State == "failed"
+		return out, done, nil
+	}
+	// A task that disappeared between two polls has finished and been reaped;
+	// reporting "gone" beats polling forever.
+	return StudioLoginTask{}, true, fmt.Errorf("AI Studio 已经不再报告这个登录任务（%s），它可能已结束并被执行器回收", taskID)
+}
+
+// ReadAccountCounts reads the pool summary.
+//
+// It reports COUNTS only: gemini-web's list rows carry labels and account email
+// addresses, AI Studio's carry labels and auth-state ids, and a page refresh has
+// no business echoing any of them.
+func ReadAccountCounts(ctx context.Context, doer HTTPDoer, setup Setup) (AccountCounts, error) {
+	if setup.Flavor == FlavorAIStudio {
+		return studioAccountCounts(ctx, doer, setup)
+	}
+	return geminiWebAccountCounts(ctx, doer, setup)
+}
+
+func geminiWebAccountCounts(ctx context.Context, doer HTTPDoer, setup Setup) (AccountCounts, error) {
 	var list struct {
 		Accounts []struct {
 			ID      int  `json:"id"`
@@ -169,27 +298,60 @@ func ReadAccountCounts(ctx context.Context, doer HTTPDoer, setup Setup) (total i
 		} `json:"accounts"`
 	}
 	if err := adminCallJSON(ctx, doer, setup, http.MethodGet, "/accounts", nil, 5*time.Second, "", &list); err != nil {
-		return 0, 0, fmt.Errorf("read the account pool: %w", err)
+		return AccountCounts{}, fmt.Errorf("read the account pool: %w", err)
 	}
-	total = len(list.Accounts)
+	out := AccountCounts{Total: len(list.Accounts), Known: true}
 	for _, account := range list.Accounts {
 		if account.Enabled {
-			enabled++
+			out.Enabled++
 		}
 	}
-	return total, enabled, nil
+	return out, nil
 }
 
-// redactAccountDetail keeps a backend verdict readable while making sure it
-// cannot carry cookie material: a detail string is a verdict sentence, not a
+func studioAccountCounts(ctx context.Context, doer HTTPDoer, setup Setup) (AccountCounts, error) {
+	var list struct {
+		Accounts []struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"accounts"`
+	}
+	if err := adminCallJSON(ctx, doer, setup, http.MethodGet, "/api/accounts", nil, 10*time.Second, "", &list); err != nil {
+		return AccountCounts{}, fmt.Errorf("read the account pool: %w", err)
+	}
+	out := AccountCounts{Total: len(list.Accounts), Known: true}
+	for _, account := range list.Accounts {
+		// Upstream omits "enabled" for an account that is usable; only an
+		// explicit false means disabled.
+		if account.Enabled == nil || *account.Enabled {
+			out.Enabled++
+		}
+	}
+	return out, nil
+}
+
+// flavorLabelOr is the operator-facing name of a flavor id, tolerant of an
+// empty one.
+func flavorLabelOr(id FlavorID) string {
+	if flavor, err := FlavorFor(id); err == nil {
+		return flavor.Label()
+	}
+	return "this backend"
+}
+
+// RedactAccountDetail keeps a backend verdict readable while making sure it
+// cannot carry credential material: a detail string is a verdict sentence, not a
 // payload, so anything long or containing an '=' pair is dropped.
-func redactAccountDetail(detail string) string {
+func RedactAccountDetail(detail string) string {
 	detail = strings.TrimSpace(detail)
 	if detail == "" {
 		return ""
 	}
-	if len(detail) > 200 || strings.Contains(detail, "SID=") || strings.Contains(detail, "SAPISID=") {
+	if len(detail) > 200 || strings.Contains(detail, "SID=") || strings.Contains(detail, "SAPISID=") || strings.Contains(detail, "aistudio_admin=") {
 		return "后端返回了一条已隐藏的详情（含疑似凭据内容）"
 	}
 	return detail
 }
+
+// redactAccountDetail is the pre-existing lowercase spelling, kept so callers
+// inside this package read naturally.
+func redactAccountDetail(detail string) string { return RedactAccountDetail(detail) }
