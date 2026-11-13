@@ -2,6 +2,7 @@ package allowance
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,5 +112,33 @@ func TestWorkspaceReadWithoutAControlKeyMakesNoRequest(t *testing.T) {
 	}
 	if fake.count() != 0 {
 		t.Errorf("calls = %d, want none", fake.count())
+	}
+}
+
+// A 401/403 on the WORKSPACE read is the same refusal a refused preflight is:
+// the control key cannot read this account at all, so it must be reported as one
+// and never cached.
+func TestAReftusedWorkspaceReadIsARefusal(t *testing.T) {
+	for _, status := range []int{401, 403} {
+		fake := newFakeControl().on("/api/v1/workspaces/current", status, `{"error":"unauthenticated"}`)
+		cache := NewWorkspaceCache(time.Minute, func() time.Time {
+			return time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+		})
+		_, err := cache.Get(context.Background(), fake.transport(), "https://amr-api.example", "vela_ctrl_secret")
+		if err == nil {
+			t.Fatalf("%d: a refused workspace read must fail", status)
+		}
+		if !IsRefused(err) {
+			t.Errorf("%d: the refusal was reported as an ordinary error", status)
+		}
+		if err.Error() != MessageRefused {
+			t.Errorf("%d: error = %q, want %q", status, err.Error(), MessageRefused)
+		}
+		if strings.Contains(err.Error(), "vela_ctrl_secret") {
+			t.Errorf("%d: the refusal carries the control key", status)
+		}
+		if cache.Len() != 0 {
+			t.Errorf("%d: a refused read was cached", status)
+		}
 	}
 }

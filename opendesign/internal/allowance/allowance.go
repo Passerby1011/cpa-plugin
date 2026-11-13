@@ -27,6 +27,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -274,6 +275,11 @@ func WorkspaceOf(ctx context.Context, transport Transport, controlURL, controlKe
 		return Workspace{}, fmt.Errorf("the workspace read failed")
 	}
 	if status < 200 || status >= 300 {
+		if status == 401 || status == 403 {
+			// The same verdict a refused preflight gives: this control key
+			// cannot read this account at all.
+			return Workspace{}, &RefusedError{Where: "the workspaces read"}
+		}
 		return Workspace{}, fmt.Errorf("the workspaces read answered %d (%s)", status, said(body, "unauthorized"))
 	}
 	var doc struct {
@@ -722,6 +728,23 @@ func PlanName(tiers ...string) string {
 	}
 	first := strings.ToUpper(tier[:1])
 	return "Design Plan " + first + tier[1:]
+}
+
+// RefusedError is the control plane refusing the account's control key (401/403
+// on any of the three reads). It is separate from every other failure because
+// only this one means the sign-in must be redone.
+type RefusedError struct {
+	// Where names the read that was refused, for the operator's benefit; it
+	// never carries the key.
+	Where string
+}
+
+func (e *RefusedError) Error() string { return MessageRefused }
+
+// IsRefused reports whether an error is a refusal rather than a failure.
+func IsRefused(err error) bool {
+	var refused *RefusedError
+	return errors.As(err, &refused)
 }
 
 // numberValue normalizes anything the control plane may hand us into a float.

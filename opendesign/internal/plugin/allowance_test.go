@@ -543,6 +543,40 @@ func TestAnIneligiblePlanIsStatedNotMarked(t *testing.T) {
 	}
 }
 
+// A 401 on the WORKSPACE read marks the account too: the preflight is never
+// reached, so without this the row would look healthy behind an error nobody
+// can clear.
+func TestRefusedWorkspaceReadMarksTheAccount(t *testing.T) {
+	plane := newFakeControlPlane()
+	plane.on("/workspaces/current", 401, `{"error":"unauthenticated"}`)
+	m := managerWithPlane(t, plane)
+
+	list := decodeCards(t, managementGet(t, m, "/v0/management", "/allowance"))
+	id := ""
+	for _, card := range list.Cards {
+		if card.Label == "Account A" {
+			id = card.ID
+		}
+	}
+	resp := managementPost(t, m, "/v0/management", "/allowance", allowanceRequest{ID: id})
+	var read allowanceRead
+	if err := json.Unmarshal(resp.Body, &read); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if read.Card.SignIn != allowance.SignInExpired {
+		t.Errorf("sign_in = %q, want expired", read.Card.SignIn)
+	}
+	if read.Card.Message != allowance.MessageRefused {
+		t.Errorf("message = %q, want %q", read.Card.Message, allowance.MessageRefused)
+	}
+	if !m.expiredAllowances.has(id) {
+		t.Errorf("a refused workspace read did not mark the account")
+	}
+	if n := plane.count("/billing/preflight"); n != 0 {
+		t.Errorf("preflight reads = %d, want none after the workspace read was refused", n)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // guards
 // ---------------------------------------------------------------------------

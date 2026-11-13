@@ -208,8 +208,19 @@ func (m *Manager) refreshAllowance(ctx context.Context, cfg config.Config, id st
 		}
 		ws, err := m.workspaces.Get(ctx, m.bridge.Transport(), controlURL, a.ControlKey)
 		if err != nil {
-			// A workspace failure is not a refusal: the control plane may be
-			// down, and marking the account would send the operator to redo a
+			if allowance.IsRefused(err) {
+				// The control key itself was refused. Marking is right here
+				// even though the preflight was never reached: the same key
+				// would be refused there too, and leaving the row "kept" would
+				// hide a dead sign-in behind a retryable-looking error.
+				m.expiredAllowances.mark(id)
+				m.workspaces.Forget(a.ControlKey)
+				card.SignIn = allowance.SignInExpired
+				card.Message = allowance.MessageRefused
+				return card, http.StatusOK
+			}
+			// Any other workspace failure is not a refusal: the control plane
+			// may be down, and marking would send the operator to redo a
 			// working sign-in.
 			card.SignIn = allowance.SignInKept
 			card.Message = "Open Design usage: " + err.Error()
