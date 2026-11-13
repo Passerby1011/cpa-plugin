@@ -145,6 +145,19 @@ func Probe(ctx context.Context, doer HTTPDoer, setup Setup) Health {
 			health.Reason = fmt.Sprintf("%s/v1/models rejected this setup's API key (HTTP %d); another service may own port %s",
 				setup.Origin, modelResp.StatusCode, portOf(setup.Origin))
 			health.APIKeyOK = false
+		case setup.Flavor == FlavorAIStudio && modelResp.StatusCode == http.StatusServiceUnavailable &&
+			isStudioGenerationStopped(modelResp.Body):
+			// AIStudio2API answers 503 "generation service stopped" when it has
+			// no usable account. That is NOT a foreign listener: the admin
+			// surface above already identified this port as ours, and this 503
+			// carries our service's own wording. Reporting "foreign" here would
+			// make a freshly installed backend look like a port collision, and
+			// the operator would go hunting for the wrong problem. The model
+			// list stays empty until an account exists, which the status and
+			// panel report as its own state.
+			health.State = HealthUp
+			health.Reason = ReasonNoAccount
+			health.APIKeyOK = false
 		default:
 			health.State = HealthForeign
 			health.Reason = fmt.Sprintf("%s/v1/models returned HTTP %d", setup.Origin, modelResp.StatusCode)
@@ -152,6 +165,60 @@ func Probe(ctx context.Context, doer HTTPDoer, setup Setup) Health {
 		return health
 	}
 }
+
+// isStudioGenerationStopped recognises AIStudio2API's 503 for "the generation
+// service is not running" (its answer when no account is eligible). It does not
+// match on the status alone, so a genuine 503 from something else on the port
+// is still reported as foreign.
+//
+// # Why the machine-readable code is the signal, not the message
+//
+// The message is LOCALISED. A real run returned
+//
+//	{"error":{"message":"Service unavailable: AIStudio2API 生成服务已停止：…",
+//	          "type":"server_error","code":"service_stopped"}}
+//
+// so a matcher looking for the English phrase "generation service" (the wording
+// in the backend's own log) classified the backend's own answer as a stranger's
+// and the manager refused to start it. `code` is the same in every locale.
+// (The text fallback keeps both languages in case a future build ships a
+// message without the code.)
+func isStudioGenerationStopped(body []byte) bool {
+	var envelope struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) == nil && strings.TrimSpace(envelope.Error.Code) == "service_stopped" {
+		return true
+	}
+	text := strings.ToLower(string(body))
+	mentionsService := strings.Contains(text, "generation service") || strings.Contains(text, "生成服务")
+	mentionsUnavailable := strings.Contains(text, "service unavailable") || strings.Contains(text, "服务已停止")
+	return mentionsService && mentionsUnavailable
+}
+
+// Green reports whether this health is good enough to call the backend
+// "running".
+//
+// # Why "up without a key" can still be green
+//
+// For gemini-web a reachable, key-accepting backend is required: the key is the
+// only way to tell its port from a stranger's. AIStudio2API is different — it
+// starts with an empty account pool, and until an operator imports a Google
+// account its /v1/models answers 503 "generation service stopped". That is the
+// backend itself talking about its own state, which the probe already
+// recognised (State=up, Reason="no-account"), and the service is alive and
+// serving its admin surface. Treating it as "not started" would make the
+// manager kill a healthy process, so "no-account" counts as green and the
+// absent catalog is reported as its own state.
+func (h Health) Green() bool {
+	return h.State == HealthUp && (h.APIKeyOK || h.Reason == ReasonNoAccount)
+}
+
+// ReasonNoAccount is the health reason for a backend that is up and reachable
+// but has no usable account yet, so its model list is empty.
+const ReasonNoAccount = "no-account"
 
 // hostInfo is what a flavor's reachability probe learned.
 type hostInfo struct {

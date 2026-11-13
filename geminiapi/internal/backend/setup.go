@@ -678,6 +678,47 @@ func (f Flavor) LaunchArgs(dataDir string) ([]string, error) {
 	}
 }
 
+// ServiceEnv is the plugin-owned environment AIStudio2API is started with.
+//
+// # Why the service must be given these in its ENVIRONMENT
+//
+// Upstream reads them from the process environment FIRST and only falls back to
+// .env. An inherited variable that is PRESENT BUT EMPTY is not "unset": the
+// service logs `Invalid setting value, starting with the default` and then uses
+// 2048/2050 — which is exactly what a real run showed (`.env` said one port, the
+// service listened on the defaults, and the health probe hit the right port of
+// nothing). So the values are taken from the SAME .env this function reads, and
+// passed explicitly: one source of truth, delivered by the channel upstream
+// actually honours.
+//
+// gemini-web takes no settings this way, so it gets an empty map.
+func (f Flavor) ServiceEnv(setup Setup, dataDir string) map[string]string {
+	if f.ID != FlavorAIStudio {
+		return nil
+	}
+	layout := f.Layout(dataDir)
+	values := readEnvFile(layout.EnvFile)
+	out := make(map[string]string, len(values))
+	for _, key := range []string{
+		"LISTEN_ADDR", "PREVIEW_LISTEN_ADDR", "AISTUDIO_AUTH_STATES", "PROXY_API_KEY",
+		"ADMIN_AUTH_ENABLED", "ADMIN_USERNAME", "ADMIN_PASSWORD", "AUTO_START",
+		"WAA_BACKEND", "UPSTREAM_CHANNELS", "BUILD_NATIVE_NONSTREAM",
+	} {
+		if value, ok := values[key]; ok && strings.TrimSpace(value) != "" {
+			out[key] = value
+		}
+	}
+	// The .env can be hand-edited; the port the plugin resolved is authoritative
+	// for reachability, so it wins when it disagrees.
+	if port := setup.Port(); port > 0 {
+		out["LISTEN_ADDR"] = fmt.Sprintf("127.0.0.1:%d", port)
+	}
+	if preview := listenPort(out["PREVIEW_LISTEN_ADDR"]); preview == 0 || preview == setup.Port() {
+		delete(out, "PREVIEW_LISTEN_ADDR")
+	}
+	return out
+}
+
 // LaunchEnv is this flavor's child environment.
 //
 // # Why credentials travel in the environment
@@ -713,13 +754,17 @@ func (f Flavor) LaunchEnv(setup Setup, extra map[string]string) []string {
 		// gemini-web2api-go reads its two credentials from the environment.
 		out = append(out, "API_KEY="+setup.APIKey, "ADMIN_TOKEN="+setup.AdminToken)
 	}
-	// Upstream settings imported from the host's environment would override
-	// the ones saved in AI Studio's .env, which is the opposite of what an
-	// operator editing the page expects.
+	// Upstream settings imported from the host's environment must not leak in:
+	// for AI Studio they are delivered from its own .env via ServiceEnv, and
+	// leaving an inherited variable set to "" is NOT equivalent to unsetting it
+	// (upstream logs "Invalid setting value, starting with the default" and
+	// listens on 2048 instead of the resolved port).
 	for _, name := range studioServiceEnvKeys() {
 		out = append(out, name+"=")
 	}
 	for name, value := range extra {
+		// Last one wins for a repeated name in the child environment, which is
+		// why the blanks above are emitted first.
 		out = append(out, name+"="+value)
 	}
 	return out

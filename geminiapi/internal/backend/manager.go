@@ -445,7 +445,7 @@ func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
 	spawned, err := Spawn(SpawnOptions{
 		BinaryPath: layout.Binary,
 		Args:       args,
-		Env:        m.flavor.LaunchEnv(setup, nil),
+		Env:        m.flavor.LaunchEnv(setup, m.flavor.ServiceEnv(setup, m.dataDir)),
 		Dir:        m.dataDir,
 		LogPath:    layout.LogFile,
 	})
@@ -480,7 +480,7 @@ func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
 	deadline := time.Now().Add(m.startTimeout)
 	for time.Now().Before(deadline) {
 		health := Probe(ctx, m.doer, setup)
-		if health.State == HealthUp && health.APIKeyOK {
+		if health.Green() {
 			m.mu.Lock()
 			m.state = StateRunning
 			m.lastErr = ""
@@ -665,7 +665,7 @@ func (m *Manager) watchForCrash() {
 			next, errSpawn := Spawn(SpawnOptions{
 				BinaryPath: layout.Binary,
 				Args:       args,
-				Env:        m.flavor.LaunchEnv(setup, nil),
+				Env:        m.flavor.LaunchEnv(setup, m.flavor.ServiceEnv(setup, m.dataDir)),
 				Dir:        m.dataDir,
 				LogPath:    layout.LogFile,
 			})

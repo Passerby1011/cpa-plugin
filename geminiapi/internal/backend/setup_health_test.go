@@ -349,3 +349,89 @@ func TestValidateBindTargetIsStrict(t *testing.T) {
 		t.Fatalf("ValidateBindTarget rejected a valid target: %v", err)
 	}
 }
+
+// TestProbeStudioServiceStoppedIsUpWithNoAccount pins the behaviour a real run
+// forced. AIStudio2API answers /v1/models with 503 while it has no eligible
+// account, and the body is LOCALISED — the run returned the Chinese message
+// below. Before this branch existed the probe called the backend's own answer
+// "another service's key" and the manager refused to start a healthy process.
+//
+// The exact envelope observed is fed here verbatim, so a future matcher that
+// goes back to English-only text fails this test instead of failing on a real
+// machine.
+func TestProbeStudioServiceStoppedIsUpWithNoAccount(t *testing.T) {
+	doer := &fakeDoer{handlers: map[string]func(*HTTPRequest) (HTTPResponse, error){
+		"/api/status": func(*HTTPRequest) (HTTPResponse, error) {
+			return jsonResponse(401, `{"error":{"code":"admin_login_required","message":"Sign in to the console"}}`), nil
+		},
+		"/v1/models": func(*HTTPRequest) (HTTPResponse, error) {
+			return jsonResponse(503, `{"error":{"message":"Service unavailable: AIStudio2API 生成服务已停止：在管理页面点击“启动服务”，或在服务配置中开启“自动启动生成服务”","type":"server_error","param":null,"code":"service_stopped"}}`), nil
+		},
+	}}
+	setup := testSetup("k")
+	setup.Flavor = FlavorAIStudio
+	health := Probe(context.Background(), doer, setup)
+	if health.State != HealthUp {
+		t.Fatalf("state = %s (%s), want up: the backend's own 503 must not read as a stranger", health.State, health.Reason)
+	}
+	if health.Reason != ReasonNoAccount {
+		t.Fatalf("reason = %q, want %q", health.Reason, ReasonNoAccount)
+	}
+	if health.APIKeyOK {
+		t.Fatal("the key was reported as confirmed although /v1/models never accepted it")
+	}
+	if !health.Green() {
+		t.Fatal("up + no-account must be green, or the manager would kill a healthy backend")
+	}
+}
+
+// TestProbeForeign503StaysForeign is the other half of the same decision: a 503
+// this plugin did not recognise belongs to somebody else on the port, and it
+// must never be adopted or adopted-then-killed.
+func TestProbeForeign503StaysForeign(t *testing.T) {
+	doer := &fakeDoer{handlers: map[string]func(*HTTPRequest) (HTTPResponse, error){
+		"/api/status": func(*HTTPRequest) (HTTPResponse, error) {
+			return jsonResponse(200, `{"version":"somebody-elses-1.0"}`), nil
+		},
+		"/v1/models": func(*HTTPRequest) (HTTPResponse, error) {
+			return jsonResponse(503, `{"error":{"code":"upstream_timeout","message":"backend unavailable"}}`), nil
+		},
+	}}
+	setup := testSetup("k")
+	setup.Flavor = FlavorAIStudio
+	health := Probe(context.Background(), doer, setup)
+	if health.State != HealthForeign {
+		t.Fatalf("state = %s (%s), want foreign", health.State, health.Reason)
+	}
+	if health.Green() {
+		t.Fatal("an unrecognised 503 was reported as a healthy backend")
+	}
+}
+
+// TestStudioGenerationStoppedRecognition covers the matcher directly: both
+// locales the backend ships, the machine-readable code alone, and the
+// near-misses that must stay false.
+func TestStudioGenerationStoppedRecognition(t *testing.T) {
+	stopped := []string{
+		`{"error":{"code":"service_stopped","message":"Service unavailable: AIStudio2API 生成服务已停止"}}`,
+		`{"error":{"code":"service_stopped"}}`,
+		`{"error":{"message":"Service unavailable: AIStudio2API generation service stopped"}}`,
+	}
+	for _, body := range stopped {
+		if !isStudioGenerationStopped([]byte(body)) {
+			t.Fatalf("not recognised as service_stopped: %s", body)
+		}
+	}
+	others := []string{
+		``,
+		`not json at all`,
+		`{"error":{"code":"service_unavailable","message":"upstream is down"}}`,
+		`{"error":{"code":"invalid_api_key","message":"Invalid API Key"}}`,
+		`{"error":{"code":"admin_login_required","message":"Sign in to the console"}}`,
+	}
+	for _, body := range others {
+		if isStudioGenerationStopped([]byte(body)) {
+			t.Fatalf("wrongly recognised as service_stopped: %s", body)
+		}
+	}
+}
