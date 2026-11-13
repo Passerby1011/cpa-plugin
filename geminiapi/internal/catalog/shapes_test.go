@@ -69,6 +69,7 @@ func decodeProbeModels(t *testing.T, body string) []backend.Model {
 // publish every usable model WITHOUT any capability information.
 func TestGeminiWebShapePublishes(t *testing.T) {
 	res, err := Build(decodeProbeModels(t, openAIShape), BuildOptions{Namespace: GeminiWeb})
+	t.Logf("gemini-web shape: records=%d skipped=%d", len(res.Records), len(res.Skipped))
 	if err != nil {
 		t.Fatalf("gemini-web shape published nothing: %v", err)
 	}
@@ -137,6 +138,7 @@ func TestGeminiWebShapePublishes(t *testing.T) {
 // working for the backend they were written for.
 func TestStudioShapePublishes(t *testing.T) {
 	res, err := Build(decodeProbeModels(t, studioShape), BuildOptions{Namespace: AIStudio})
+	t.Logf("studio shape: records=%d skipped=%d", len(res.Records), len(res.Skipped))
 	if err != nil {
 		t.Fatalf("studio shape published nothing: %v", err)
 	}
@@ -192,6 +194,7 @@ func TestEmptyBackendListIsAnError(t *testing.T) {
 		if err == nil {
 			t.Fatalf("namespace %s accepted an empty model list without an error", ns.Name)
 		}
+		t.Logf("empty list, namespace %s: records=%d error=%v", ns.Name, len(res.Records), err)
 		if !strings.Contains(err.Error(), "0 models") {
 			t.Fatalf("namespace %s error does not state the count: %v", ns.Name, err)
 		}
