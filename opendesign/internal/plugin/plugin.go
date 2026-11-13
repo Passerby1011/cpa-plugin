@@ -13,6 +13,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 
+	"github.com/hex-ci/cpa-plugin/opendesign/internal/allowance"
 	"github.com/hex-ci/cpa-plugin/opendesign/internal/catalog"
 	"github.com/hex-ci/cpa-plugin/opendesign/internal/config"
 )
@@ -67,6 +68,14 @@ type Manager struct {
 	// logins holds in-flight device authorizations by state token.
 	logins sync.Map
 
+	// workspaces caches each control key's active workspace for a few minutes,
+	// so a card refresh does not pay for a workspaces read it already made.
+	workspaces *allowance.WorkspaceCache
+
+	// expiredAllowances records accounts whose control-plane sign-in the
+	// allowance read was refused for.
+	expiredAllowances *expiredAllowanceKeys
+
 	// pool owns per-credential selection and cooldowns.
 	pool *poolState
 }
@@ -74,9 +83,11 @@ type Manager struct {
 // NewManager returns a dispatcher whose outbound traffic flows through bridge.
 func NewManager(bridge *HostBridge) *Manager {
 	return &Manager{
-		bridge:    bridge,
-		pool:      newPoolState(),
-		snapshots: map[string]*catalog.Snapshot{},
+		bridge:            bridge,
+		pool:              newPoolState(),
+		snapshots:         map[string]*catalog.Snapshot{},
+		workspaces:        allowance.NewWorkspaceCache(allowanceWorkspaceTTL, nil),
+		expiredAllowances: newExpiredAllowanceKeys(),
 	}
 }
 

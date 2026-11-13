@@ -2,6 +2,7 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -92,9 +93,11 @@ func (m *Manager) registerManagement(request []byte) ([]byte, error) {
 		Routes: []managementRoute{
 			{Method: http.MethodGet, Path: base + "/status", Description: "Accounts, planes and served model counts. Counts and names only — never a key."},
 			{Method: http.MethodGet, Path: base + "/models", Description: "The served model list: each model's wire, limits and measured reasoning levels."},
+			{Method: http.MethodGet, Path: base + "/allowance", Description: "One card per account: label, whether its allowance is readable, and its sign-in state. No upstream call."},
+			{Method: http.MethodPost, Path: base + "/allowance", Description: "Read ONE account's plan allowance at its control key: windows, wallet balance and the subscription's period."},
 		},
 		Resources: []resourceRoute{
-			{Path: panelResourcePath, Menu: displayName, Description: "Open Design accounts and served models."},
+			{Path: panelResourcePath, Menu: displayName, Description: "Open Design accounts, their plan allowance and the served models."},
 		},
 	}), nil
 }
@@ -117,7 +120,10 @@ func (m *Manager) handleManagement(request []byte) ([]byte, error) {
 		if req.Method != "" && !strings.EqualFold(req.Method, http.MethodGet) {
 			return okEnvelope(methodNotAllowed()), nil
 		}
-		return okEnvelope(htmlResponse(m.panelPage())), nil
+		m.mu.RLock()
+		page := m.panelPage()
+		m.mu.RUnlock()
+		return okEnvelope(htmlResponse(page)), nil
 	}
 
 	managementBase := strings.TrimRight(managementBasePath, "/") + "/plugins/" + ProviderID
@@ -126,6 +132,11 @@ func (m *Manager) handleManagement(request []byte) ([]byte, error) {
 		return okEnvelope(m.status()), nil
 	case managementBase + "/models":
 		return okEnvelope(m.servedModels()), nil
+	case managementBase + "/allowance":
+		// The only route with an upstream call behind it, so it takes a
+		// context: a host that gives up on the request must not leave the
+		// reading running.
+		return okEnvelope(m.handleAllowanceRoute(context.Background(), req)), nil
 	default:
 		return okEnvelope(notFound()), nil
 	}
