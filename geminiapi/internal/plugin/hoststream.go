@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 
@@ -173,8 +172,3 @@ func (b *HostBridge) CloseDownstream(downstreamID string, errMsg string) error {
 	_, callErr := b.callWithTimeout(ctx, pluginabi.MethodHostStreamClose, raw, streamTimeout)
 	return callErr
 }
-
-// noDeadline is a huge budget for calls that are governed by the upstream
-// itself; context.Background() carries no deadline, and this only guards
-// against a host that never returns at all.
-const noDeadline = 24 * time.Hour

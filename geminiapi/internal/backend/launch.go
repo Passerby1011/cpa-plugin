@@ -12,10 +12,7 @@ package backend
 
 import (
 	"fmt"
-	"net"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -77,26 +74,3 @@ func ValidateBindTarget(host string, port int) error {
 	}
 	return nil
 }
-
-// samePortOwner reports whether the listener on a port is this backend, judged
-// by whether it answers with this setup's API key. It exists so a port conflict
-// is treated as "pick another port" only when the occupant is genuinely
-// foreign.
-func samePortOwner(setup Setup) bool {
-	return strings.TrimSpace(setup.APIKey) != "" && strings.TrimSpace(setup.Origin) != ""
-}
-
-// normalizeHostPorts is used by tests to assert the loopback rule.
-func normalizeHostPorts(host string, port int) string {
-	return net.JoinHostPort(strings.TrimSpace(host), strconv.Itoa(port))
-}
-
-// AccountFile is the JSONL path where imported account references are counted.
-//
-// # Why a separate file and not accounts.jsonl
-//
-// The Google cookies live in the backend's own SQLite database. This file records
-// only *references* — the backend's account ids and the labels the operator
-// chose — so the plugin can render a pool summary without touching the backend's
-// database and without ever storing a cookie itself.
-func AccountFile(dataDir string) string { return filepath.Join(dataDir, "accounts.jsonl") }

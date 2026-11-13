@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -533,13 +532,4 @@ func (g *idleGuard) Stop() {
 		g.timer.Stop()
 		g.timer = nil
 	}
-}
-
-// parsePositiveInt is used by the panel-facing query parsing.
-func parsePositiveInt(raw string, fallback int) int {
-	value, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || value <= 0 {
-		return fallback
-	}
-	return value
 }
