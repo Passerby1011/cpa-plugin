@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Design</title>
+<style>
+:root { color-scheme: light dark; --fg:#1f2328; --dim:#57606a; --bg:#fff; --line:#d8dee4; --accent:#0969da; }
+@media (prefers-color-scheme: dark) { :root { --fg:#e6edf3; --dim:#8b949e; --bg:#0d1117; --line:#30363d; --accent:#58a6ff; } }
+body { margin:0; padding:24px; font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; color:var(--fg); background:var(--bg); }
+h1 { font-size:18px; margin:0 0 4px; }
+p.lead { color:var(--dim); margin:0 0 20px; }
+table { border-collapse:collapse; width:100%; max-width:880px; }
+th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { font-weight:600; color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+td.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
+.tag { display:inline-block; padding:0 6px; border:1px solid var(--line); border-radius:999px; font-size:11.5px; color:var(--dim); }
+.err { color:#cf222e; }
+.note { max-width:880px; color:var(--dim); font-size:13px; margin-top:18px; }
+</style>
+</head>
+<body>
+<h1>Open Design</h1>
+<p class="lead">Accounts, the wire each model is declared on, and its measured reasoning levels.</p>
+<div id="status" class="note">loading…</div>
+<table id="models"><thead><tr><th>Model</th><th>Wire</th><th>Context</th><th>Output</th><th>Levels</th><th>Input</th></tr></thead><tbody></tbody></table>
+<p class="note" id="foot"></p>
+<script>
+(function () {
+  var base = document.currentScript && document.currentScript.dataset.base || "";
+  function get(p) { return fetch(base + p, { credentials: "same-origin" }).then(function (r) { return r.json(); }); }
+  function cell(text, cls) { var td = document.createElement("td"); td.textContent = text; if (cls) td.className = cls; return td; }
+  get("/status").then(function (s) {
+    var accounts = s.accounts || 0;
+    var withPlan = s.accounts_with_plan || 0;
+    var line = accounts + " account" + (accounts === 1 ? "" : "s") + " · " + withPlan + " with a plan allowance";
+    if ((s.live_catalogs || 0) > 0) line += " · " + s.live_catalogs + " live catalog" + (s.live_catalogs === 1 ? "" : "s");
+    document.getElementById("status").textContent = line;
+    document.getElementById("foot").textContent =
+      "Model plane " + (s.base_url || "") + " · control plane " + (s.control_url || "") +
+      (withPlan === 0 && accounts > 0 ? " · An API key sign-in has no control key, so no allowance can be read." : "");
+  }).catch(function (e) { document.getElementById("status").className = "err"; document.getElementById("status").textContent = "status unavailable"; });
+  get("/models").then(function (d) {
+    var body = document.querySelector("#models tbody");
+    (d.models || []).forEach(function (m) {
+      var tr = document.createElement("tr");
+      tr.appendChild(cell(m.id || m.upstream, "mono"));
+      tr.appendChild(cell(m.api || "chat-completions"));
+      tr.appendChild(cell(String(m.context || 0), "mono"));
+      tr.appendChild(cell(String(m.output || 0), "mono"));
+      var levels = (m.efforts || []);
+      var td = document.createElement("td");
+      if (!levels.length) { td.innerHTML = '<span class="tag">' + (m.thinking ? "reasons, no levels" : "none") + '</span>'; }
+      else { levels.forEach(function (l) { var t = document.createElement("span"); t.className = "tag"; t.textContent = l; td.appendChild(t); td.appendChild(document.createTextNode(" ")); }); }
+      tr.appendChild(td);
+      tr.appendChild(cell((m.input || []).join(", ")));
+      body.appendChild(tr);
+    });
+    if (!(d.models || []).length) body.innerHTML = '<tr><td colspan="6">no models served</td></tr>';
+  }).catch(function () {
+    document.querySelector("#models tbody").innerHTML = '<tr><td colspan="6" class="err">models unavailable</td></tr>';
+  });
+}());
+</script>
+</body>
+</html>
