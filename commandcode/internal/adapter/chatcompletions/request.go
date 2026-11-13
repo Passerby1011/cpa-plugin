@@ -49,7 +49,9 @@ func BuildRequest(upstreamModel, sourceFormat string, sourceBody []byte, ts *plu
 }
 
 // buildOpenAIRequest rewrites the top-level model field of an OpenAI request
-// body to upstreamModel and strips any malformed top-level thinking object.
+// body to upstreamModel, strips any malformed top-level thinking object, and
+// translates the reasoning OFF-state into the provider's own vocabulary
+// (applyReasoningOffState).
 // DeepSeek models fail if thinking lacks a valid string type field.
 func buildOpenAIRequest(upstreamModel string, body []byte) ([]byte, *errclass.Error) {
 	var req map[string]json.RawMessage
@@ -64,8 +66,24 @@ func buildOpenAIRequest(upstreamModel string, body []byte) ([]byte, *errclass.Er
 	if hasThinking && !validThinking {
 		delete(req, "thinking")
 	}
+	// The off-state rewrite runs after the model is known: which spelling is
+	// legal depends on the model, not on the client.
+	rewritten, changed, eErr := applyReasoningOffState(upstreamModel, body)
+	if eErr != nil {
+		return nil, eErr
+	}
+	if changed {
+		// Re-decode from a FRESH map, never into the one above: unmarshalling
+		// into a non-nil map MERGES keys, so a field the rewrite deleted (the
+		// off-state on a model that refuses it) would survive here and reappear
+		// on the wire - the exact bug this rewrite exists to prevent.
+		req = nil
+		if err := json.Unmarshal(rewritten, &req); err != nil {
+			return nil, errclass.Translation("malformed openai request JSON: " + err.Error())
+		}
+	}
 	if raw, ok := req["model"]; ok && string(raw) == `"`+upstreamModel+`"` && (validThinking || !hasThinking) {
-		return body, nil
+		return rewritten, nil
 	}
 	req["model"] = json.RawMessage(`"` + upstreamModel + `"`)
 	b, err := json.Marshal(req)
@@ -125,9 +143,26 @@ type ccRequest struct {
 
 // encode finalizes and encodes a translated request; the composed types
 // are always marshallable.
+//
+// The reasoning off-state is normalized HERE rather than at each construction
+// site: ccRequest.ReasoningEffort is set by several legs (the Claude source via
+// a thinking budget, the Responses source via reasoning.effort, and the OpenAI
+// passthrough verbatim), and a per-site rewrite is exactly the kind of
+// invariant that rots the moment a new leg is added. Every body this package
+// emits STRUCTURALLY passes through this one function, so "off" can never reach
+// the upstream in a spelling it refuses or on a model that rejects it.
+//
+// The OpenAI source does not go through here (its body is forwarded verbatim by
+// buildOpenAIRequest, which applies the same rule via applyReasoningOffState);
+// both funnels call normalizeReasoningEffortOff, so the rule itself exists once.
 func encode(req *ccRequest) []byte {
 	if req.Messages == nil {
 		req.Messages = []ccMessage{}
+	}
+	if effort, send := normalizeReasoningEffortOff(req.Model, req.ReasoningEffort); !send {
+		req.ReasoningEffort = ""
+	} else {
+		req.ReasoningEffort = effort
 	}
 	b, _ := json.Marshal(req)
 	return b

@@ -53,6 +53,18 @@ type Options struct {
 	DefaultTemperature float64
 }
 
+// isOffStateEffort reports whether an effort value means "do not think" in
+// either vocabulary the plugin accepts from clients: OpenAI's "none" and the
+// provider's own "off". Case-insensitive because clients write both spellings.
+//
+// It lives here because the CLI envelope is the only place that has to decide
+// this alone: the Provider API leg rewrites "none" to "off" for the models that
+// take it, and drops both for the models that do not.
+func isOffStateEffort(effort string) bool {
+	return strings.EqualFold(strings.TrimSpace(effort), "none") ||
+		strings.EqualFold(strings.TrimSpace(effort), "off")
+}
+
 // DefaultVersion is the protocol shape this package implements.
 const DefaultVersion = "1.53.1"
 
@@ -119,7 +131,15 @@ func BuildEnvelope(openAIBody []byte, opts Options) ([]byte, error) {
 		temp = t.Float()
 	}
 	params["temperature"] = temp
-	if effort := strings.TrimSpace(gjson.GetBytes(openAIBody, "reasoning_effort").String()); effort != "" {
+	// Reasoning: the CLI transport forwards the ordinary levels, but NEVER the
+	// off-state. CommandCode's /alpha/generate has not been measured with
+	// reasoning_effort "off" (the Provider API has), and sending an unverified
+	// value risks a 400 on every request that asks to turn thinking off. The
+	// off-state is therefore omitted here and the model keeps its own default -
+	// the same "drop a control the target cannot be shown to take" rule the
+	// Provider API leg uses for models that refuse "off".
+	if effort := strings.TrimSpace(gjson.GetBytes(openAIBody, "reasoning_effort").String()); effort != "" &&
+		!isOffStateEffort(effort) {
 		params["reasoning_effort"] = effort
 	}
 

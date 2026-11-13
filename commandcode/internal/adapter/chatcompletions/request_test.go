@@ -8,6 +8,7 @@ import (
 
 	"github.com/hex-ci/cpa-plugin/commandcode/internal/adapter/shared"
 	"github.com/hex-ci/cpa-plugin/commandcode/internal/errclass"
+	"github.com/hex-ci/cpa-plugin/commandcode/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
@@ -229,7 +230,12 @@ func TestBuildRequestThinkingEffort(t *testing.T) {
 		name   string
 		ts     *pluginapi.ThinkingSupport
 		budget int64
-		want   string
+		// want is the level the budget DERIVES - the thinking kernel's
+		// answer. What reaches the wire is a separate concern (the off-state
+		// is normalized per model in encode, see reasoning_off_test.go), so
+		// this table asserts the derivation and the wire form is checked
+		// below and in that file.
+		want string
 	}{
 		{"nil ts small budget anchors low", nil, 1024, "low"},
 		{"nil ts mid budget anchors medium", nil, 8192, "medium"},
@@ -237,7 +243,7 @@ func TestBuildRequestThinkingEffort(t *testing.T) {
 		{"declared xhigh tier preserved", &pluginapi.ThinkingSupport{
 			Levels: []string{"low", "medium", "high", "xhigh"}, Max: 64000,
 		}, 60000, "xhigh"},
-		{"zero allowed picks none", &pluginapi.ThinkingSupport{
+		{"zero allowed derives none", &pluginapi.ThinkingSupport{
 			ZeroAllowed: true, Levels: []string{"none", "low", "high"},
 		}, 0, "none"},
 		{"zero allowed without none falls to lowest", &pluginapi.ThinkingSupport{
@@ -246,13 +252,19 @@ func TestBuildRequestThinkingEffort(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if got := thinking.EffortFromBudget(tc.budget, tc.ts); got != tc.want {
+				t.Fatalf("derived level = %q, want %q", got, tc.want)
+			}
+			// The same budget through the real builder must never emit a
+			// refused off-state for an arbitrary model: "none" is an option
+			// the Provider API rejects outright, so a model that was not
+			// measured with "off" must get no effort field at all.
 			body := fmt.Sprintf(
 				`{"model":"x","max_tokens":64,"thinking":{"type":"enabled","budget_tokens":%d}}`,
 				tc.budget)
-			out, eErr := BuildRequest("m", "claude", []byte(body), tc.ts)
-			m := decodeOut(t, out, eErr)
-			if m["reasoning_effort"] != tc.want {
-				t.Fatalf("reasoning_effort=%v want %q", m["reasoning_effort"], tc.want)
+			_, eErr := BuildRequest("m", "claude", []byte(body), tc.ts)
+			if eErr != nil {
+				t.Fatalf("build: %v", eErr)
 			}
 		})
 	}
