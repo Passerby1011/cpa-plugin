@@ -277,6 +277,11 @@ func (f Flavor) installVerified(dataDir string, pin Pin, staged string) (string,
 }
 
 // installArchive unpacks a verified archive and installs its package.
+//
+// The archive TYPE comes from the pinned ASSET's name, not from the staged
+// file's: the staged name carries the download time so two concurrent attempts
+// cannot collide, which would otherwise strip the extension the unpacker
+// dispatches on.
 func (f Flavor) installArchive(dataDir string, pin Pin, staged string) (string, error) {
 	layout := f.Layout(dataDir)
 	staging, err := os.MkdirTemp(dataDir, ".unpack-")
@@ -284,7 +289,11 @@ func (f Flavor) installArchive(dataDir string, pin Pin, staged string) (string, 
 		return "", fmt.Errorf("create unpack staging directory: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
-	if err := UnpackArchive(staged, staging); err != nil {
+	stagedArchive := filepath.Join(staging, filepath.Base(pin.Asset))
+	if err := os.Rename(staged, stagedArchive); err != nil {
+		return "", fmt.Errorf("stage downloaded archive: %w", err)
+	}
+	if err := UnpackArchive(stagedArchive, staging); err != nil {
 		return "", err
 	}
 	pkgDir, binary, err := FindPackage(staging, filepath.Base(layout.Binary))
