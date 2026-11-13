@@ -109,9 +109,56 @@ row states why.
 
 ### Panel
 
-`/v0/resource/plugins/opendesign/panel` — the accounts, the served models, the
-wire each model is declared on, and its measured reasoning levels. The page reads
-the management key the CPA web UI already holds, so there is no second login.
+`/v0/resource/plugins/opendesign/panel` — one card per account with its Design
+Plan allowance (the plan's windows, the wallet balance and the subscription's
+period), plus the served models, the wire each one is declared on and its
+measured reasoning levels. The page reads the management key the CPA web UI
+already holds, so there is no second login.
+
+## Plan allowance
+
+The allowance card is this plugin's own, not the host's: CPA's plugin API has no
+provider-level quota surface, so the numbers are served by two Management API
+routes and rendered by the panel above.
+
+| Route | What it does |
+|---|---|
+| `GET /v0/management/plugins/opendesign/allowance` | One card per account: label, whether its allowance is readable, its sign-in state. **No upstream call.** |
+| `POST /v0/management/plugins/opendesign/allowance` | Reads ONE account (`{"id": "<card id>"}`): windows, wallet balance, subscription period. |
+
+The card id is a digest of the account's runtime key, never the key itself.
+
+What a reading consists of, all at the account's **control key** (`vela_ctrl_…`)
+and never at the key a model request carries:
+
+| Read | Path | Gives |
+|---|---|---|
+| workspace | `GET /api/v1/workspaces/current` | the active workspace and its personal tier |
+| preflight | `GET /api/v1/workspaces/{id}/billing/preflight` | `codingPlan` (with `eligible`) and `balanceUsd` |
+| summary | `GET /api/v1/billing/summary` | `membershipTier`, the subscription's status and period end |
+
+The workspace is cached per control key for **10 minutes**; the preflight and the
+summary are read live on every refresh, because they are the numbers that move.
+
+Window shaping follows magpie's own card: a window's percentage is
+`round(max(0, used/limit*100), 1)`, a limit of zero or less drops the window
+rather than drawing an empty bar, the list is **shortest first**, the names are
+`N hours` / `N days` (`604800` → `7 days`), and credits are shortened to
+`9999` / `16.3k` / `150k` / `2.3M`. `resetsAt` is accepted as epoch seconds,
+epoch milliseconds or RFC 3339, and always rendered the same way.
+
+Three states are **not** the same, and each says its own thing:
+
+| State | Reported as |
+|---|---|
+| A pasted `sk-amr-…` key (no control key) | `plan_readable: false` — "Signed in with an API key: the Design Plan allowance needs the account sign-in." No upstream call at all. |
+| `codingPlan.eligible === false` | "This account has no Design Plan allowance: its requests draw on the wallet balance." The wallet balance is still shown. |
+| 401/403 from the preflight | `sign_in: "expired"` — "Open Design refused the account's sign-in — sign in again." The mark is kept in memory so the row still says so after a reload, and a later clean read clears it (`sign_in: "renewed"`). |
+
+A 5xx or a transport failure marks **nothing**: only a refusal means the sign-in
+must be redone, and re-authenticating a working account is the mistake this split
+exists to prevent. The allowance read has its own 30-second budget, independent
+of `request-timeout`.
 
 ## Models
 

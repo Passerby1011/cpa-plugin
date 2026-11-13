@@ -636,7 +636,7 @@ func TestPanelRendersAllowanceCards(t *testing.T) {
 		t.Fatalf("panel status = %d", resp.StatusCode)
 	}
 	page := string(resp.Body)
-	for _, want := range []string{"allowance", "Refresh", "credits", "wallet"} {
+	for _, want := range []string{"allowance", "Refresh", "credits", "wallet", "vela_ctrl"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the panel does not carry %q", want)
 		}

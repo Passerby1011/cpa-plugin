@@ -92,7 +92,40 @@ plugins:
 
 ### 面板
 
-`/v0/resource/plugins/opendesign/panel` —— 账号、已服务的模型、每个模型声明的协议、以及实测出来的推理档位。页面直接读 CPA 面板原本就持有的管理密钥，不再二次登录。
+`/v0/resource/plugins/opendesign/panel` —— 每账号一张卡片，显示该账号的 Design Plan 额度（窗口、钱包余额、套餐周期），以及已服务的模型、每个模型声明的协议、实测出来的推理档位。页面直接读 CPA 面板原本就持有的管理密钥，不再二次登录。
+
+## 套餐额度
+
+额度卡片是**插件自己的**，不是宿主的：CPA 的插件 API 没有任何 provider 级 quota 位，所以数字由两条 Management API 路由提供，由上面那页面板渲染。
+
+| 路由 | 作用 |
+|---|---|
+| `GET /v0/management/plugins/opendesign/allowance` | 每账号一张卡片：标签、额度是否可读、登录状态。**不发任何上游请求**。 |
+| `POST /v0/management/plugins/opendesign/allowance` | 读**单个**账号（`{"id": "<卡片 id>"}`）：窗口、钱包余额、套餐周期。 |
+
+卡片 id 是 runtime key 的摘要，**不是 key 本身**。
+
+一次读取包含三项，全部用账号的 **control key**（`vela_ctrl_…`），绝不用模型请求那枚 key：
+
+| 读取 | 路径 | 得到 |
+|---|---|---|
+| workspace | `GET /api/v1/workspaces/current` | 活动 workspace 与个人档位 |
+| preflight | `GET /api/v1/workspaces/{id}/billing/preflight` | `codingPlan`（含 `eligible`）与 `balanceUsd` |
+| summary | `GET /api/v1/billing/summary` | `membershipTier`、订阅状态与本期到期时间 |
+
+workspace 按 control key **缓存 10 分钟**；preflight 与 summary 每次刷新都实时读，因为它们才是会变的数字。
+
+窗口换算照 magpie 那张卡片：百分比 `round(max(0, used/limit*100), 1)`；`limit<=0` 的窗口**跳过**而不是画一根空进度条；列表**按窗口时长升序**（短的在前）；名称是 `N hours` / `N days`（`604800` → `7 days`）；credits 缩写为 `9999` / `16.3k` / `150k` / `2.3M`。`resetsAt` 接受 epoch 秒 / epoch 毫秒 / RFC 3339 三种形态，输出统一。
+
+三种状态**不等于同一种失败**，各自说各自的话：
+
+| 状态 | 呈现 |
+|---|---|
+| 粘贴的 `sk-amr-…` key（无 control key） | `plan_readable: false` ——「Signed in with an API key: the Design Plan allowance needs the account sign-in.」完全不发上游请求。 |
+| `codingPlan.eligible === false` | 「This account has no Design Plan allowance: its requests draw on the wallet balance.」钱包余额仍然显示。 |
+| preflight 返回 401/403 | `sign_in: "expired"` ——「Open Design refused the account's sign-in — sign in again.」标记留在内存里，刷新页面仍显示失效；之后一次干净的读取会清掉它（`sign_in: "renewed"`）。 |
+
+5xx 或传输失败**不标记任何东西**：只有「被拒」才意味着要重登，把好账号送去重登正是这个区分要防的错误。额度读取有自己独立的 30 秒预算，不受 `request-timeout` 影响。
 
 ## 模型
 

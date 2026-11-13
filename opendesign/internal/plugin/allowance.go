@@ -115,7 +115,7 @@ func newExpiredAllowanceKeys() *expiredAllowanceKeys {
 
 // mark records one account's sign-in as refused.
 func (s *expiredAllowanceKeys) mark(id string) {
-	if id == "" {
+	if s == nil || id == "" {
 		return
 	}
 	s.mu.Lock()
@@ -126,7 +126,7 @@ func (s *expiredAllowanceKeys) mark(id string) {
 // clear removes the mark, returning whether one was there: a clean read is
 // proof the sign-in works again, and the row must stop offering "sign in again".
 func (s *expiredAllowanceKeys) clear(id string) bool {
-	if id == "" {
+	if s == nil || id == "" {
 		return false
 	}
 	s.mu.Lock()
@@ -138,7 +138,7 @@ func (s *expiredAllowanceKeys) clear(id string) bool {
 
 // has reports whether the account is marked.
 func (s *expiredAllowanceKeys) has(id string) bool {
-	if id == "" {
+	if s == nil || id == "" {
 		return false
 	}
 	s.mu.Lock()
