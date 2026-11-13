@@ -39,7 +39,7 @@ Every model is served on all three wires (`/chat/completions`, `/messages`,
 
 ```bash
 # pick your platform (example: linux/arm64)
-unzip opendesign_0.1.0_linux_arm64.zip
+unzip opendesign_0.2.0_linux_arm64.zip
 cp opendesign.so /path/to/cliproxyapi/plugins/opendesign.so
 ```
 

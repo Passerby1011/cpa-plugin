@@ -35,7 +35,7 @@ const githubRepoURL = "https://github.com/hex-ci/cpa-plugin"
 // pluginVersion is reported at registration; the build overrides it with
 // -ldflags "…/internal/plugin.pluginVersion=<version>" (main.go forwards
 // main.version).
-var pluginVersion = "0.1.0"
+var pluginVersion = "0.2.0"
 
 // SetVersion overrides the reported version. An empty value keeps the default.
 func SetVersion(v string) {
