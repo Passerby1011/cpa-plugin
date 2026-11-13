@@ -50,9 +50,9 @@ type HTTPResponse struct {
 // Health states. They are strings so a management response can carry them
 // verbatim without a second enum.
 const (
-	HealthUp          = "up"
-	HealthDown        = "down"
-	HealthForeign     = "foreign"
+	HealthUp           = "up"
+	HealthDown         = "down"
+	HealthForeign      = "foreign"
 	HealthUnresponsive = "unresponsive"
 )
 
@@ -137,8 +137,8 @@ func Probe(ctx context.Context, doer HTTPDoer, setup Setup) Health {
 // describes token limits. Unknown fields are ignored deliberately — the catalog
 // must keep working when a backend adds one.
 type Model struct {
-	ID     string `json:"id"`
-	Object string `json:"object"`
+	ID      string `json:"id"`
+	Object  string `json:"object"`
 	OwnedBy string `json:"owned_by"`
 
 	// Capabilities is AI Studio's capability map.

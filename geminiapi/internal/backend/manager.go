@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,7 +63,7 @@ type Status struct {
 	// Health is the last probe result.
 	Health Health `json:"health"`
 	// Accounts are pool counts read from the backend's admin API (counts only,
-// never identifiers or cookies).
+	// never identifiers or cookies).
 	Accounts AccountCounts `json:"accounts"`
 	// LastError is a secret-free failure description.
 	LastError string `json:"last_error,omitempty"`
@@ -76,8 +75,8 @@ type Status struct {
 
 // AccountCounts is the pool summary the panel may show.
 type AccountCounts struct {
-	Total   int  `json:"total"`
-	Enabled int  `json:"enabled"`
+	Total   int `json:"total"`
+	Enabled int `json:"enabled"`
 	// Known is false when the count could not be read (external backend,
 	// admin API disabled, or a backend that does not expose it).
 	Known bool `json:"known"`
@@ -88,22 +87,22 @@ type AccountCounts struct {
 // Manager owns one managed backend's lifecycle. It is safe for concurrent use:
 // the Management API and the request path both drive it.
 type Manager struct {
-	dataDir        string
-	preferredPort  int
-	syncProxy      string
-	modelTimeout   time.Duration
-	startTimeout   time.Duration
-	doer           HTTPDoer
-	download       Downloader
-	downloadURL    string
+	dataDir       string
+	preferredPort int
+	syncProxy     string
+	modelTimeout  time.Duration
+	startTimeout  time.Duration
+	doer          HTTPDoer
+	download      Downloader
+	downloadURL   string
 
-	mu      sync.Mutex
-	spawned *Spawned
-	setup   Setup
-	state   State
-	lastErr string
-	pid     int
-	restarts int
+	mu        sync.Mutex
+	spawned   *Spawned
+	setup     Setup
+	state     State
+	lastErr   string
+	pid       int
+	restarts  int
 	startedAt time.Time
 	// foreignPID is a live process we refused to adopt because its identity
 	// check failed, kept only for diagnostics.
@@ -260,15 +259,11 @@ func (m *Manager) accountCounts(ctx context.Context, setup Setup) AccountCounts 
 	if m.doer == nil || setup.AdminToken == "" {
 		return AccountCounts{Error: "the backend's admin API is not reachable through this plugin (external backend, or no admin token)"}
 	}
-	raw, err := AdminCall(ctx, m.doer, setup, http.MethodGet, "/proxies", nil, 3*time.Second, "")
-	_ = raw
+	total, enabled, err := ReadAccountCounts(ctx, m.doer, setup)
 	if err != nil {
-		// /proxies is used only as a liveness check for the admin surface; the
-		// account list itself lives behind an endpoint whose response is
-		// account material. Counting is therefore best-effort.
-		return AccountCounts{Error: "account counts are unavailable from this plugin"}
+		return AccountCounts{Error: "the backend did not report its account pool"}
 	}
-	return AccountCounts{Known: false, Error: "account counts are not exposed by this backend version"}
+	return AccountCounts{Total: total, Enabled: enabled, Known: true}
 }
 
 // Install downloads and verifies the pinned binary. It does NOT start it.
@@ -371,7 +366,7 @@ func (m *Manager) EnsureBackend(ctx context.Context) (Setup, error) {
 	if m.doer != nil && PortInUse(port) {
 		// Occupied: is it OUR backend (key accepted) or a stranger?
 		trySetup := Setup{
-			Origin: fmt.Sprintf("http://127.0.0.1:%d", port),
+			Origin:  fmt.Sprintf("http://127.0.0.1:%d", port),
 			BaseURL: fmt.Sprintf("http://127.0.0.1:%d/v1", port),
 		}
 		if saved, ok := ReadSetup(m.dataDir); ok && saved.Port() == port {

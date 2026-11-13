@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GeminiAPI</title>
+<style>
+/* Theme tokens follow the CPA management panel so the page does not look foreign. */
+:root{
+  --bg:#f5f6f8;--card:#fff;--text:#1f2328;--muted:#6a737d;--line:#e3e7eb;
+  --accent:#3b82f6;--accent-2:#8b5cf6;--ok:#1a7f37;--warn:#9a6700;--err:#b3261e;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#14171a;--card:#1c2024;--text:#e6edf3;--muted:#8b949e;--line:#2d3339;
+    --accent:#60a5fa;--accent-2:#a78bfa;--ok:#3fb950;--warn:#d29922;--err:#f85149;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:20px}
+h1{font-size:20px;margin:0 0 4px;display:flex;align-items:center;gap:8px}
+h1 .dot{width:10px;height:10px;border-radius:50%;background:var(--muted)}
+.sub{color:var(--muted);font-size:12px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+.card h2{font-size:14px;margin:0 0 10px;color:var(--muted);font-weight:600;letter-spacing:.02em}
+.row{display:flex;flex-wrap:wrap;gap:8px 18px;margin-bottom:10px}
+.kv{min-width:150px}
+.kv .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.kv .v{font-family:var(--mono);font-size:12.5px;word-break:break-all}
+.btn{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:8px;
+  padding:7px 14px;font-size:13px;cursor:pointer;transition:.15s}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{filter:brightness(1.08);color:#fff}
+textarea,input{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);
+  border-radius:8px;padding:8px 10px;font:12px/1.5 var(--mono);resize:vertical}
+label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+.note{font-size:12px;color:var(--muted);background:var(--bg);border-left:3px solid var(--accent);
+  padding:8px 10px;border-radius:0 8px 8px 0;margin:10px 0}
+.note.warn{border-left-color:var(--warn)}
+.note.err{border-left-color:var(--err);color:var(--err)}
+.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line)}
+.badge.ok{color:var(--ok);border-color:var(--ok)}
+.badge.err{color:var(--err);border-color:var(--err)}
+.badge.warn{color:var(--warn);border-color:var(--warn)}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+td.mono{font-family:var(--mono)}
+.skipped{font-size:12px;color:var(--muted)}
+.skipped li{margin:2px 0}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;
+  font-size:12px;overflow:auto;max-height:260px;margin:0}
+.tokenrow{display:flex;gap:8px}
+.tokenrow input{flex:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="dot" id="dot"></span>GeminiAPI</h1>
+  <div class="sub">provider <code>geminiapi</code> · 命名空间 <code id="ns">ai-studio</code> · 版本 <span id="ver">—</span> · 后端 <span id="pinned">—</span></div>
+
+  <div class="card">
+    <h2>访问口令</h2>
+    <div class="tokenrow">
+      <input id="token" type="password" placeholder="CPA 管理密钥（本页只存在内存里）" autocomplete="off">
+      <button class="btn" id="saveToken">使用</button>
+    </div>
+    <div class="note">页面通过 CPA 的 <code>/v0/management</code> 接口访问插件，口令只保存在这个标签页的内存里，不写 localStorage。</div>
+  </div>
+
+  <div class="card">
+    <h2>本地后端</h2>
+    <div class="row" id="backendRow"></div>
+    <div id="backendMsg"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" id="btnStart">启动 / 重试</button>
+      <button class="btn" id="btnInstall">仅下载并校验</button>
+      <button class="btn" id="btnStop">停止</button>
+      <button class="btn" id="btnRefresh">刷新</button>
+    </div>
+    <div class="note warn">
+      后端是插件托管的本机进程：首次启动会下载 pin 版本的二进制并做 sha256 校验，校验不通过绝不启动。
+      它只监听 <code>127.0.0.1</code>；停止时按进程组回收，CPA 退出时插件会停掉它，避免遗留孤儿进程占住端口。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>AI Studio 账号（Cookie 导入）</h2>
+    <div id="accountCounts"></div>
+    <div class="note">
+      推荐流程：用<strong>无痕窗口</strong>（Firefox 或 Chrome）登录 gemini.google.com 并打开 F12 → Network → 刷新 →
+      点任意 gemini.google.com 请求 → Request Headers 里复制 <code>cookie</code> 那一行的<strong>完整值</strong>，
+      粘贴到下面。Cookie 只会写进本地后端自己的数据库，不写进 CPA 配置、不写进日志、也不会出现在任何响应里。
+      后端会定时刷新登录态，所以请不要在你平时登录着 Google 的窗口里复制，否则浏览器会被踢出登录。
+    </div>
+    <label>Cookie（<code>cookie</code> 请求头整行；也接受 JSON 导出）</label>
+    <textarea id="cookie" rows="5" placeholder="SID=...; HSID=...; SSID=...; APISID=...; SAPISID=...; __Secure-1PSID=..."></textarea>
+    <div class="row" style="margin-top:8px">
+      <div style="flex:0 0 140px">
+        <label style="margin-top:0">账号索引 /u/N</label>
+        <input id="authuser" placeholder="0" inputmode="numeric">
+      </div>
+      <div style="flex:1">
+        <label style="margin-top:0">标签（可选）</label>
+        <input id="label" placeholder="例如 me@example.com">
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" id="btnImport">导入并检测</button>
+    </div>
+    <div id="importMsg"></div>
+    <div class="note warn" id="multiAccountNote"></div>
+  </div>
+
+  <div class="card">
+    <h2>已发布的模型</h2>
+    <div id="modelsMsg"></div>
+    <table id="modelsTable">
+      <thead><tr><th>模型 ID</th><th>上下文</th><th>输出</th><th>思考档</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="skippedMsg" class="skipped"></div>
+  </div>
+</div>
+
+<script>
+// MGMT is the plugin's Management API namespace. The page is a browser resource
+// (no management auth), so every call carries the operator's management key.
+const MGMT = '/v0/management/plugins/geminiapi';
+let mgmtToken = '';
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function authHeaders(){ return mgmtToken ? {'Authorization':'Bearer '+mgmtToken} : {}; }
+
+async function call(path, opts){
+  opts = opts || {};
+  const init = {method: opts.method || 'GET', credentials:'omit', headers:{...authHeaders(), ...(opts.headers||{})}};
+  if (opts.body !== undefined) { init.headers['Content-Type']='application/json'; init.body = JSON.stringify(opts.body); }
+  let res;
+  try { res = await fetch(MGMT + path, init); }
+  catch(e){ throw new Error('连不上 CPA 管理接口：' + e.message); }
+  let data = {};
+  try { data = await res.json(); } catch(e){}
+  // The host wraps plugin results in an envelope for some routes; unwrap when present.
+  const payload = (data && data.result !== undefined) ? data.result : data;
+  if (res.status === 401 || res.status === 403) throw new Error('管理口令无效或缺失（HTTP ' + res.status + '）');
+  if (!res.ok) throw new Error((payload && (payload.error || payload.message)) || ('HTTP ' + res.status));
+  return payload;
+}
+
+function setMsg(el, text, kind){
+  el.innerHTML = text ? '<div class="note ' + (kind||'') + '">' + esc(text) + '</div>' : '';
+}
+
+function badge(state){
+  const cls = state === 'running' || state === 'up' ? 'ok' : (state === 'foreign' || state === 'failed' ? 'err' : 'warn');
+  return '<span class="badge ' + cls + '">' + esc(state || 'unknown') + '</span>';
+}
+
+let statusTimer = null;
+
+async function refresh(){
+  let st;
+  try { st = await call('/status'); }
+  catch(e){ setMsg($('backendMsg'), e.message, 'err'); return; }
+  render(st);
+}
+
+function render(st){
+  $('ver').textContent = st.version || '—';
+  $('pinned').textContent = st.pinned_backend_version || '—';
+  $('ns').textContent = (st.namespaces || ['ai-studio']).join(', ');
+  $('dot').style.background = st.external ? 'var(--warn)'
+    : (st.backend && st.backend.state === 'running' ? 'var(--ok)'
+      : (st.backend && st.backend.state === 'foreign' ? 'var(--err)' : 'var(--warn)'));
+
+  const b = st.backend || {};
+  const health = b.health || {};
+  const kv = (k, v) => '<div class="kv"><div class="k">' + esc(k) + '</div><div class="v">' + v + '</div></div>';
+  const rows = [];
+  if (st.external) {
+    rows.push(kv('模式', '外部后端（不托管）'));
+    rows.push(kv('base-url', esc(st.base_url || '')));
+  } else {
+    rows.push(kv('状态', badge(b.state)));
+    rows.push(kv('健康', badge(health.state) + (health.reason ? ' <span class="badge">' + esc(health.reason) + '</span>' : '')));
+    rows.push(kv('地址', esc(b.origin || '—')));
+    rows.push(kv('端口', esc(String(b.port || '—'))));
+    rows.push(kv('PID', esc(String(b.pid || 0)) + (b.pid ? (b.pid_verified ? ' ✓ 身份已核对' : ' ⚠ 身份未核对') : '')));
+    rows.push(kv('二进制', b.binary_present ? '已校验 (sha256)' : '未安装'));
+    rows.push(kv('崩溃重启', esc(String(b.restarts || 0))));
+    if (b.data_dir) rows.push(kv('数据目录', '<span style="font-family:var(--mono)">' + esc(b.data_dir) + '</span>'));
+    if (b.last_error) rows.push(kv('最近错误', '<span style="color:var(--err)">' + esc(b.last_error) + '</span>'));
+  }
+  $('backendRow').innerHTML = rows.join('');
+  $('backendMsg').innerHTML = '';
+
+  const counts = (st.accounts && st.accounts.counts) || {};
+  $('accountCounts').innerHTML = st.accounts && st.accounts.managed
+    ? (counts.known
+        ? '<div class="note">账号池：启用 ' + esc(String(counts.enabled || 0)) + ' / 共 ' + esc(String(counts.total || 0)) + '</div>'
+        : '<div class="note warn">' + esc(counts.error || '账号数量暂不可读') + '</div>')
+    : '<div class="note">外部后端：账号池不由本插件管理</div>';
+  $('multiAccountNote').textContent = st.notice || '';
+  if (st.external) {
+    ['btnStart','btnInstall','btnStop'].forEach(id => $(id).disabled = true);
+    $('btnImport').disabled = true;
+  } else {
+    ['btnStart','btnInstall','btnStop'].forEach(id => $(id).disabled = false);
+    $('btnImport').disabled = false;
+  }
+
+  const models = st.models || {};
+  const tbody = $('modelsTable').querySelector('tbody');
+  if (!models.count) {
+    tbody.innerHTML = '<tr><td colspan="4" class="skipped">还没有可用模型。先启动后端并导入一个账号，模型列表会随后出现。</td></tr>';
+  } else {
+    call('/models').then(m => {
+      tbody.innerHTML = (m.models || []).map(r => '<tr>'
+        + '<td class="mono">' + esc(r.PublicID) + '</td>'
+        + '<td>' + esc(String(r.ContextLimit || '')) + '</td>'
+        + '<td>' + esc(String(r.OutputLimit || '')) + '</td>'
+        + '<td>' + esc((r.Thinking && r.Thinking.Levels || []).join(' / ') || '—') + '</td>'
+        + '</tr>').join('');
+      const skipped = (m.skipped || []);
+      $('skippedMsg').innerHTML = skipped.length
+        ? '<div style="margin-top:10px">未发布的模型（' + skipped.length + '）：</div><ul>'
+          + skipped.slice(0, 20).map(s => '<li><span class="mono">' + esc(s.id) + '</span> — ' + esc(s.reason) + '</li>').join('')
+          + '</ul>' : '';
+    }).catch(e => setMsg($('modelsMsg'), e.message, 'err'));
+  }
+}
+
+async function action(path, okText){
+  $('backendMsg').innerHTML = '';
+  try {
+    const r = await call(path, {method:'POST'});
+    setMsg($('backendMsg'), okText, '');
+    if (r && r.status) render(r.status);
+  } catch(e) {
+    setMsg($('backendMsg'), e.message, 'err');
+    refresh();
+  }
+}
+
+$('saveToken').onclick = () => {
+  mgmtToken = $('token').value.trim();
+  refresh();
+  if (statusTimer) clearInterval(statusTimer);
+  statusTimer = setInterval(refresh, 15000);
+};
+$('btnRefresh').onclick = refresh;
+$('btnStart').onclick = () => action('/backend/start', '启动请求已发出；首次会先下载并校验二进制，健康探测变绿后才算成功。');
+$('btnInstall').onclick = () => action('/backend/install', '下载并校验完成。');
+$('btnStop').onclick = () => action('/backend/stop', '已停止（按进程组回收）。');
+
+$('btnImport').onclick = async () => {
+  $('importMsg').innerHTML = '';
+  const body = {cookie: $('cookie').value, authuser: $('authuser').value.trim(), label: $('label').value.trim()};
+  $('btnImport').disabled = true;
+  try {
+    const r = await call('/accounts', {method:'POST', body});
+    if (r && r.ok) {
+      setMsg($('importMsg'), '导入成功，后端检测通过' + (r.detail ? '：' + r.detail : '') + '。', '');
+      $('cookie').value = '';
+    } else {
+      setMsg($('importMsg'), (r && r.error) || '导入失败', 'err');
+    }
+    refresh();
+  } catch(e) {
+    setMsg($('importMsg'), e.message, 'err');
+  } finally {
+    $('btnImport').disabled = false;
+  }
+};
+
+refresh();
+</script>
+</body>
+</html>

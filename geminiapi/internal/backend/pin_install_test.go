@@ -206,7 +206,7 @@ func TestVerifiedPathReportsFalseForWrongDigest(t *testing.T) {
 	}
 	if _, ok := VerifiedPath(dataDir, Pin{SHA256: digest}); !ok {
 		t.Fatal("VerifiedPath rejected a file whose digest IS the pin")
-}
+	}
 }
 
 func TestVerifiedPathReportsFalseWhenMissing(t *testing.T) {
