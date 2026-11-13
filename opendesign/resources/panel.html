@@ -26,39 +26,127 @@ td.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.
 <table id="models"><thead><tr><th>Model</th><th>Wire</th><th>Context</th><th>Output</th><th>Levels</th><th>Input</th></tr></thead><tbody></tbody></table>
 <p class="note" id="foot"></p>
 <script>
+// The management base is substituted into this page by the plugin at serve time
+// (resources.PanelWithBase). It cannot be derived here: this page is served from
+// an UNAUTHENTICATED resource route, so it never sees the host's own routing.
+var BASE = "__MANAGEMENT_BASE__";
+
+// The management key the rest of the CPA web UI already holds. The two JSON
+// routes are management-authenticated, so the page reads the same session value
+// the host's own UI writes instead of asking the operator to paste it again.
+function managementKey() {
+  var raw;
+  try { raw = localStorage.getItem("cli-proxy-auth"); } catch (_) { return ""; }
+  if (!raw) return "";
+  try {
+    var decoded = raw;
+    if (raw.indexOf("enc::v1::") === 0) {
+      var bytes = Uint8Array.from(atob(raw.slice(9)), function (ch) { return ch.charCodeAt(0); });
+      var seed = new TextEncoder().encode(
+        "cli-proxy-api-webui::secure-storage|" + location.host + "|" + navigator.userAgent);
+      for (var i = 0; i < bytes.length; i++) bytes[i] ^= seed[i % seed.length];
+      decoded = new TextDecoder().decode(bytes);
+    }
+    var parsed = JSON.parse(decoded);
+    if (parsed && parsed.state && typeof parsed.state.managementKey === "string") {
+      return parsed.state.managementKey;
+    }
+  } catch (_) { return ""; }
+  return "";
+}
+
+// get fetches one management route. A non-2xx answer is an error, not an empty
+// payload: a blank table would read as "no models served".
+function get(path, key) {
+  var headers = {};
+  if (key) headers.Authorization = "Bearer " + key;
+  return fetch(BASE + path, { credentials: "omit", headers: headers }).then(function (r) {
+    if (!r.ok) throw new Error(path + " answered " + r.status);
+    return r.json();
+  });
+}
+
+function cell(text, cls) {
+  var td = document.createElement("td");
+  td.textContent = text;
+  if (cls) td.className = cls;
+  return td;
+}
+
 (function () {
-  var base = document.currentScript && document.currentScript.dataset.base || "";
-  function get(p) { return fetch(base + p, { credentials: "same-origin" }).then(function (r) { return r.json(); }); }
-  function cell(text, cls) { var td = document.createElement("td"); td.textContent = text; if (cls) td.className = cls; return td; }
-  get("/status").then(function (s) {
+  var key = managementKey();
+  if (!key) {
+    var status = document.getElementById("status");
+    status.className = "err";
+    status.textContent = "This page needs the management key: sign in to the CPA management UI first.";
+    return;
+  }
+
+  get("/status", key).then(function (s) {
     var accounts = s.accounts || 0;
     var withPlan = s.accounts_with_plan || 0;
-    var line = accounts + " account" + (accounts === 1 ? "" : "s") + " · " + withPlan + " with a plan allowance";
-    if ((s.live_catalogs || 0) > 0) line += " · " + s.live_catalogs + " live catalog" + (s.live_catalogs === 1 ? "" : "s");
+    var line = accounts + " account" + (accounts === 1 ? "" : "s") +
+      " · " + withPlan + " with a plan allowance · " + (s.seed_models || 0) + " models served";
+    if ((s.live_catalogs || 0) > 0) {
+      line += " · " + s.live_catalogs + " live catalog" + (s.live_catalogs === 1 ? "" : "s");
+    }
     document.getElementById("status").textContent = line;
     document.getElementById("foot").textContent =
       "Model plane " + (s.base_url || "") + " · control plane " + (s.control_url || "") +
-      (withPlan === 0 && accounts > 0 ? " · An API key sign-in has no control key, so no allowance can be read." : "");
-  }).catch(function (e) { document.getElementById("status").className = "err"; document.getElementById("status").textContent = "status unavailable"; });
-  get("/models").then(function (d) {
+      (withPlan === 0 && accounts > 0
+        ? " · A pasted API key carries no control key, so no plan allowance can be read."
+        : "");
+  }).catch(function (e) {
+    var status = document.getElementById("status");
+    status.className = "err";
+    status.textContent = "status unavailable: " + e.message;
+  });
+
+  get("/models", key).then(function (d) {
     var body = document.querySelector("#models tbody");
     (d.models || []).forEach(function (m) {
       var tr = document.createElement("tr");
-      tr.appendChild(cell(m.id || m.upstream, "mono"));
+      tr.appendChild(cell(m.id || m.upstream || "", "mono"));
       tr.appendChild(cell(m.api || "chat-completions"));
       tr.appendChild(cell(String(m.context || 0), "mono"));
       tr.appendChild(cell(String(m.output || 0), "mono"));
-      var levels = (m.efforts || []);
+      var levels = m.efforts || [];
       var td = document.createElement("td");
-      if (!levels.length) { td.innerHTML = '<span class="tag">' + (m.thinking ? "reasons, no levels" : "none") + '</span>'; }
-      else { levels.forEach(function (l) { var t = document.createElement("span"); t.className = "tag"; t.textContent = l; td.appendChild(t); td.appendChild(document.createTextNode(" ")); }); }
+      if (!levels.length) {
+        var tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = m.thinking ? "reasons, no levels" : "none";
+        td.appendChild(tag);
+      } else {
+        levels.forEach(function (l) {
+          var t = document.createElement("span");
+          t.className = "tag";
+          t.textContent = l;
+          td.appendChild(t);
+          td.appendChild(document.createTextNode(" "));
+        });
+      }
       tr.appendChild(td);
       tr.appendChild(cell((m.input || []).join(", ")));
       body.appendChild(tr);
     });
-    if (!(d.models || []).length) body.innerHTML = '<tr><td colspan="6">no models served</td></tr>';
-  }).catch(function () {
-    document.querySelector("#models tbody").innerHTML = '<tr><td colspan="6" class="err">models unavailable</td></tr>';
+    if (!(d.models || []).length) {
+      var empty = document.createElement("tr");
+      var cellEmpty = document.createElement("td");
+      cellEmpty.colSpan = 6;
+      cellEmpty.textContent = "no models served";
+      empty.appendChild(cellEmpty);
+      body.appendChild(empty);
+    }
+  }).catch(function (e) {
+    var body = document.querySelector("#models tbody");
+    var failed = document.createElement("tr");
+    var cellFailed = document.createElement("td");
+    cellFailed.colSpan = 6;
+    cellFailed.className = "err";
+    cellFailed.textContent = "models unavailable: " + e.message;
+    failed.appendChild(cellFailed);
+    body.appendChild(failed);
   });
 }());
 </script>

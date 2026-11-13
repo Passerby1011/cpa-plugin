@@ -115,8 +115,12 @@ func levelIndex(level string) (int, bool) {
 //   - budget <= 0 means "reasoning off": the weakest declared level is
 //     returned only when the model declares "none", otherwise "" so the caller
 //     omits the control entirely rather than silently turning thinking on.
-//   - budget > 0 derives a level by the SDK thresholds and clamps it to the
-//     nearest declared one.
+//   - An exact match on a declared level's own budget returns THAT level. The
+//     threshold mapping below never derives "max" (the SDK's own rule), so
+//     without this step a client asking for max's budget of 128000 would come
+//     back as "high" — a level it did not ask for, one tier weaker.
+//   - Any other budget > 0 derives a level by the SDK thresholds and clamps it
+//     to the nearest declared one.
 func EffortFromBudget(budget int64, levels []string) string {
 	levels = NormalizeLevels(levels)
 	if len(levels) == 0 {
@@ -130,12 +134,29 @@ func EffortFromBudget(budget int64, levels []string) string {
 		}
 		return ""
 	}
+	// An exact match wins over the threshold table: a budget that IS a level's
+	// own number came from that level (this plugin wrote the budget itself when
+	// a client asked for a level), so rounding it down loses a tier.
+	for _, l := range levels {
+		if l == "none" {
+			continue
+		}
+		if b, ok := LevelBudget[l]; ok && b == budget {
+			return l
+		}
+	}
 	return ClampToSupported(BudgetToLevel(budget), levels)
 }
 
 // BudgetFromEffort maps a declared level onto an Anthropic budget_tokens value.
 // ok is false when the level cannot be represented for the model, so the caller
 // refuses the request instead of dropping the control.
+//
+// An effort outside the canonical space is refused rather than clamped to the
+// weakest declared level: clamping a value the model has no word for would send a
+// budget the client never asked for, which is worse than a stated refusal the
+// client can act on. (A canonical-but-undeclared level IS clamped — "medium" on a
+// low/high/max model has a nearest neighbour, "turbo" does not.)
 func BudgetFromEffort(effort string, levels []string) (int64, bool) {
 	e := strings.ToLower(strings.TrimSpace(effort))
 	if e == "" {
@@ -143,6 +164,9 @@ func BudgetFromEffort(effort string, levels []string) (int64, bool) {
 	}
 	if e == "none" {
 		return 0, true
+	}
+	if _, canonical := levelIndex(e); !canonical {
+		return 0, false
 	}
 	levels = NormalizeLevels(levels)
 	if len(levels) > 0 {
@@ -153,8 +177,8 @@ func BudgetFromEffort(effort string, levels []string) (int64, bool) {
 		}
 		return budget, true
 	}
-	// No declared levels: the upstream is the only authority, so the table
-	// value for a level it publishes is forwarded as-is.
+	// No declared levels: the upstream is the only authority, so the table value
+	// for a level it publishes is forwarded as-is.
 	budget, found := LevelBudget[e]
 	return budget, found
 }
