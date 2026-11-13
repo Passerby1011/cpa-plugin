@@ -1,4 +1,4 @@
-.PHONY: build test lint clean release tag
+.PHONY: build test test-real lint clean release tag
 
 GO ?= go
 VERSION ?= $(shell cat VERSION 2>/dev/null || echo "dev")
@@ -10,6 +10,11 @@ build:
 
 test:
 	$(GO) test -race -count=1 ./...
+	$(NODE) --test panel.test.js
+
+# Real download/spawn/stop verification. Opt-in: it downloads an 18 MB asset.
+test-real:
+	GEMINIAPI_REAL_BACKEND=1 $(GO) test -count=1 -run TestRealBackend -v -timeout 1500s ./internal/backend/
 
 lint:
 	@test -z "$$($(GO)fmt -l .)" || ($(GO)fmt -l . && exit 1)

@@ -1,0 +1,11 @@
+# Build outputs of this plugin. The repository's root .gitignore already covers
+# *.so and *.h; these entries keep local scratch out of a plugin-level view too.
+geminiapi.so
+geminiapi.h
+bin/
+dist/
+coverage.out
+coverage.html
+
+# bare `go build` binary (no extension), per the repo's per-plugin convention
+geminiapi

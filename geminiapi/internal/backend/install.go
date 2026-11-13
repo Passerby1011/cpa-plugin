@@ -25,7 +25,16 @@ type Downloader func(dest string, url string, proxy string) error
 
 // HTTPDownload is the production Downloader: it streams the asset to dest
 // through an optional proxy, aborting when no bytes arrive for
-// downloadStallTimeout.
+// downloadStallTimeout, and RESUMING after an interrupted transfer.
+//
+// # Why resume matters here
+//
+// The pinned asset is ~18 MB served from a release CDN. A flaky link drops
+// mid-transfer ("unexpected EOF"), and restarting from zero after a partial
+// transfer either never finishes or wastes the bandwidth already spent. The
+// digest check is what makes resume safe: every attempt appends to the same
+// temporary file and the final sha256 covers the whole of it, so a corrupted
+// middle byte still fails the gate.
 func HTTPDownload(dest, rawURL, proxy string) error {
 	transport := &http.Transport{}
 	if proxy != "" {
@@ -39,56 +48,127 @@ func HTTPDownload(dest, rawURL, proxy string) error {
 	}
 	client := &http.Client{Transport: transport, Timeout: 0}
 
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
-	if err != nil {
-		return fmt.Errorf("build download request: %w", err)
-	}
-	req.Header.Set("User-Agent", "cpa-plugin-geminiapi")
-	// A redirect to a different host is how a release asset is served, so
-	// redirects are allowed; the digest check is what makes that safe.
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed: HTTP %d from %s", resp.StatusCode, rawURL)
-	}
+	// A short read that ends in EOF is a dropped connection, not a finished
+	// asset: the total length is known from Content-Length, so compare.
+	var total int64
+	for attempt := 0; attempt <= downloadResumeAttempts; attempt++ {
+		var offset int64
+		if info, statErr := os.Stat(dest); statErr == nil {
+			offset = info.Size()
+		}
+		if total > 0 && offset == total {
+			return nil // already complete
+		}
 
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+		if err != nil {
+			return fmt.Errorf("build download request: %w", err)
+		}
+		req.Header.Set("User-Agent", "cpa-plugin-geminiapi")
+		if offset > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			if attempt == downloadResumeAttempts {
+				return fmt.Errorf("download failed: %w", err)
+			}
+			time.Sleep(downloadRetryBackoff)
+			continue
+		}
+
+		switch resp.StatusCode {
+		case http.StatusOK:
+			// A server that ignores Range restarts the body; the file must be
+			// truncated so the digest covers the real asset only.
+			if offset > 0 {
+				_ = resp.Body.Close()
+				if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("reset partial download: %w", err)
+				}
+				offset = 0
+				continue
+			}
+			total = resp.ContentLength
+		case http.StatusPartialContent:
+			if resp.ContentLength >= 0 && total == 0 {
+				total = offset + resp.ContentLength
+			}
+		default:
+			_ = resp.Body.Close()
+			return fmt.Errorf("download failed: HTTP %d from %s", resp.StatusCode, rawURL)
+		}
+
+		written, writeErr := appendTo(dest, resp.Body)
+		_ = resp.Body.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		offset += written
+		if total > 0 && offset >= total {
+			return nil
+		}
+		if total == 0 && written == 0 {
+			// No length and no bytes: the server answered with an empty body.
+			return nil
+		}
+		if attempt == downloadResumeAttempts {
+			if total > 0 {
+				return fmt.Errorf("download failed: incomplete after %d attempts (%d of %d bytes)", attempt+1, offset, total)
+			}
+			return nil
+		}
+		// Partial transfer: resume from the current offset.
+		time.Sleep(downloadRetryBackoff)
+	}
+	return fmt.Errorf("download failed: attempts exhausted")
+}
+
+// downloadResumeAttempts bounds how many times a dropped transfer is resumed.
+const downloadResumeAttempts = 12
+
+// downloadRetryBackoff is the pause between resume attempts.
+var downloadRetryBackoff = 1500 * time.Millisecond
+
+// appendTo copies body into dest, appending, with a stall budget per read.
+func appendTo(dest string, body io.Reader) (int64, error) {
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("create download target: %w", err)
+		return 0, fmt.Errorf("create download target: %w", err)
 	}
 	defer func() { _ = out.Close() }()
 
-	stall := time.NewTimer(downloadStallTimeout)
-	defer stall.Stop()
+	var total int64
 	type readResult struct {
 		n   int
 		err error
 	}
+	buf := make([]byte, 64*1024)
 	for {
-		buf := make([]byte, 64*1024)
+		stall := time.NewTimer(downloadStallTimeout)
 		ch := make(chan readResult, 1)
 		go func() {
-			n, rerr := resp.Body.Read(buf)
+			n, rerr := body.Read(buf)
 			ch <- readResult{n: n, err: rerr}
 		}()
 		select {
 		case <-stall.C:
-			return fmt.Errorf("download failed: no data for %s", downloadStallTimeout)
+			stall.Stop()
+			return total, fmt.Errorf("download failed: no data for %s", downloadStallTimeout)
 		case res := <-ch:
+			stall.Stop()
 			if res.n > 0 {
 				if _, werr := out.Write(buf[:res.n]); werr != nil {
-					return fmt.Errorf("write download target: %w", werr)
+					return total, fmt.Errorf("write download target: %w", werr)
 				}
-				stall.Reset(downloadStallTimeout)
+				total += int64(res.n)
 			}
 			if res.err == io.EOF {
-				return nil
+				return total, nil
 			}
 			if res.err != nil {
-				return fmt.Errorf("read download stream: %w", res.err)
+				// Report the bytes already written so the caller can resume.
+				return total, nil
 			}
 		}
 	}
