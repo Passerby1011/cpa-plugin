@@ -203,7 +203,7 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	debugTrace("executor sending non-stream url=%s body_len=%d", url, len(upstreamBody))
 	ctx, cancel := context.WithTimeout(context.Background(), res.cfg.RequestTimeout)
 	defer cancel()
-	headers := upstreamAuthHeaders(res.rec.Protocol, res.account.Credential, sessionID)
+	headers := upstreamRequestHeaders(res.cfg, res.rec.Protocol, res.account.Credential, sessionID)
 	resp, err := m.bridge.Do(ctx, pluginapi.HTTPRequest{
 		Method:  http.MethodPost,
 		URL:     url,
@@ -218,6 +218,12 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	m.releaseAccount(res, resp.StatusCode)
 	debugTrace("executor received non-stream status=%d body_len=%d", resp.StatusCode, len(resp.Body))
 	if resp.StatusCode >= 400 {
+		// The upstream's own ZDR refusal is never retried without the header
+		// and never rewritten: the client asked not to be retained, so
+		// answering silently without that guarantee is worse than failing.
+		if zdrRefusedInError(resp.Body) {
+			return classEnvelope(zdrRefusalError(resp.StatusCode, resp.Body)), nil
+		}
 		return classEnvelope(shared.UpstreamStatusError(resp.StatusCode, resp.Body)), nil
 	}
 	// Parse/envelope guard only; true OOM prevention belongs to the host transport's byte cap.
@@ -261,6 +267,15 @@ func goCLIHeaderOptions(cfg config.Config, sessionID string) gocli.HeaderOptions
 		opts.OmitProjectSlug = true
 	}
 	return opts
+}
+
+// goCLIRequestHeaders is the full header set for one CLI-transport request:
+// the vendor CLI's own wire shape (device identity included) plus the ZDR
+// request header when the switch is on. The CLI surface asks for ZDR the same
+// way the Provider API does, so a Go-plan request must not silently lose the
+// guarantee the client asked for.
+func goCLIRequestHeaders(cfg config.Config, credential, sessionID string) http.Header {
+	return withZDR(gocli.GenerateHeadersWithOptions(credential, goCLIHeaderOptions(cfg, sessionID)), cfg)
 }
 
 // buildGoCLIRequest renders the CLI-transport (/alpha/generate) envelope for
@@ -327,7 +342,7 @@ func (m *Manager) handleExecuteGoCLI(req executorRequest, res *resolvedExecution
 		resp, err = m.bridge.Do(ctx, pluginapi.HTTPRequest{
 			Method:  http.MethodPost,
 			URL:     url,
-			Headers: gocli.GenerateHeadersWithOptions(res.account.Credential, goCLIHeaderOptions(res.cfg, sessionID)),
+			Headers: goCLIRequestHeaders(res.cfg, res.account.Credential, sessionID),
 			Body:    upstreamBody,
 		})
 		cancel()
@@ -344,6 +359,12 @@ func (m *Manager) handleExecuteGoCLI(req executorRequest, res *resolvedExecution
 	m.releaseAccount(res, resp.StatusCode)
 	debugTrace("executor go-cli received non-stream status=%d body_len=%d", resp.StatusCode, len(resp.Body))
 	if resp.StatusCode >= 400 {
+		// MapUpstreamStatus maps 422 -> 400 for the CLI surface; the ZDR
+		// refusal keeps the type the upstream gave it (see zdrRefusalError),
+		// but never the auto-disable retry.
+		if zdrRefusedInError(resp.Body) {
+			return classEnvelope(zdrRefusalError(gocli.MapUpstreamStatus(resp.StatusCode).Status, resp.Body)), nil
+		}
 		return classEnvelope(goCLIUpstreamError(resp.StatusCode, resp.Body)), nil
 	}
 	if int64(len(resp.Body)) > res.cfg.MaxResponseBytes {
@@ -469,6 +490,16 @@ func upstreamAuthHeaders(route catalog.Route, key, sessionID string) http.Header
 	}
 	h.Set("x-commandcode-session", sessionID)
 	return h
+}
+
+// upstreamRequestHeaders is the full header set for one Provider API request:
+// the per-route auth headers, the session affinity header, and the ZDR request
+// header when the switch is on. Centralised so both the non-stream and the
+// stream leg (and every route) send the same identity - a ZDR request that
+// carried the header on one leg but not the other would be a retention
+// guarantee that silently depends on which path a client happened to take.
+func upstreamRequestHeaders(cfg config.Config, route catalog.Route, key, sessionID string) http.Header {
+	return withZDR(upstreamAuthHeaders(route, key, sessionID), cfg)
 }
 
 const emptyCommandCodeSessionID = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -711,7 +742,7 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 	st, _, id, err := m.bridge.DoStream(ctx, pluginapi.HTTPRequest{
 		Method:  http.MethodPost,
 		URL:     url,
-		Headers: upstreamAuthHeaders(res.rec.Protocol, res.account.Credential, sessionID),
+		Headers: upstreamRequestHeaders(res.cfg, res.rec.Protocol, res.account.Credential, sessionID),
 		Body:    upstreamBody,
 	})
 	debugTrace("executor stream DoStream status=%d upstreamID=%s err=%v", st, id, err)
@@ -734,6 +765,11 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 				}
 			}
 			_ = m.bridge.StreamClose(id)
+		}
+		// Pre-first-byte ZDR refusal: surfaced with the upstream's own
+		// status/message, never retried with the header dropped.
+		if zdrRefusedInError(body) {
+			return classEnvelope(zdrRefusalError(st, body)), nil
 		}
 		return classEnvelope(shared.UpstreamStatusError(st, body)), nil
 	}
@@ -778,7 +814,7 @@ func (m *Manager) executeStreamGoCLI(req executorRequest, res *resolvedExecution
 	st, _, id, err := m.bridge.DoStream(ctx, pluginapi.HTTPRequest{
 		Method:  http.MethodPost,
 		URL:     url,
-		Headers: gocli.GenerateHeadersWithOptions(res.account.Credential, goCLIHeaderOptions(res.cfg, sessionID)),
+		Headers: goCLIRequestHeaders(res.cfg, res.account.Credential, sessionID),
 		Body:    upstreamBody,
 	})
 	debugTrace("executor go-cli stream DoStream status=%d upstreamID=%s err=%v", st, id, err)
@@ -799,6 +835,11 @@ func (m *Manager) executeStreamGoCLI(req executorRequest, res *resolvedExecution
 				}
 			}
 			_ = m.bridge.StreamClose(id)
+		}
+		// Pre-first-byte ZDR refusal on the CLI surface (400 with
+		// type=cmd_zdr_no_providers): surfaced as the upstream gave it.
+		if zdrRefusedInError(body) {
+			return classEnvelope(zdrRefusalError(gocli.MapUpstreamStatus(st).Status, body)), nil
 		}
 		return classEnvelope(goCLIUpstreamError(st, body)), nil
 	}

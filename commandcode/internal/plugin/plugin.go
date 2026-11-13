@@ -313,6 +313,14 @@ func configFields() []pluginapi.ConfigField {
 			Type:        pluginapi.ConfigFieldTypeBoolean,
 			Description: "Permit http:// upstreams and catalog URLs. For local testing only.",
 		},
+		{
+			Name: "zdr",
+			Type: pluginapi.ConfigFieldTypeBoolean,
+			Description: "Zero Data Retention: every request for a reply carries \"x-cmd-zdr: 1\", so the upstream " +
+				"routes it only to providers that keep neither prompt nor reply. Usually costs more; a model with no " +
+				"such upstream is refused (422/400 cmd_zdr_no_providers) instead of served without the guarantee. " +
+				"Can also be turned on with env CMD_ZDR=1. Off by default.",
+		},
 	}
 }
 

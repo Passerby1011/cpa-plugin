@@ -61,6 +61,13 @@ type Protocols struct {
 	Responses       bool
 }
 
+// EnvZDR is the environment variable the vendor CLI uses to ask for Zero
+// Data Retention (its own CMD_ZDR). Exactly the string "1" turns it on
+// there, so exactly "1" turns it on here - a value like "true" must not,
+// or a deployment would think it is protected while the upstream was
+// never asked.
+const EnvZDR = "CMD_ZDR"
+
 type RouteOverride struct {
 	Protocol string `yaml:"protocol"`
 	Endpoint string `yaml:"endpoint"`
@@ -183,28 +190,39 @@ func asciiEqualFold(a, b byte) bool {
 }
 
 type Config struct {
-	BaseURL          string
-	CatalogURL       string
-	ModelPrefix      ModelPrefix
-	APIKeys          []APIKey
-	Accounts         []Account
-	Pool             Pool
-	Catalog          Catalog
-	Protocols        Protocols
-	RouteOverrides   map[string]RouteOverride
-	Models           ModelFilter
-	Device           Device
-	Retry            Retry
-	Watchdog         Watchdog
-	MaxInflight      int
-	AllowHTTP        bool
-	RequestTimeout   time.Duration
+	BaseURL        string
+	CatalogURL     string
+	ModelPrefix    ModelPrefix
+	APIKeys        []APIKey
+	Accounts       []Account
+	Pool           Pool
+	Catalog        Catalog
+	Protocols      Protocols
+	RouteOverrides map[string]RouteOverride
+	Models         ModelFilter
+	Device         Device
+	Retry          Retry
+	Watchdog       Watchdog
+	MaxInflight    int
+	AllowHTTP      bool
+	RequestTimeout time.Duration
+	// MaxResponseBytes bounds a buffered (non-streaming) upstream response.
 	MaxResponseBytes int64
 	// Pending is true when no usable credential is configured. Such a config
 	// is VALID to register with (so the host publishes the metadata and the
 	// Management Center can show its config form), but the plugin serves no
 	// models and refuses execution until a key is supplied.
 	Pending bool
+	// ZDR asks for Zero Data Retention: every request for a reply carries
+	// "x-cmd-zdr: 1", so the upstream only routes it to providers that keep
+	// neither prompt nor reply. It usually costs more, and a model with no
+	// such upstream is REFUSED (422 cmd_zdr_no_providers from the Provider
+	// API, a 400 error line from /alpha/generate) rather than served
+	// without the guarantee - that refusal reaches the client as it came.
+	// Defaults to false; env CMD_ZDR=1 turns it on as the vendor CLI's own
+	// switch does. See zdrActive: the env is re-read per request so a
+	// deployment can flip it without a reconfigure.
+	ZDR bool
 }
 
 // Device controls the fabricated device identity a go-cli request presents.
@@ -412,6 +430,7 @@ type rawConfig struct {
 	Device           rawDevice                `yaml:"device"`
 	Retry            rawRetry                 `yaml:"retry"`
 	Watchdog         rawWatchdog              `yaml:"watchdog"`
+	ZDR              *bool                    `yaml:"zdr"`
 	MaxInflight      *int                     `yaml:"max-inflight"`
 	AllowHTTP        bool                     `yaml:"allow-http"`
 	RequestTimeout   *string                  `yaml:"request-timeout"`
@@ -669,6 +688,7 @@ func load(yamlBytes []byte, allowPending bool) (Config, error) {
 			Stream:    streamIdle,
 			NonStream: nonStreamIdle,
 		},
+		ZDR:              orDefault(raw.ZDR, false),
 		MaxInflight:      orDefault(raw.MaxInflight, 0),
 		AllowHTTP:        raw.AllowHTTP,
 		RequestTimeout:   requestTimeout,

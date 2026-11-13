@@ -213,8 +213,21 @@ func (ev *cliEvent) errorCode() string {
 // rate-limit/quota code routes through FromStatus so the section-7
 // retryability semantics apply; anything else is a retryable upstream
 // server failure. An error event is never treated as an empty delta.
+//
+// The ZDR refusal is special-cased because the CLI reports it as an event
+// INSIDE a 200 reply: it is the upstream refusing the request, not an
+// upstream fault, so it must not be retried (re-running it with the header
+// dropped would silently answer a request that asked not to be retained).
 func classifyCLIError(ev *cliEvent) *errclass.Error {
 	code := strings.TrimSpace(ev.errorCode())
+	if isZDRRefusal(code, string(ev.Error)) {
+		return &errclass.Error{
+			Class:      errclass.ClassUnsupported,
+			Message:    RedactedZDRMessage(code, ev.Message),
+			StatusCode: http.StatusBadRequest,
+			Retryable:  false,
+		}
+	}
 	msg := strings.TrimSpace(ev.Message)
 	detail := msg
 	switch {
@@ -240,6 +253,31 @@ func classifyCLIError(ev *cliEvent) *errclass.Error {
 		return errclass.FromStatus(status, detail)
 	}
 	return errclass.UpstreamFallback(detail)
+}
+
+// zdrRefusalCode is the upstream's own name for "no zero-data-retention
+// upstream serves this model". The CLI spells it in upper case and puts it in
+// the error's type; the Provider API spells it lower case and puts it in code.
+const zdrRefusalCode = "cmd_zdr_no_providers"
+
+// isZDRRefusal reports whether a CLI error event carries the ZDR refusal. Both
+// the type and the code are checked, because the vendor sends both spellings
+// ({"type":"cmd_zdr_no_providers","code":"CMD_ZDR_NO_PROVIDERS",...}) and
+// matching only one would turn a documented refusal into a retryable 502.
+func isZDRRefusal(code, raw string) bool {
+	return strings.Contains(strings.ToLower(code), zdrRefusalCode) ||
+		strings.Contains(strings.ToLower(raw), zdrRefusalCode)
+}
+
+// RedactedZDRMessage is the client-facing message for a CLI ZDR refusal: the
+// upstream's own words, with the CLI's "Disable CMD_ZDR" instruction kept
+// (it is the actionable half) but bearer/x-api-key material stripped like every
+// other upstream echo.
+func RedactedZDRMessage(code, message string) string {
+	if msg := strings.TrimSpace(message); msg != "" {
+		return errclass.Redact(msg)
+	}
+	return errclass.Redact(code)
 }
 
 // cliSSEData extracts the payload from one line of the CLI transport's
