@@ -5,24 +5,54 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Open Design</title>
 <style>
-:root { color-scheme: light dark; --fg:#1f2328; --dim:#57606a; --bg:#fff; --line:#d8dee4; --accent:#0969da; }
-@media (prefers-color-scheme: dark) { :root { --fg:#e6edf3; --dim:#8b949e; --bg:#0d1117; --line:#30363d; --accent:#58a6ff; } }
+:root { color-scheme: light dark; --fg:#1f2328; --dim:#57606a; --bg:#fff; --line:#d8dee4; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; }
+@media (prefers-color-scheme: dark) { :root { --fg:#e6edf3; --dim:#8b949e; --bg:#0d1117; --line:#30363d; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149; } }
 body { margin:0; padding:24px; font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; color:var(--fg); background:var(--bg); }
 h1 { font-size:18px; margin:0 0 4px; }
+h2 { font-size:15px; margin:26px 0 10px; }
 p.lead { color:var(--dim); margin:0 0 20px; }
 table { border-collapse:collapse; width:100%; max-width:880px; }
 th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
 th { font-weight:600; color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
 td.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
 .tag { display:inline-block; padding:0 6px; border:1px solid var(--line); border-radius:999px; font-size:11.5px; color:var(--dim); }
-.err { color:#cf222e; }
+.err { color:var(--bad); }
 .note { max-width:880px; color:var(--dim); font-size:13px; margin-top:18px; }
+.cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:14px; max-width:880px; }
+.card { border:1px solid var(--line); border-radius:10px; padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
+.card-head { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+.card-title { font-weight:600; word-break:break-all; }
+.card-sub { color:var(--dim); font-size:12.5px; word-break:break-all; }
+.card-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+button { font:inherit; font-size:12.5px; padding:4px 10px; border-radius:6px; border:1px solid var(--line); background:transparent; color:var(--fg); cursor:pointer; }
+button:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+button:disabled { opacity:.55; cursor:default; }
+.meter { height:8px; border-radius:4px; background:var(--line); overflow:hidden; }
+.meter > span { display:block; height:100%; background:var(--accent); }
+.meter.high > span { background:var(--warn); }
+.meter.over > span { background:var(--bad); }
+.window { display:flex; flex-direction:column; gap:4px; }
+.window-row { display:flex; justify-content:space-between; gap:10px; font-size:12.5px; }
+.window-row .name { font-weight:600; }
+.window-row .display { color:var(--dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.meta { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12.5px; color:var(--dim); }
+.meta .value { color:var(--fg); }
+.badge { display:inline-block; padding:0 6px; border-radius:999px; font-size:11px; border:1px solid var(--line); }
+.badge.ok { color:var(--ok); border-color:var(--ok); }
+.badge.warn { color:var(--warn); border-color:var(--warn); }
+.badge.bad { color:var(--bad); border-color:var(--bad); }
 </style>
 </head>
 <body>
 <h1>Open Design</h1>
-<p class="lead">Accounts, the wire each model is declared on, and its measured reasoning levels.</p>
+<p class="lead">Accounts, each one's Design Plan allowance (its windows and the wallet balance), and the served models.</p>
 <div id="status" class="note">loading…</div>
+
+<h2>Accounts and plan allowance</h2>
+<div id="cards" class="cards"></div>
+<p class="note" id="cards-note"></p>
+
+<h2>Models</h2>
 <table id="models"><thead><tr><th>Model</th><th>Wire</th><th>Context</th><th>Output</th><th>Levels</th><th>Input</th></tr></thead><tbody></tbody></table>
 <p class="note" id="foot"></p>
 <script>
@@ -73,6 +103,138 @@ function cell(text, cls) {
   return td;
 }
 
+function el(tag, cls, text) {
+  var node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function message(text) { return el("div", "err", text); }
+
+function signInBadge(state) {
+  if (state === "expired") return el("span", "badge bad", "sign-in expired");
+  if (state === "renewed") return el("span", "badge ok", "sign-in works again");
+  return el("span", "badge ok", "sign-in kept");
+}
+
+// readOne asks for ONE account's live reading. The body carries the card's own
+// id — a digest of the credential, never the credential itself.
+function readOne(key, id) {
+  return fetch(BASE + "/allowance", {
+    method: "POST",
+    credentials: "omit",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
+    body: JSON.stringify({ id: id })
+  }).then(function (r) {
+    if (!r.ok) throw new Error("/allowance answered " + r.status);
+    return r.json();
+  });
+}
+
+// meter draws one window: its name, the metered bar and the credits the vendor's
+// own card shows. The percentage and the display string come from the plugin, so
+// this only positions them.
+function meter(w) {
+  var box = el("div", "window");
+  var row = el("div", "window-row");
+  row.appendChild(el("span", "name", w.name));
+  row.appendChild(el("span", "display", w.display));
+  box.appendChild(row);
+
+  var percent = Math.max(0, Math.min(100, Number(w.used_percent) || 0));
+  var bar = el("div", "meter" + (percent >= 100 ? " over" : percent >= 80 ? " high" : ""));
+  var fill = el("span");
+  fill.style.width = percent + "%";
+  bar.appendChild(fill);
+  box.appendChild(bar);
+
+  var meta = el("div", "meta");
+  meta.appendChild(el("span", "", "used " + percent + "%"));
+  if (w.resets_at) meta.appendChild(el("span", "", "resets " + w.resets_at));
+  box.appendChild(meta);
+  return box;
+}
+
+// renderUsage fills a card's body with one reading.
+function renderUsage(box, usage) {
+  if (!usage) return;
+  var meta = el("div", "meta");
+  function field(name, value) {
+    if (!value) return;
+    meta.appendChild(el("span", "", name + " " + value));
+  }
+  field("plan", usage.plan);
+  field("wallet", usage.balance);
+  field("status", usage.subscription_status);
+  if (usage.renew) field("renewal", usage.renew === "off" ? "cancels at period end" : "auto");
+  if (usage.until) field("period ends", usage.until);
+  if (meta.childNodes.length) box.appendChild(meta);
+
+  var windows = usage.windows || [];
+  windows.forEach(function (w) { box.appendChild(meter(w)); });
+  if (!windows.length && !usage.error && usage.readable) {
+    // A readable account with no windows has no metered allowance to draw.
+    box.appendChild(el("div", "card-sub", "no metered allowance window on this account"));
+  }
+  if (usage.error) box.appendChild(message(usage.error));
+}
+
+// renderCard draws one account. Each card refreshes ITSELF, which is why one
+// account failing cannot blank the page.
+function renderCard(card, key) {
+  var box = el("div", "card");
+  var head = el("div", "card-head");
+  head.appendChild(el("div", "card-title", card.label || card.id));
+  box.appendChild(head);
+  if (card.email) box.appendChild(el("div", "card-sub", card.email));
+
+  var badges = el("div", "card-actions");
+  var badge = signInBadge(card.sign_in);
+  badges.appendChild(badge);
+  if (!card.plan_readable) badges.appendChild(el("span", "badge", "no control key"));
+  box.appendChild(badges);
+
+  var body = el("div");
+  box.appendChild(body);
+  if (card.message) body.appendChild(message(card.message));
+  renderUsage(body, card.usage);
+
+  var actions = el("div", "card-actions");
+  var button = el("button", "", "Refresh allowance");
+  if (!card.plan_readable) {
+    button.disabled = true;
+    button.title = "This credential was added as an API key, so there is no control key to read a plan with.";
+  }
+  var note = el("span", "card-sub", "");
+  actions.appendChild(button);
+  actions.appendChild(note);
+  box.appendChild(actions);
+
+  button.addEventListener("click", function () {
+    button.disabled = true;
+    note.className = "card-sub";
+    note.textContent = "reading…";
+    readOne(key, card.id).then(function (d) {
+      var fresh = d.card || {};
+      card.sign_in = fresh.sign_in || card.sign_in;
+      var next = signInBadge(card.sign_in);
+      badges.replaceChild(next, badge);
+      badge = next;
+      body.textContent = "";
+      if (fresh.message) body.appendChild(message(fresh.message));
+      renderUsage(body, fresh.usage);
+      note.textContent = "read at " + new Date().toLocaleTimeString();
+    }).catch(function (e) {
+      note.className = "err";
+      note.textContent = "unavailable: " + e.message;
+    }).then(function () {
+      button.disabled = !card.plan_readable;
+    });
+  });
+  return box;
+}
+
 (function () {
   var key = managementKey();
   if (!key) {
@@ -100,6 +262,36 @@ function cell(text, cls) {
     var status = document.getElementById("status");
     status.className = "err";
     status.textContent = "status unavailable: " + e.message;
+  });
+
+  get("/allowance", key).then(function (d) {
+    var cards = d.cards || [];
+    var host = document.getElementById("cards");
+    var note = document.getElementById("cards-note");
+    if (!cards.length) {
+      note.textContent = "No accounts yet: sign in from the Management Center, or add a sk-amr-… key to api-keys.";
+      return;
+    }
+    var boxes = [];
+    cards.forEach(function (card) {
+      var box = renderCard(card, key);
+      boxes.push(box);
+      host.appendChild(box);
+    });
+    note.textContent =
+      "Each card reads its own account when refreshed: the Design Plan's windows, the wallet balance and the subscription's period. " +
+      "That read takes the account's vela_ctrl_… control key, which only an account sign-in produces — an API key has none.";
+    // A signed-in account is read once on load, so the page does not open as a
+    // wall of empty cards. A pasted key is left alone: it can never answer.
+    cards.forEach(function (card, i) {
+      if (!card.plan_readable) return;
+      var button = boxes[i].querySelector("button");
+      if (button) button.click();
+    });
+  }).catch(function (e) {
+    var note = document.getElementById("cards-note");
+    note.className = "err";
+    note.textContent = "accounts unavailable: " + e.message;
   });
 
   get("/models", key).then(function (d) {
