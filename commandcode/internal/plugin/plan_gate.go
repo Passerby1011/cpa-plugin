@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/hex-ci/cpa-plugin/commandcode/internal/config"
@@ -81,36 +80,52 @@ func (m *Manager) buildPlanGate(parent context.Context, cfg config.Config, bridg
 	gctx, cancelGate := context.WithTimeout(parent, planGateTotalTimeout)
 	defer cancelGate()
 
-	type readResult struct {
-		tier     *planfilter.SubscriptionPlan
-		onDemand float64
-	}
-	results := make([]readResult, len(readable))
-	var wg sync.WaitGroup
-	for i, a := range readable {
-		wg.Add(1)
-		go func(i int, credential string) {
-			defer wg.Done()
+	// Results travel over a buffered channel rather than a shared slice:
+	// the timeout branch below abandons reads that are still running, and
+	// those goroutines keep writing whenever they finish. A shared
+	// results[i] slot made the abandoned goroutine and this reader race
+	// (caught by -race on the total-budget test). One buffered send per
+	// read cannot block and cannot alias, so the abandoned read is free to
+	// finish whenever it likes without touching state this function reads.
+	results := make(chan planReadResult, len(readable))
+	for _, a := range readable {
+		go func(credential string) {
 			tier, onDemand, _ := readBillingAccess(gctx, bridge, cfg.BaseURL, credential)
-			results[i] = readResult{tier: tier, onDemand: onDemand}
-		}(i, a.Credential)
+			results <- planReadResult{tier: tier, onDemand: onDemand}
+		}(a.Credential)
 	}
 	// Bound the WAIT too, not just the reads: a bridge that ignores the context
 	// would otherwise stall the gate for as long as the slowest read, and this
-	// runs inside the refresh that builds the model list.
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-gctx.Done():
+	// runs inside the refresh that builds the model list. Whatever arrived
+	// before the deadline is used; the rest is simply not waited for.
+	collected := make([]planReadResult, 0, len(readable))
+	for len(collected) < len(readable) {
+		select {
+		case r := <-results:
+			collected = append(collected, r)
+		case <-gctx.Done():
+			return planGateFromResults(collected, readable, bridge)
+		}
 	}
 
-	accesses := make([]*planfilter.BillingAccess, 0, len(results))
+	return planGateFromResults(collected, readable, bridge)
+}
+
+// planReadResult is one account's plan read, collected per credential.
+type planReadResult struct {
+	tier     *planfilter.SubscriptionPlan
+	onDemand float64
+}
+
+// planGateFromResults turns a set of per-account reads into the gate closure
+// (nil = publish everything). It is shared by the all-reads-arrived path and
+// the deadline path so the two can never disagree about when a gate is
+// installed: an unreadable account is fail-open, and a pool with nothing known
+// gets no gate at all.
+func planGateFromResults(collected []planReadResult, readable []config.Account, bridge *HostBridge) func(string) bool {
+	accesses := make([]*planfilter.BillingAccess, 0, len(collected))
 	anyKnown := false
-	for _, r := range results {
+	for _, r := range collected {
 		if r.tier != nil {
 			anyKnown = true
 		}
