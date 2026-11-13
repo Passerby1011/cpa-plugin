@@ -1,4 +1,5 @@
-# Multi-arch CPA plugin build & release (WorkBuddy + QoderWork).
+# Multi-arch CPA plugin build & release (WorkBuddy / QoderWork / CommandCode /
+# Open Design / GeminiAPI).
 # Each plugin versions INDEPENDENTLY:
 #   - tag '<id>-v*'       → release that plugin at that version
 #   - workflow_dispatch   → pick plugin + version manually
@@ -18,14 +19,24 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: ["workbuddy-v*", "qoderwork-v*"]
+    tags:
+      - "workbuddy-v*"
+      - "qoderwork-v*"
+      - "commandcode-v*"
+      - "opendesign-v*"
+      - "geminiapi-v*"
   workflow_dispatch:
     inputs:
       plugin:
         description: "Plugin to release"
         required: true
         type: choice
-        options: [workbuddy, qoderwork]
+        options:
+          - workbuddy
+          - qoderwork
+          - commandcode
+          - opendesign
+          - geminiapi
       version:
         description: "Version without v (empty = plugin's VERSION file)"
         required: false
@@ -46,6 +57,12 @@ jobs:
             node: true
           - dir: qoderwork
             node: false
+          - dir: commandcode
+            node: false
+          - dir: opendesign
+            node: false
+          - dir: geminiapi
+            node: true
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
@@ -126,6 +143,84 @@ jobs:
             runner: macos-15
             ext: dylib
           - id: qoderwork
+            goos: windows
+            goarch: amd64
+            runner: windows-2025
+            ext: dll
+          # CommandCode native
+          - id: commandcode
+            goos: linux
+            goarch: amd64
+            runner: ubuntu-24.04
+            ext: so
+          - id: commandcode
+            goos: linux
+            goarch: arm64
+            runner: ubuntu-24.04-arm
+            ext: so
+          - id: commandcode
+            goos: darwin
+            goarch: amd64
+            runner: macos-15-intel
+            ext: dylib
+          - id: commandcode
+            goos: darwin
+            goarch: arm64
+            runner: macos-15
+            ext: dylib
+          - id: commandcode
+            goos: windows
+            goarch: amd64
+            runner: windows-2025
+            ext: dll
+          # Open Design native
+          - id: opendesign
+            goos: linux
+            goarch: amd64
+            runner: ubuntu-24.04
+            ext: so
+          - id: opendesign
+            goos: linux
+            goarch: arm64
+            runner: ubuntu-24.04-arm
+            ext: so
+          - id: opendesign
+            goos: darwin
+            goarch: amd64
+            runner: macos-15-intel
+            ext: dylib
+          - id: opendesign
+            goos: darwin
+            goarch: arm64
+            runner: macos-15
+            ext: dylib
+          - id: opendesign
+            goos: windows
+            goarch: amd64
+            runner: windows-2025
+            ext: dll
+          # GeminiAPI native
+          - id: geminiapi
+            goos: linux
+            goarch: amd64
+            runner: ubuntu-24.04
+            ext: so
+          - id: geminiapi
+            goos: linux
+            goarch: arm64
+            runner: ubuntu-24.04-arm
+            ext: so
+          - id: geminiapi
+            goos: darwin
+            goarch: amd64
+            runner: macos-15-intel
+            ext: dylib
+          - id: geminiapi
+            goos: darwin
+            goarch: arm64
+            runner: macos-15
+            ext: dylib
+          - id: geminiapi
             goos: windows
             goarch: amd64
             runner: windows-2025
@@ -224,6 +319,24 @@ jobs:
             target: windows-arm64
             ext: dll
           - id: qoderwork
+            target: freebsd-amd64
+            ext: so
+          - id: commandcode
+            target: windows-arm64
+            ext: dll
+          - id: commandcode
+            target: freebsd-amd64
+            ext: so
+          - id: opendesign
+            target: windows-arm64
+            ext: dll
+          - id: opendesign
+            target: freebsd-amd64
+            ext: so
+          - id: geminiapi
+            target: windows-arm64
+            ext: dll
+          - id: geminiapi
             target: freebsd-amd64
             ext: so
     defaults:
@@ -346,7 +459,10 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '') ||
       startsWith(github.ref, 'refs/tags/workbuddy-v') ||
-      startsWith(github.ref, 'refs/tags/qoderwork-v')
+      startsWith(github.ref, 'refs/tags/qoderwork-v') ||
+      startsWith(github.ref, 'refs/tags/commandcode-v') ||
+      startsWith(github.ref, 'refs/tags/opendesign-v') ||
+      startsWith(github.ref, 'refs/tags/geminiapi-v')
     needs:
       - build
       - build-cross
@@ -365,13 +481,15 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             P="${{ github.event.inputs.plugin }}"
             V="${{ github.event.inputs.version }}"
-          elif [[ "${GITHUB_REF_NAME}" == workbuddy-v* ]]; then
-            P="workbuddy"; V="${GITHUB_REF_NAME#workbuddy-v}"
           else
-            P="qoderwork"; V="${GITHUB_REF_NAME#qoderwork-v}"
+            # Tag names are '<id>-v<version>' — split on the LAST '-v' so an id
+            # that itself contains '-v' still resolves correctly.
+            TAG_PLUGIN="${GITHUB_REF_NAME%-v*}"
+            V="${GITHUB_REF_NAME##*-v}"
+            P="$TAG_PLUGIN"
           fi
           case "$P" in
-            workbuddy|qoderwork) ;;
+            workbuddy|qoderwork|commandcode|opendesign|geminiapi) ;;
             *) echo "unsupported plugin $P"; exit 1 ;;
           esac
           V="${V#v}"
@@ -379,6 +497,9 @@ jobs:
           case "$P" in
             workbuddy) NAME="WorkBuddy" ;;
             qoderwork) NAME="QoderWork" ;;
+            commandcode) NAME="CommandCode" ;;
+            opendesign) NAME="Open Design" ;;
+            geminiapi) NAME="GeminiAPI" ;;
           esac
           {
             echo "plugin=$P"

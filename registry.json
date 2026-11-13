@@ -76,9 +76,9 @@
     {
       "id": "commandcode",
       "name": "CommandCode",
-      "description": "CommandCode plan as a single CLIProxyAPI provider (commandcode/ prefix): OpenAI, Anthropic and Responses clients off one API-key pool, reasoning/thinking preservation, chat-completions-only catalog routing, host-scheduled key pool and a CommandCode quota page. Repackaged from mczhoucn/commandcode (MIT).",
+      "description": "CommandCode plan as a single CLIProxyAPI provider (commandcode/ prefix): OpenAI, Anthropic and Responses clients off one API-key pool, zero-data-retention headers on both call paths, endpoint routing from the catalog's supported_endpoints, reasoning/thinking preservation with an explicit off tier, whoami re-check that marks expired sign-ins in the panel, decision-model (Jev) exclusion, host-scheduled key pool and a CommandCode quota page. Repackaged from mczhoucn/commandcode (MIT).",
       "author": "mczhoucn",
-      "version": "0.5.4",
+      "version": "0.6.0",
       "repository": "https://github.com/Passerby1011/cpa-plugin",
       "homepage": "https://github.com/Passerby1011/cpa-plugin/tree/main/commandcode",
       "license": "MIT",
@@ -186,6 +186,50 @@
             "size": 3041588
           }
         ]
+      }
+    },
+    {
+      "id": "opendesign",
+      "name": "Open Design",
+      "description": "Open Design as a single CLIProxyAPI provider (opendesign/ prefix): Vela device-authorization sign-in plus pasted sk-amr-… keys, dynamic model catalog with capability labels, OpenAI/Anthropic/Responses executors, host-scheduled key pool, and a control-plane allowance card (5h/7d windows, wallet balance, plan name).",
+      "author": "Hex",
+      "version": "0.2.0",
+      "repository": "https://github.com/Passerby1011/cpa-plugin",
+      "logo": "https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/opendesign/assets/logo.svg",
+      "homepage": "https://github.com/Passerby1011/cpa-plugin/tree/main/opendesign",
+      "license": "MIT",
+      "tags": [
+        "Provider",
+        "OAuth",
+        "OpenDesign",
+        "Executor",
+        "Management"
+      ],
+      "install": {
+        "type": "direct",
+        "artifacts": []
+      }
+    },
+    {
+      "id": "geminiapi",
+      "name": "GeminiAPI",
+      "description": "Gemini Web + AI Studio through one CLIProxyAPI plugin (geminiapi/ prefix): hosts and supervises two pinned local OpenAI-compatible backends (AIStudio2API 0.3.5-magpie.1 and gemini-web2api-go 4.28.0-magpie.1) with download + sha256 verification, PID-identity checks, per-namespace data dirs, ports and process groups, and publishes each backend's catalog under its own namespace in the management panel.",
+      "author": "Hex",
+      "version": "0.2.0",
+      "repository": "https://github.com/Passerby1011/cpa-plugin",
+      "logo": "https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/geminiapi/assets/logo.svg",
+      "homepage": "https://github.com/Passerby1011/cpa-plugin/tree/main/geminiapi",
+      "license": "MIT",
+      "tags": [
+        "Provider",
+        "Gemini",
+        "AIStudio",
+        "Backend",
+        "Management"
+      ],
+      "install": {
+        "type": "direct",
+        "artifacts": []
       }
     }
   ]

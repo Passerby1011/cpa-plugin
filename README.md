@@ -1,16 +1,19 @@
 # CPA 插件仓库
 
 [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) 插件集合。当前提供
-**WorkBuddy / CodeBuddy**（OAuth Provider）、**QoderWork**（OAuth/PAT Provider）
-与 **CommandCode**（套餐 Provider + 配额页）。
+**WorkBuddy / CodeBuddy**（OAuth Provider）、**QoderWork**（OAuth/PAT Provider）、
+**CommandCode**（套餐 Provider + 配额页）、**Open Design**（控制面额度 Provider）
+与 **GeminiAPI**（托管本地 Gemini Web / AI Studio 后端的 Provider）。
 
 ## 插件
 
 | ID | 说明 | 源码 |
 |---|---|---|
 | `workbuddy` | WorkBuddy / CodeBuddy 双通道（CN `copilot.tencent.com` + 国际 `workbuddy.ai`）：OAuth、动态模型、executor、CN 每日签到、**国际版每日活跃 30/50 积分领取**、积分生命周期、积分面板 | [workbuddy/](workbuddy/) |
-| `commandcode` | CommandCode 套餐单一 provider（`commandcode/` 前缀）：OpenAI/Anthropic/Responses 三协议、推理保真、Key 池调度、配额页 | [commandcode/](commandcode/) |
+| `commandcode` | CommandCode 套餐单一 provider（`commandcode/` 前缀）：OpenAI/Anthropic/Responses 三协议、ZDR、按 `supported_endpoints` 路由、推理保真与 off 档、Key 池调度、配额页 | [commandcode/](commandcode/) |
 | `qoderwork` | QoderWork CN（`qoder.com.cn`）：OAuth 设备授权 + PAT 双登录（可共存）、登录自动领 Pro 包、COSY 签名推理、动态模型、每日签到、积分面板、token 保活 | [qoderwork/](qoderwork/) |
+| `opendesign` | Open Design（Vela 控制面，`opendesign/` 前缀）：设备授权登录 + `sk-amr-…` 粘贴 key 双凭据、动态模型目录（含能力标签）、OpenAI/Anthropic/Responses 执行器、Key 池调度、**额度卡片**（5h/7d 窗口 + 钱包余额 + 套餐） | [opendesign/](opendesign/) |
+| `geminiapi` | Gemini Web + AI Studio（`geminiapi/` 前缀）：插件自己安装/校验/托管两套本地 OpenAI 兼容后端（`aistudio2api` 0.3.5-magpie.1、`gemini-web2api-go` 4.28.0-magpie.1），各自独立数据目录/端口/进程组，目录按命名空间分流 | [geminiapi/](geminiapi/) |
 
 ## 多架构 Release
 
@@ -36,8 +39,8 @@ CI：push / PR 全量构建（只出 artifacts）；tag `<id>-v*`（如 `workbud
 ## 安装（linux/amd64 示例）
 
 ```bash
-# 从 Release 下载
-unzip workbuddy_0.12.1_linux_amd64.zip
+# 从 Release 下载（换成你要装的插件 id 与版本）
+unzip workbuddy_0.13.6_linux_amd64.zip
 # 扁平 plugins 目录（常见 docker 挂载）
 cp workbuddy.so /path/to/cliproxyapi/plugins/workbuddy.so
 # 或平台子目录布局
@@ -66,19 +69,22 @@ CI 自动刷新（`.github/scripts/sync-registry.py`），用户在商店 UI 即
 https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/registry.json
 ```
 
-添加后在商店 UI 安装/更新 **WorkBuddy**、**QoderWork** 或 **CommandCode**。
+添加后在商店 UI 安装/更新 **WorkBuddy**、**QoderWork**、**CommandCode**、
+**Open Design** 或 **GeminiAPI**。
 
-> **首次使用注意**：`registry.json` 里的 `artifacts` 由发版 CI 回填。在
-> `workbuddy-v*` 首个 Release 产出之前，该字段为空数组，而 CPA 对
+> **首次使用注意**：`registry.json` 里的 `artifacts` 由发版 CI 回填。新插件在
+> 首个 Release 产出之前该字段为空数组，而 CPA 对
 > `direct` 类型强制要求至少一个 artifact（`pluginstore/registry.go` 的
 > `ValidateInstallPlan`），此时整个源会被判为无效并报
 > `plugins[0]: direct install requires at least one artifact`。
 > 先跑一次 Release（tag 或 workflow_dispatch）即可解除。
 >
-> 新增插件同理：`commandcode` 的 `artifacts` 已由本地构建 + Release
-> 上传后回填（三平台：linux/amd64、linux/arm64、windows/amd64）。该插件尚未纳入
-> 本仓库 CI matrix——接线补丁见 `scripts/ci-wiring-commandcode.patch`。
-> `qoderwork` 的 7 平台 artifacts 由发版 CI 回填，空 `artifacts` 只存在于发版之前。
+> **5 个插件全部纳入 CI 矩阵**（`test` / `build` / `build-cross`），每个发版产出
+> 7 平台 zip：linux/amd64、linux/arm64、darwin/amd64、darwin/arm64、
+> windows/amd64、windows/arm64、freebsd/amd64，外加 `checksums.txt`。
+> 历史遗留：`scripts/ci-wiring-commandcode.patch` 与
+> `scripts/release-commandcode.py` 是 commandcode 尚未进矩阵时的手工接线/发版脚本，
+> 现已由 CI 取代，仅作存档。
 
 ## 插件维护要点
 
@@ -88,8 +94,8 @@ https://raw.githubusercontent.com/Passerby1011/cpa-plugin/main/registry.json
 - **版本注入**：构建用 `-ldflags "-X main.version=<version>"` 注入版本，插件在
   `main.go` 的 `version` 变量 + `init()` 里转发给内部包；`<id>/VERSION` 是版本源。
 - **发版**：`make -C <id> tag`（读 `<id>/VERSION`）→ 推 tag → CI 出多平台产物 +
-  回填 `registry.json`。`workbuddy` 走 CI 矩阵；`commandcode`
-  本版为本地构建 + Release 上传（见 `scripts/release-commandcode.py`）。
+  回填 `registry.json`。5 个插件全部走 CI 矩阵；`commandcode` 早期的手工发版路径
+  （`scripts/release-commandcode.py`）已作废。
 - **`qoderwork/` 的模型目录是本地补丁**：静态兜底表
   （`models.go` 的 `qoderCNStaticCatalog20261019`）与别名映射（`body.go` 的
   `cpaToUpstreamKey`）按 Qoder CN 线上目录手工维护，模型换代时要改这两处 +
