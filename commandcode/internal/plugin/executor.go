@@ -218,6 +218,13 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 	m.releaseAccount(res, resp.StatusCode)
 	debugTrace("executor received non-stream status=%d body_len=%d", resp.StatusCode, len(resp.Body))
 	if resp.StatusCode >= 400 {
+		// A 401 is only a CANDIDATE for a signed-out account: whoami must
+		// refuse the key too, or the account stays. A 403 (a model the plan
+		// lacks) is never even asked about - it is about the model, not the
+		// credential - so the whoami round-trip is not spent on it.
+		if resp.StatusCode == http.StatusUnauthorized {
+			m.confirmRevocation(context.Background(), res.cfg.BaseURL, res.account.Credential)
+		}
 		// The upstream's own ZDR refusal is never retried without the header
 		// and never rewritten: the client asked not to be retained, so
 		// answering silently without that guarantee is worse than failing.
@@ -226,6 +233,9 @@ func (m *Manager) handleExecute(request []byte) ([]byte, error) {
 		}
 		return classEnvelope(shared.UpstreamStatusError(resp.StatusCode, resp.Body)), nil
 	}
+	// The request went through, which is proof the credential works: take any
+	// previous signed-out mark off.
+	m.clearRevokedMark(res.account.Credential)
 	// Parse/envelope guard only; true OOM prevention belongs to the host transport's byte cap.
 	if int64(len(resp.Body)) > res.cfg.MaxResponseBytes {
 		return classEnvelope(errclass.Translation("response exceeds max-response-bytes")), nil
@@ -359,6 +369,9 @@ func (m *Manager) handleExecuteGoCLI(req executorRequest, res *resolvedExecution
 	m.releaseAccount(res, resp.StatusCode)
 	debugTrace("executor go-cli received non-stream status=%d body_len=%d", resp.StatusCode, len(resp.Body))
 	if resp.StatusCode >= 400 {
+		if resp.StatusCode == http.StatusUnauthorized {
+			m.confirmRevocation(context.Background(), res.cfg.BaseURL, res.account.Credential)
+		}
 		// MapUpstreamStatus maps 422 -> 400 for the CLI surface; the ZDR
 		// refusal keeps the type the upstream gave it (see zdrRefusalError),
 		// but never the auto-disable retry.
@@ -754,6 +767,11 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 	if st >= 400 {
 		releaseInflight()
 		m.releaseAccount(res, st)
+		if st == http.StatusUnauthorized {
+			// Same candidate rule as the non-stream leg: confirmed by whoami
+			// or the account stays.
+			m.confirmRevocation(context.Background(), res.cfg.BaseURL, res.account.Credential)
+		}
 		var body []byte
 		if id != "" {
 			payload, errMsg, _, readErr := m.bridge.StreamRead(id)
@@ -824,6 +842,9 @@ func (m *Manager) executeStreamGoCLI(req executorRequest, res *resolvedExecution
 	}
 	if st >= 400 {
 		m.releaseAccount(res, st)
+		if st == http.StatusUnauthorized {
+			m.confirmRevocation(context.Background(), res.cfg.BaseURL, res.account.Credential)
+		}
 		var body []byte
 		if id != "" {
 			payload, errMsg, _, readErr := m.bridge.StreamRead(id)

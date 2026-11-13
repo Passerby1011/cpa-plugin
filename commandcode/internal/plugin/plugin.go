@@ -69,6 +69,12 @@ type Manager struct {
 	// Manager instances — as tests build — do not share a budget.
 	inflight atomic.Int64
 
+	// revokedKeys remembers credentials Command Code refused outright, so the
+	// panel can offer "sign in again" and requests stop being sent to a dead
+	// key. Lazily created (see revoked()) so a zero-value Manager works.
+	revokedOnce sync.Once
+	revokedKeys *revokedKeySet
+
 	// lifeMu serializes whole register/reconfigure/shutdown sequences so
 	// their stop-wait-install steps cannot interleave into orphaned tickers.
 	lifeMu sync.Mutex

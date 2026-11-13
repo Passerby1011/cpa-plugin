@@ -380,6 +380,20 @@ select.field-input{flex:0 0 auto;min-width:150px}
     // appears beside it.
     return '<span class="badge plan">套餐 ' + esc(usage.plan) + '</span>';
   }
+  // A credential Command Code refuses EVERYWHERE is signed out: nothing will
+  // work with it until someone signs in again, so the card offers that entry
+  // instead of only stating "Unauthorized". Only "expired" gets it - a key the
+  // panel merely failed to read (a 403 for a plan, a 429, a blip) is a live
+  // key, and prompting a re-login for it would send the operator to redo a
+  // working credential.
+  function signedOutBadge(card) {
+    if (card.sign_in !== "expired") return "";
+    return '<span class="badge exceeded" title="Command Code 拒绝了这个 key 的所有请求，需要重新登录">已失效</span>';
+  }
+  function signedOutAction(card) {
+    if (card.sign_in !== "expired") return "";
+    return '<button type="button" class="sec" data-signin="' + esc(card.key_id) + '">重新登录</button>';
+  }
   function badgesFor(usage) {
     const out = [];
     if (usage.exceeded_window) out.push(['exceeded', "已被拦截：" + windowText(usage.exceeded_window)]);
@@ -480,12 +494,12 @@ select.field-input{flex:0 0 auto;min-width:150px}
     const updated = fetchedAt.get(card.key_id);
     return '<div class="card">' +
       '<h2><span class="card-name" title="' + esc(displayName) + '">' + esc(displayName) + '</span>' +
-      '<span class="card-badges">' + planBadge(usage) + sourceBadge(card) + (usage ? badgesFor(usage) : "") + '</span></h2>' +
+      '<span class="card-badges">' + signedOutBadge(card) + planBadge(usage) + sourceBadge(card) + (usage ? badgesFor(usage) : "") + '</span></h2>' +
       '<div class="uid">' + esc(card.key_id) + (card.label ? ' · ' + esc(card.label) : '') + '</div>' +
       body +
       (updated ? '<div class="pb-meta">更新时间 ' + esc(new Date(updated).toLocaleString()) + '</div>' : '') +
       (error && usage ? '<div class="pb-meta card-err">' + esc(error) + '</div>' : '') +
-      '<div class="actions"><button type="button" class="sec" data-refresh="' + esc(card.key_id) + '" aria-label="刷新 ' + esc(card.label) + '"' + (stuck ? " disabled" : "") + '>' + (stuck ? "刷新中…" : "刷新") + '</button></div>' +
+      '<div class="actions"><button type="button" class="sec" data-refresh="' + esc(card.key_id) + '" aria-label="刷新 ' + esc(card.label) + '"' + (stuck ? " disabled" : "") + '>' + (stuck ? "刷新中…" : "刷新") + '</button>' + signedOutAction(card) + '</div>' +
       '</div>';
   }
   function accountCredit(usage) {
@@ -555,6 +569,11 @@ select.field-input{flex:0 0 auto;min-width:150px}
     }
     return request({key_id: card.key_id}).then(result => {
       inFlight.delete(card.key_id);
+      // The sign-in verdict rides every answer, failures included: a card that
+      // just became "expired" has to show the entry, and one a clean read
+      // renewed has to stop showing it. A failure that is NOT a sign-in
+      // problem leaves the verdict alone rather than guessing from the status.
+      if (typeof result.sign_in === "string") card.sign_in = result.sign_in;
       if (result.error) {
         errors.set(card.key_id, result.error);
         render(cards);
@@ -573,6 +592,26 @@ select.field-input{flex:0 0 auto;min-width:150px}
   // One delegated listener: cards are re-rendered wholesale, so per-node
   // handlers would have to be rebound on every pass.
   app.addEventListener("click", event => {
+    const signIn = event.target.closest("[data-signin]");
+    if (signIn) {
+      // Command Code credentials are manual keys (no OAuth login exists for
+      // this provider), so re-signing in means entering a new key. The entry
+      // opens the add form it already has rather than inventing a flow.
+      const toggle = document.getElementById("addToggle");
+      const form = document.getElementById("addForm");
+      const keyInput = document.getElementById("addKey");
+      const status = document.getElementById("addStatus");
+      if (form && form.hidden && toggle) {
+        form.hidden = false;
+        toggle.setAttribute("aria-expanded", "true");
+      }
+      if (status) {
+        status.textContent = "该凭据已失效：请填写新的 CommandCode key 完成重新登录。";
+        status.className = "add-status is-error";
+      }
+      if (keyInput) keyInput.focus();
+      return;
+    }
     const refresh = event.target.closest("[data-refresh]");
     if (refresh) {
       const card = cardByID(refresh.getAttribute("data-refresh"));

@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -115,6 +116,16 @@ type quotaCard struct {
 	// who deletes an auth record must be told when a credential is declared in
 	// config instead - otherwise the key looks impossible to remove.
 	Source string `json:"source,omitempty"`
+	// SignIn is this card's sign-in state: "kept" (works), "expired" (Command
+	// Code refused the key everywhere, so the row must offer "sign in again"),
+	// or "renewed" (a clean read just took a previous mark off).
+	//
+	// WHY IT IS SEPARATE FROM Error: a 403 for a model the plan lacks is a
+	// perfectly healthy account with an unreadable quota, and a 401 that whoami
+	// does NOT confirm is likewise a live account. Only "expired" may offer a
+	// re-authentication entry; deciding that from the HTTP status alone would
+	// send the operator to redo a working key's sign-in.
+	SignIn string `json:"sign_in,omitempty"`
 }
 
 type quotaRequest struct {
@@ -304,7 +315,15 @@ func (m *Manager) HandleManagement(ctx context.Context, req pluginapi.Management
 			if _, ok := fromConfig[authKeyHash(strings.TrimSpace(key.Credential))]; ok {
 				source = "config"
 			}
-			cards = append(cards, quotaCard{KeyID: id, Label: label, Email: email, Source: source})
+			// The list never calls upstream, so it can only report what is
+			// already known: a credential confirmed signed out keeps offering
+			// "sign in again" until a clean read clears it. Without this the
+			// row would look healthy again on every page load.
+			signIn := signInKept
+			if m.accountIsRevoked(key.Credential) {
+				signIn = signInExpired
+			}
+			cards = append(cards, quotaCard{KeyID: id, Label: label, Email: email, Source: source, SignIn: signIn})
 		}
 		return quotaJSON(quotaList{Cards: cards})
 	}
@@ -315,10 +334,33 @@ func (m *Manager) HandleManagement(ctx context.Context, req pluginapi.Management
 		}
 		usage, account, email, err := fetchQuota(ctx, m.bridge, baseURL, timeout, key.Credential)
 		if err != nil {
+			// A 401 from the account surface is a CANDIDATE for a signed-out
+			// account, not a verdict: only whoami refusing the key too makes
+			// it one. A 403 for a model the plan lacks, a 429, a 5xx or a
+			// transport failure are all "this read did not work", which says
+			// nothing about the credential - and re-authenticating a healthy
+			// key is exactly the thing this check exists to prevent.
+			card := quotaCard{KeyID: id, Label: label, SignIn: signInKept}
+			var apiErr *accountRequestError
+			if errors.As(err, &apiErr) && apiErr.status == http.StatusUnauthorized {
+				if m.confirmRevocation(ctx, baseURL, key.Credential) {
+					card.SignIn = signInExpired
+					card.Error = signedOutMessage
+					card.Usage = nil
+					return quotaJSON(card)
+				}
+			}
 			// One unreachable or unsupported account must not blank the
 			// whole page: the card carries the failure so the others still
 			// render, and the credential hash stays as the label.
-			return quotaJSON(quotaCard{KeyID: id, Label: label, Error: err.Error()})
+			card.Error = err.Error()
+			return quotaJSON(card)
+		}
+		// A clean read is proof the key works: take any previous mark off so
+		// the row stops offering "sign in again".
+		signIn := signInKept
+		if m.clearRevokedMark(key.Credential) {
+			signIn = signInRenewed
 		}
 		if account != "" {
 			label = account
@@ -333,7 +375,7 @@ func (m *Manager) HandleManagement(ctx context.Context, req pluginapi.Management
 				_ = m.bridge.Log("warn", "commandcode credential email not synced", map[string]any{"reason": errSync.Error()})
 			}
 		}
-		return quotaJSON(quotaCard{KeyID: id, Label: label, Email: email, Usage: &usage})
+		return quotaJSON(quotaCard{KeyID: id, Label: label, Email: email, Usage: &usage, SignIn: signIn})
 	}
 	return pluginapi.ManagementResponse{StatusCode: http.StatusNotFound, Body: []byte(`{"error":"unknown quota key"}`)}, nil
 }
@@ -369,10 +411,23 @@ func AccountAPIBase(baseURL string) (string, error) {
 	return u.Scheme + "://" + u.Host + path, nil
 }
 
+// accountRequestError carries the HTTP status a failed account call returned,
+// so the caller can tell "the key was refused" (401, worth a whoami check) from
+// "the endpoint had a problem" (429/5xx, which says nothing about the key). A
+// plain error message would flatten that distinction and make the panel
+// re-authenticate healthy keys.
+type accountRequestError struct {
+	status int
+}
+
+func (e *accountRequestError) Error() string {
+	return fmt.Sprintf("account request rejected (%d)", e.status)
+}
+
 // fetchQuota reads one credential's account snapshot: remaining plan credits
-// and the rolling windows come from /alpha/billing/credits, the plan identity
-// from /alpha/billing/subscriptions, and the account identity from
-// /alpha/whoami. Two identities are returned for the one whoami answer: label
+// from /alpha/billing/credits, the plan identity from /alpha/billing/subscriptions,
+// and the account identity from /alpha/whoami. Two identities are returned for
+// the one whoami answer: label
 // is what the quota card shows ("<org> (<email>)" when the account belongs to
 // an org) and email is the bare mailbox, the only form written into an auth
 // file. Both are best-effort — a key still shows its windows when only the
@@ -403,7 +458,7 @@ func fetchQuota(ctx context.Context, bridge *HostBridge, baseURL string, timeout
 			return nil, fmt.Errorf("account request failed")
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("account request rejected (%d)", resp.StatusCode)
+			return nil, &accountRequestError{status: resp.StatusCode}
 		}
 		return resp.Body, nil
 	}
