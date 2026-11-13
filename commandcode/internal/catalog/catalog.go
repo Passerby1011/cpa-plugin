@@ -87,9 +87,8 @@ type HostClient interface {
 }
 
 // rawModel tolerantly decodes one catalog entry; unknown fields —
-// including protocol/endpoint fields the catalog does not provide and
-// reasoning/tool_calling flags the plugin does not act on — are ignored via
-// json tags. Modality metadata accepts both spellings.
+// including reasoning/tool_calling flags the plugin does not act on — are
+// ignored via json tags. Modality metadata accepts both spellings.
 type rawModel struct {
 	ID               string       `json:"id"`
 	DisplayName      string       `json:"display_name"`
@@ -100,6 +99,12 @@ type rawModel struct {
 	InputModalities  []string     `json:"input_modalities"`
 	OutputModalities []string     `json:"output_modalities"`
 	Thinking         *rawThinking `json:"thinking"`
+	// SupportedEndpoints is the list of Provider API paths the upstream says
+	// this model is served on ("/chat/completions", "/messages",
+	// "/responses"; the vendor sends the "/v1"-prefixed spelling). Absent
+	// means "no claim", which keeps the historical chat-completions default
+	// rather than inventing a route the upstream never advertised.
+	SupportedEndpoints []string `json:"supported_endpoints"`
 }
 
 // rawThinking tolerantly decodes the optional per-model thinking object;
@@ -406,10 +411,11 @@ func (m *Manager) protocolEnabled(r Route) bool {
 	return true
 }
 
-// resolve applies route priority strictly: user override, then the
-// Chat-Completions-only default (arch §5 as amended for CommandCode). A
-// catalog entry is therefore always routable; the protocol gates and the
-// endpoint-escape check still filter what reaches the model list.
+// resolve applies route priority strictly: user override, then the model's
+// own supported_endpoints claim, then the Chat-Completions-only default
+// (arch §5 as amended for CommandCode). A catalog entry is therefore always
+// routable; the protocol gates and the endpoint-escape check still filter
+// what reaches the model list.
 func (m *Manager) resolve(e rawModel) (Route, string, bool, string) {
 	if o, ok := m.cfg.RouteOverrides[e.ID]; ok {
 		// Spec 04 §5: an override MUST be visible in diagnostics. Load
@@ -418,7 +424,71 @@ func (m *Manager) resolve(e rawModel) (Route, string, bool, string) {
 		return Route(o.Protocol), o.Endpoint, true, fmt.Sprintf(
 			"model %q routed via user override (%s %s)", e.ID, o.Protocol, o.Endpoint)
 	}
+	if route, claimed := routeFromSupportedEndpoints(e.SupportedEndpoints); claimed {
+		return route, "", true, ""
+	}
 	return DefaultRoute, "", true, ""
+}
+
+// routeFromSupportedEndpoints picks the API to call for a catalog entry that
+// declares which endpoints serve it.
+//
+// The upstream's list is authoritative and is read in a fixed preference
+// order — chat-completions, then responses, then messages — which is the order
+// the reference implementation uses and the order that prefers the widest
+// supported surface first. claimed is false when the entry says nothing
+// (empty list, or nothing recognisable in it): the historical
+// chat-completions default then applies, because inventing a route the
+// upstream never advertised would publish a model that can only fail.
+//
+// Spelling tolerance matters here: the vendor sends "/chat/completions" in
+// some snapshots and "/v1/chat/completions" in others, with or without a
+// trailing slash, so both the version prefix and the trailing separator are
+// stripped before matching. A bare "chat/completions" (no leading slash) is
+// accepted too, so a hand-written static catalog can name the route plainly.
+func routeFromSupportedEndpoints(endpoints []string) (Route, bool) {
+	if len(endpoints) == 0 {
+		return "", false
+	}
+	// Map each declared endpoint onto a route once, then pick by preference.
+	// A set rather than a slice so a model that lists the same endpoint twice
+	// (or names two spellings of it) cannot skew the preference order.
+	declared := make(map[Route]bool, len(endpoints))
+	for _, raw := range endpoints {
+		if route, ok := routeFromEndpointName(raw); ok {
+			declared[route] = true
+		}
+	}
+	for _, route := range []Route{RouteChatCompletions, RouteResponses, RouteMessages} {
+		if declared[route] {
+			return route, true
+		}
+	}
+	// Endpoints were declared but none is a surface this plugin can call:
+	// saying "claimed" with the chat default would silently send the model
+	// down a route the upstream explicitly did not list. Report no claim
+	// instead - the default still applies, but the caller that wants to
+	// diagnose it can.
+	return "", false
+}
+
+// routeFromEndpointName normalises one declared endpoint string onto a Route.
+// Accepts "/chat/completions", "/v1/chat/completions", "chat/completions",
+// and their trailing-slash forms, case-insensitively.
+func routeFromEndpointName(raw string) (Route, bool) {
+	name := strings.ToLower(strings.TrimSpace(raw))
+	name = strings.TrimSuffix(name, "/")
+	name = strings.TrimPrefix(name, "/v1")
+	name = strings.TrimPrefix(name, "/")
+	switch name {
+	case "chat/completions":
+		return RouteChatCompletions, true
+	case "messages":
+		return RouteMessages, true
+	case "responses":
+		return RouteResponses, true
+	}
+	return "", false
 }
 
 // JoinUpstreamURL joins the configured base-url onto an endpoint path and
