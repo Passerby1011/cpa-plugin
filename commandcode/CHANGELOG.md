@@ -60,6 +60,13 @@ Jev 是 TypeSafe 的**决策模型**（`decides: true`）：用 `{model, state, 
 
 因此**不暴露**，并且**主动把这类目录项排除**出聊天模型列表，同时在 unsupported 诊断里写明
 `decision model: the host has no decides capability` —— 静默消失的模型是没人能诊断的。
+
+判定用**两个独立信号**，因为任一单独都会漏：目录项自己的 `decides` 字段；以及 id 属于
+TypeSafe 家族（`typesafe/jev` 及 `jev-*` 变体，先剥客户端前缀，故
+`commandcode/typesafe/jev` 也命中）。后者不是冗余：Command Code 的 `/models` **根本不列
+Jev**（是参考实现自己加进去的），所以上游或 `catalog.static` 表直接列出来时不会带
+`decides` 字段 —— 只看字段恰好会放过这个要防的模型。匹配绑在 `typesafe/` 所有者上，
+不会误伤别的 `jev` 聊天模型。
 完整依据与源码位置见 `docs/PROVENANCE.md`。
 
 ### 验证口径

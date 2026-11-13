@@ -263,7 +263,12 @@ Command Code 提供 TypeSafe 的 **Jev**（`typesafe/jev`），它是一个**决
 只保留 `id`/`object`/`created`/`owned_by`，所以 `decides` 标记连广告都做不到。把一个决策
 模型当聊天模型发布，等于让客户端拿它承载一段它承载不了的对话，因此这类目录项会**被排除**
 出模型列表，并在 unsupported 诊断里写明
-`decision model: the host has no decides capability`。判定依据与源码位置见
+`decision model: the host has no decides capability`。判定走**两个独立信号**：目录项自己的
+`decides` 标记，以及 id 是否属于 TypeSafe 家族（`typesafe/jev` 及其 `jev-*` 变体，先剥掉
+客户端前缀 `<prefix>/`，所以 `commandcode/typesafe/jev` 也命中）。只看字段是不够的：
+Command Code 的 `/models` **根本不列 Jev**（是参考实现自己加进去的），所以上游或
+`catalog.static` 表直接列出来时不会带任何 `decides` 字段——只看字段恰好会放过这个要防的
+模型。判定绑在 `typesafe/` 所有者上，不会误伤别的 `jev` 聊天模型。判定依据与源码位置见
 [`docs/PROVENANCE.md`](docs/PROVENANCE.md)。
 
 ## 许可证

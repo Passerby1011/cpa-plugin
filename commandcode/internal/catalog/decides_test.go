@@ -62,8 +62,66 @@ func TestDecisionModelsAreExcludedFromTheChatCatalog(t *testing.T) {
 	}
 }
 
-// The field must survive decoding - an entry that SAYS it decides has to be
-// recognised - and a plain entry must not be mistaken for one.
+// THE REAL RISK: the flag is the *secondary* signal. Command Code's `/models`
+// list does not name Jev at all (the reference implementation adds it from its
+// own config), so an upstream - or a `catalog.static` table written from
+// `/v1/models` output - that lists it plainly carries NO `decides` field. Keying
+// the exclusion off the field alone would then publish exactly the model this
+// check exists to keep out, which is why the id is matched too.
+func TestDecisionModelIDsAreExcludedWithoutAnyDecidesFlag(t *testing.T) {
+	m := New(testCfg(), nil)
+	m.swap([]rawModel{
+		{ID: "glm-5.3"},
+		// No Decides field at all: this is what a plain listing looks like.
+		{ID: "typesafe/jev"},
+		{ID: "typesafe/jev-latest"},
+		{ID: "typesafe/Jev"},
+		{ID: "commandcode/typesafe/jev"},
+		// A different owner's "jev" is a different family and must survive:
+		// excluding by bare substring would silently drop a chat model.
+		{ID: "someoneelse/jev"},
+		{ID: "jev"},
+		{ID: "jev-pro-chat"},
+	})
+
+	var kept []string
+	for _, model := range m.Models() {
+		kept = append(kept, model.UpstreamID)
+	}
+	for _, unwanted := range []string{
+		"typesafe/jev", "typesafe/jev-latest", "typesafe/Jev", "commandcode/typesafe/jev",
+	} {
+		for _, id := range kept {
+			if strings.EqualFold(id, unwanted) {
+				t.Fatalf("decision model %q published as a chat model without a decides flag", unwanted)
+			}
+		}
+	}
+	for _, id := range []string{"typesafe/jev", "typesafe/jev-latest", "typesafe/Jev", "commandcode/typesafe/jev"} {
+		if _, ok := m.Lookup(id); ok {
+			t.Fatalf("decision model %q is routable without a decides flag", id)
+		}
+	}
+	// The unrelated models must still be routable - over-exclusion is the
+	// other way this check fails, and a bare "jev" substring match would do it.
+	for _, want := range []string{"glm-5.3", "someoneelse/jev", "jev", "jev-pro-chat"} {
+		if _, ok := m.Lookup(want); !ok {
+			t.Fatalf("unrelated model %q was excluded; the id rule is too broad", want)
+		}
+	}
+	// Same diagnostic as the flagged path: one explanation for one cause.
+	for _, entry := range m.Unsupported() {
+		if strings.HasPrefix(strings.ToLower(entry.UpstreamID), "typesafe/jev") &&
+			!strings.Contains(entry.Reason, "decides") {
+			t.Fatalf("%q excluded with reason %q, want the decides explanation",
+				entry.UpstreamID, entry.Reason)
+		}
+	}
+}
+
+// The flag must survive decoding - an entry that SAYS it decides has to be
+// recognised even under an id the rule does not know - and a plain entry must
+// not be mistaken for one.
 func TestDecidesIsDecodedNotGuessed(t *testing.T) {
 	// Only well-typed values are covered here on purpose: a wrongly-typed one
 	// fails the whole entry decode, which is this catalog's (pre-existing)

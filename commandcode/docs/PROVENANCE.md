@@ -112,10 +112,20 @@ Consequences, implemented deliberately:
 - Jev is **not** published in the chat model list. A decision model offered as
   a chat model would accept a conversation it cannot hold — strictly worse than
   a model that is absent.
-- The catalogue decodes `decides` for one reason only: to **recognise** such an
-  entry and keep it out, with an explicit diagnostic
+- The catalogue recognises such an entry by **two independent signals** and keeps it
+  out, with an explicit diagnostic
   (`"decision model: the host has no decides capability"`). A silently missing
   model is a diagnosis nobody can make.
+  - the entry's own `decides` flag (how the reference's provider config marks it), and
+  - the id naming TypeSafe's family (`typesafe/jev` and its `jev-*` aliases, with the
+    client-facing `<prefix>/` stripped so `commandcode/typesafe/jev` matches too).
+
+    The id rule is not redundancy: Command Code's `/models` list **does not name Jev at
+    all** (the reference adds it from its own config). A deployment whose upstream, or
+    `catalog.static` table, lists it plainly would carry no `decides` flag - and keying
+    off the flag alone would then publish exactly the model this check exists to keep
+    out. The match is bound to the `typesafe/` owner so an unrelated `jev` chat model is
+    not over-excluded.
 - If a future host version grows a classifier surface, this is where the
   capability would be added; until then it stays unexposed on purpose.
 

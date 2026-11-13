@@ -276,6 +276,35 @@ func (m *Manager) fail(category string) error {
 	return fmt.Errorf("catalog refresh failed: %s", category)
 }
 
+// isDecisionModelID reports whether an upstream model id names a DECISION model
+// rather than a chat model.
+//
+// WHY THE ID AND NOT ONLY THE FLAG: the entry's `decides` field is the primary
+// signal, but the upstream `/models` list does not name Jev at all - the
+// reference implementation ADDS it from its own config - so a deployment whose
+// upstream (or `catalog.static` table) does list it plainly would arrive with no
+// `decides` flag. Keying off the field alone would then let exactly the model
+// this exclusion exists for slip through and be published as a chat model. The
+// id is what the vendor's clients resolve it by, so it is checked too.
+//
+// The prefix is stripped first: a catalogue entry carrying the CLIENT-facing id
+// (`commandcode/typesafe/jev`, which a static table written from `/v1/models`
+// output would naturally contain) names the same upstream model. The configured
+// prefix is stripped rather than a hard-coded one so a deployment that renamed
+// it still matches, and the suffix match is case-insensitive and covers the
+// vendor's `jev-latest` alias plus any further `jev-*` variant.
+func isDecisionModelID(raw string) bool {
+	name := strings.ToLower(strings.TrimSpace(raw))
+	// Strip the client-facing prefix a static table would carry (see above).
+	prefix := strings.ToLower(strings.TrimSpace(config.DefaultModelPrefix)) + "/"
+	if prefix != "/" {
+		name = strings.TrimPrefix(name, prefix)
+	}
+	// Bound the match to TypeSafe's family: "typesafe/jev" and its
+	// "jev-latest"-style aliases. An unrelated owner's "jev" is not this one.
+	return strings.HasPrefix(name, "typesafe/jev")
+}
+
 // swap builds the new snapshot from decoded entries and installs it
 // atomically under the mutex (FR-010 dedup, arch §5 route priority).
 // extraWarns are caller-supplied snapshot diagnostics (e.g. decode-level
@@ -307,7 +336,17 @@ func (m *Manager) swap(entries []rawModel, extraWarns ...string) {
 		// silently dropped. The reference implementation DOES list it (magpie
 		// has its own `decides` model surface); this host does not, so the
 		// capability is absent here on purpose, not by oversight.
-		if e.Decides {
+		//
+		// TWO independent signals, because either alone can miss:
+		//   - e.Decides: an entry that CLAIMS to be one (the reference's own
+		//     provider config marks Jev this way);
+		//   - the id naming TypeSafe's model. The upstream `/models` list
+		//     notoriously does NOT name Jev at all, and a deployment whose
+		//     upstream (or `catalog.static` table) does list it plainly would
+		//     carry no `decides` flag either - so keying off the field alone
+		//     would let the exact model this check exists to keep out slip
+		//     through. The id is what the vendor's own clients resolve it by.
+		if e.Decides || isDecisionModelID(e.ID) {
 			unsup = append(unsup, UnsupportedModel{
 				UpstreamID: e.ID,
 				Reason:     "decision model: the host has no decides capability",
