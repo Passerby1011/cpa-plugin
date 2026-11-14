@@ -78,7 +78,7 @@
       "name": "CommandCode",
       "description": "CommandCode plan as a single CLIProxyAPI provider (commandcode/ prefix): OpenAI, Anthropic and Responses clients off one API-key pool, zero-data-retention headers on both call paths, endpoint routing from the catalog's supported_endpoints, reasoning/thinking preservation with an explicit off tier, whoami re-check that marks expired sign-ins in the panel, decision-model (Jev) exclusion, host-scheduled key pool and a CommandCode quota page. Repackaged from mczhoucn/commandcode (MIT).",
       "author": "mczhoucn",
-      "version": "0.5.4",
+      "version": "0.6.0",
       "repository": "https://github.com/Passerby1011/cpa-plugin",
       "homepage": "https://github.com/Passerby1011/cpa-plugin/tree/main/commandcode",
       "license": "MIT",
@@ -95,23 +95,51 @@
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.5.4/commandcode_0.5.4_linux_amd64.zip",
-            "sha256": "4487c4e4fb900f90e60834bff371dee8a56a01ac5d8401d90a1465808f7c7e52",
-            "size": 2415719
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.6.0/commandcode_0.6.0_linux_amd64.zip",
+            "sha256": "99e59a430543e8746aa4cbb0acd1aedfe18e6dd9fec94c0ba421cfda3008d53c",
+            "size": 2485302
           },
           {
             "goos": "linux",
             "goarch": "arm64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.5.4/commandcode_0.5.4_linux_arm64.zip",
-            "sha256": "6a396d41f7c941e87e64ff9636daea2fa0a42412890d1911a69140a8df608635",
-            "size": 2190587
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.6.0/commandcode_0.6.0_linux_arm64.zip",
+            "sha256": "135983e9910b55680af9f9e3ee9941187bc55db92a31387ad003d6080fc84c0f",
+            "size": 2269597
+          },
+          {
+            "goos": "darwin",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.6.0/commandcode_0.6.0_darwin_amd64.zip",
+            "sha256": "442eb8e196db93e5cdca0ea673a6fade153283583deeb8564d96dd43c917cc07",
+            "size": 2385731
+          },
+          {
+            "goos": "darwin",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.6.0/commandcode_0.6.0_darwin_arm64.zip",
+            "sha256": "ca49ba052d00361645d5bdadd73e0e2e924f82fc35f55705a619b1eeb1e1fc71",
+            "size": 2213340
           },
           {
             "goos": "windows",
             "goarch": "amd64",
-            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.5.4/commandcode_0.5.4_windows_amd64.zip",
-            "sha256": "48f4bc4f023650c7b771183231428857b781ec30d4a075f44a185b66fd9b3b02",
-            "size": 2376956
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.6.0/commandcode_0.6.0_windows_amd64.zip",
+            "sha256": "60e222f3cf0dea1a755ef1d95d865e02c365b3ddff04b4ff7f373dcdd2ec1221",
+            "size": 2435612
+          },
+          {
+            "goos": "windows",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.6.0/commandcode_0.6.0_windows_arm64.zip",
+            "sha256": "0eb69a86d2b222f42719e3fb828433cda169b2d6e78e9ecfc4f53776f6d28c99",
+            "size": 2292546
+          },
+          {
+            "goos": "freebsd",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/commandcode-v0.6.0/commandcode_0.6.0_freebsd_amd64.zip",
+            "sha256": "483b74e4c777029e77b3067d549a0163895c19206fe35072ff8c531df384509f",
+            "size": 2428912
           }
         ]
       }
