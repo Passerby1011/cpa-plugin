@@ -207,7 +207,57 @@
       ],
       "install": {
         "type": "direct",
-        "artifacts": []
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/opendesign-v0.2.0/opendesign_0.2.0_linux_amd64.zip",
+            "sha256": "4a89595b49bad4a1159534e911739526b51b73fda3d1884bb55f274bdf4c9662",
+            "size": 2327152
+          },
+          {
+            "goos": "linux",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/opendesign-v0.2.0/opendesign_0.2.0_linux_arm64.zip",
+            "sha256": "d0792e1330101844fa4143f1b69d3b28d14c4cd8b443412e9aee1cc25e321b42",
+            "size": 2124535
+          },
+          {
+            "goos": "darwin",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/opendesign-v0.2.0/opendesign_0.2.0_darwin_amd64.zip",
+            "sha256": "956753d66c56e7da9794cd0425cc8537ebf656e8c5927a774f2f4723a1a6993a",
+            "size": 2234808
+          },
+          {
+            "goos": "darwin",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/opendesign-v0.2.0/opendesign_0.2.0_darwin_arm64.zip",
+            "sha256": "6cfd43899a55151a32d08f1a7e65daf549d1d737dbb51c345b2ad140ee5c267c",
+            "size": 2074184
+          },
+          {
+            "goos": "windows",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/opendesign-v0.2.0/opendesign_0.2.0_windows_amd64.zip",
+            "sha256": "c61ae7b6320f306561553c97d1ec7f27d0fdd35d5f77af151cd9bb180d7c6cdd",
+            "size": 2281857
+          },
+          {
+            "goos": "windows",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/opendesign-v0.2.0/opendesign_0.2.0_windows_arm64.zip",
+            "sha256": "bbb6425ff0820620315090af2c985979dec5e3d7f42f81a5cd6b6e0bbfd22c7b",
+            "size": 2152358
+          },
+          {
+            "goos": "freebsd",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/opendesign-v0.2.0/opendesign_0.2.0_freebsd_amd64.zip",
+            "sha256": "0c5503df38ae57c352dc977f9ac53b8cb3cadfdd24f5355def5a8bc3dfa8997b",
+            "size": 2275899
+          }
+        ]
       }
     },
     {
