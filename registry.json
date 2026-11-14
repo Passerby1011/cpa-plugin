@@ -279,7 +279,57 @@
       ],
       "install": {
         "type": "direct",
-        "artifacts": []
+        "artifacts": [
+          {
+            "goos": "linux",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/geminiapi-v0.2.0/geminiapi_0.2.0_linux_amd64.zip",
+            "sha256": "a9478b33894f04391a971900036cde2e862da20ab01cd1eb1a1a03fab6249d66",
+            "size": 3346795
+          },
+          {
+            "goos": "linux",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/geminiapi-v0.2.0/geminiapi_0.2.0_linux_arm64.zip",
+            "sha256": "5269c552faa190399432df1bbdc1b29f3bed17248b92012b292b6a882bbf510a",
+            "size": 3045413
+          },
+          {
+            "goos": "darwin",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/geminiapi-v0.2.0/geminiapi_0.2.0_darwin_amd64.zip",
+            "sha256": "9259283a4b256d0a765cb44118c1b8268f6b8bcde76bd4e879d9cdf9970c43f6",
+            "size": 3177228
+          },
+          {
+            "goos": "darwin",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/geminiapi-v0.2.0/geminiapi_0.2.0_darwin_arm64.zip",
+            "sha256": "5c4c9eaeb879543f5c4582c5f0aba4066e5aa9fc81b0775831ec2a0e8fde871c",
+            "size": 2939263
+          },
+          {
+            "goos": "windows",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/geminiapi-v0.2.0/geminiapi_0.2.0_windows_amd64.zip",
+            "sha256": "a712206a417084599523214d5fb11a951e32acbf002597a46bb0c81340a8265a",
+            "size": 3284671
+          },
+          {
+            "goos": "windows",
+            "goarch": "arm64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/geminiapi-v0.2.0/geminiapi_0.2.0_windows_arm64.zip",
+            "sha256": "d64a6330c99940229f7afca96c8aa6e61797b90716dd193ab96373b39c767943",
+            "size": 3040138
+          },
+          {
+            "goos": "freebsd",
+            "goarch": "amd64",
+            "url": "https://github.com/Passerby1011/cpa-plugin/releases/download/geminiapi-v0.2.0/geminiapi_0.2.0_freebsd_amd64.zip",
+            "sha256": "844542c0b8571eb65b3bdf85d825320867e57e01eec6036c9bdd990f81b9c3ef",
+            "size": 3255494
+          }
+        ]
       }
     }
   ]
